@@ -645,6 +645,14 @@
     max-height: calc(var(--spacing) * 80);
   }
 
+  .max-h-\[18rem\] {
+    max-height: 18rem;
+  }
+
+  .max-h-\[36rem\] {
+    max-height: 36rem;
+  }
+
   .min-h-0 {
     min-height: calc(var(--spacing) * 0);
   }

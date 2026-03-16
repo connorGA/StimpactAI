@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
+from models.root_cause import RootCauseAnalysis
 from shared.types.telemetry import Environment
 
 
@@ -100,3 +101,74 @@ class IncidentClassificationResponse(BaseModel):
             incident_id=incident_id,
             **classification.model_dump(),
         )
+
+
+class CodeCandidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    symbol: str | None = None
+    match_reason: str
+    matched_terms: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class GitSignalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    commit_sha: str
+    commit_summary: str
+    committed_at: datetime | None = None
+    relevance_reason: str
+
+
+class CodeSnippetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    symbol: str | None = None
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    content: str
+    match_reason: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class RootCauseEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suspected_component: str | None = None
+    evidence_summary: str
+    stack_trace_signals: list[str] = Field(default_factory=list)
+    search_terms: list[str] = Field(default_factory=list)
+    code_candidates: list[CodeCandidateResponse] = Field(default_factory=list)
+    code_snippets: list[CodeSnippetResponse] = Field(default_factory=list)
+    git_signals: list[GitSignalResponse] = Field(default_factory=list)
+    evidence_confidence: float = Field(ge=0.0, le=1.0)
+    latest_commit_sha: str | None = None
+    inspected_event_count: int = Field(ge=0)
+
+
+class RootCauseReasoningResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_cause_hypothesis: str
+    reasoning_summary: str
+    alternative_hypotheses: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class IncidentRootCauseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    category: FailureCategory
+    category_summary: str
+    category_confidence: float = Field(ge=0.0, le=1.0)
+    evidence: RootCauseEvidenceResponse
+    reasoning: RootCauseReasoningResponse
+
+    @classmethod
+    def from_analysis(cls, analysis: RootCauseAnalysis) -> "IncidentRootCauseResponse":
+        return cls(**analysis.model_dump(mode="json"))

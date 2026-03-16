@@ -10,6 +10,7 @@ from api.events.publisher import IncidentEventPublisher
 from api.routes.incidents import (
     get_failure_classifier,
     get_incident_repository,
+    get_root_cause_analysis_service,
     router as incidents_router,
 )
 from api.routes.telemetry import (
@@ -20,6 +21,7 @@ from api.routes.telemetry import (
 )
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
+from models.root_cause import RootCauseAnalysis, RootCauseEvidence, RootCauseReasoning
 from shared.events.incident_events import IncidentEvent, IncidentEventType
 from shared.types.telemetry import Environment
 
@@ -127,6 +129,40 @@ class StubFailureClassifier:
         )
 
 
+class StubRootCauseAnalysisService:
+    async def analyze_incident(
+        self,
+        incident_id: str,
+        *,
+        event_limit: int = 50,
+    ) -> RootCauseAnalysis:
+        assert incident_id == "incident-1"
+        assert event_limit == 20
+        return RootCauseAnalysis(
+            incident_id=incident_id,
+            category=FailureCategory.DATABASE_FAILURE,
+            category_summary="The billing-api incident is most likely a database failure based on database, postgres.",
+            category_confidence=0.91,
+            evidence=RootCauseEvidence(
+                suspected_component="agent-platform/api/repositories/incident_repository.py",
+                evidence_summary="Stack signals and code search both point toward the incident repository path.",
+                stack_trace_signals=["incident_repository.py", "fetchrow"],
+                search_terms=["database", "postgres", "fetchrow"],
+                code_candidates=[],
+                git_signals=[],
+                evidence_confidence=0.72,
+                latest_commit_sha="abc123",
+                inspected_event_count=1,
+            ),
+            reasoning=RootCauseReasoning(
+                root_cause_hypothesis="A database query path is timing out inside the incident repository layer.",
+                reasoning_summary="The grounded evidence points to the repository layer handling database reads.",
+                alternative_hypotheses=["An upstream connection-pool issue is also possible."],
+                confidence=0.78,
+            ),
+        )
+
+
 def test_ingest_error_returns_accepted_response_and_signals_outbox() -> None:
     app = build_test_app()
     telemetry_repository = RecordingTelemetryRepository()
@@ -225,3 +261,18 @@ def test_get_incident_classification_returns_category_payload() -> None:
     assert body["incident_id"] == "incident-1"
     assert body["category"] == "database_failure"
     assert body["matched_signals"] == ["database", "postgres"]
+
+
+def test_get_incident_root_cause_returns_analysis_payload() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_root_cause_analysis_service] = StubRootCauseAnalysisService
+
+    client = TestClient(app)
+    response = client.get("/incidents/incident-1/root-cause", params={"event_limit": 20})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["incident_id"] == "incident-1"
+    assert body["category"] == "database_failure"
+    assert body["reasoning"]["confidence"] == 0.78
+    assert body["evidence"]["suspected_component"] == "agent-platform/api/repositories/incident_repository.py"

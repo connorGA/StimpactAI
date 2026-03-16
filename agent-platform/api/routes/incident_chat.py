@@ -3,11 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from openai import AsyncOpenAI
 
-from api.core.config import get_openai_api_key, get_openai_model
+from api.core.config import get_openai_api_key, get_openai_chat_model
 from api.core.errors import APIError
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.repositories.incident_repository import IncidentRepository
 from api.schemas.chat import GlobalIncidentChatRequest, IncidentChatResponse, IncidentDetailChatRequest
+from services.code_context import CodeContextService
+from services.failure_classifier import FailureClassifier
 from services.incident_chat import IncidentChatService
 
 router = APIRouter(prefix="/incidents", tags=["incident-chat"])
@@ -19,8 +21,18 @@ def get_incident_repository(
     return IncidentRepository(manager.pool)
 
 
+def get_failure_classifier() -> FailureClassifier:
+    return FailureClassifier()
+
+
+def get_code_context_service() -> CodeContextService:
+    return CodeContextService()
+
+
 def get_incident_chat_service(
     repository: IncidentRepository = Depends(get_incident_repository),
+    classifier: FailureClassifier = Depends(get_failure_classifier),
+    code_context: CodeContextService = Depends(get_code_context_service),
 ) -> IncidentChatService:
     api_key = get_openai_api_key()
     if api_key is None:
@@ -33,7 +45,9 @@ def get_incident_chat_service(
     return IncidentChatService(
         repository,
         client=AsyncOpenAI(api_key=api_key),
-        model=get_openai_model(),
+        model=get_openai_chat_model(),
+        classifier=classifier,
+        code_context=code_context,
     )
 
 

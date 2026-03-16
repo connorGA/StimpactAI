@@ -33,9 +33,55 @@ def get_openai_api_key() -> str | None:
     return normalized or None
 
 
+def _get_model_from_env(*names: str, default: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        normalized = value.strip()
+        if normalized:
+            return normalized
+    return default
+
+
 def get_openai_model() -> str:
-    value = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
-    return value or "gpt-4.1-mini"
+    return _get_model_from_env("OPENAI_MODEL", default="gpt-4.1-mini")
+
+
+def get_openai_chat_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_CHAT_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
+def get_openai_rca_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_RCA_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
+def get_openai_patch_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_PATCH_MODEL",
+        "OPENAI_RCA_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
+def get_repository_root() -> Path:
+    value = os.getenv("AGENT_PLATFORM_REPOSITORY_ROOT")
+    if value is None or not value.strip():
+        return REPO_ROOT
+
+    candidate = Path(value.strip()).expanduser()
+    if not candidate.is_absolute():
+        candidate = (REPO_ROOT / candidate).resolve()
+    return candidate
 
 
 def get_redis_url() -> str | None:

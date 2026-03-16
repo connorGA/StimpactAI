@@ -65,6 +65,61 @@ export type IncidentClassification = {
   inspected_event_count: number;
 };
 
+export type CodeCandidate = {
+  file_path: string;
+  symbol: string | null;
+  match_reason: string;
+  matched_terms: string[];
+  confidence: number;
+};
+
+export type GitSignal = {
+  file_path: string;
+  commit_sha: string;
+  commit_summary: string;
+  committed_at: string | null;
+  relevance_reason: string;
+};
+
+export type CodeSnippet = {
+  file_path: string;
+  symbol: string | null;
+  start_line: number;
+  end_line: number;
+  content: string;
+  match_reason: string;
+  confidence: number;
+};
+
+export type RootCauseEvidence = {
+  suspected_component: string | null;
+  evidence_summary: string;
+  stack_trace_signals: string[];
+  search_terms: string[];
+  code_candidates: CodeCandidate[];
+  code_snippets: CodeSnippet[];
+  git_signals: GitSignal[];
+  evidence_confidence: number;
+  latest_commit_sha: string | null;
+  inspected_event_count: number;
+};
+
+export type RootCauseReasoning = {
+  root_cause_hypothesis: string;
+  reasoning_summary: string;
+  alternative_hypotheses: string[];
+  confidence: number;
+};
+
+export type IncidentRootCause = {
+  incident_id: string;
+  category: FailureCategory;
+  category_summary: string;
+  category_confidence: number;
+  evidence: RootCauseEvidence;
+  reasoning: RootCauseReasoning;
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;

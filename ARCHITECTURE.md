@@ -306,6 +306,22 @@ code index
 vector embeddings
 test coverage map
 
+The root cause step should run in two layers:
+
+1. deterministic evidence gathering
+2. AI synthesis of a grounded root-cause hypothesis
+
+The deterministic layer collects stack trace signals, likely files or symbols, git history clues, and request or response evidence.
+
+The AI layer does not search the codebase directly. It consumes the collected evidence and produces:
+
+- likely root cause hypothesis
+- reasoning summary
+- alternative hypotheses
+- confidence score
+
+This preserves auditability while making AI a first-class reasoning step in the workflow.
+
 
 ---
 

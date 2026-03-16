@@ -84,6 +84,13 @@ Tools required:
 • stack trace parsing
 • code search
 • git history
+• AI synthesis of a grounded hypothesis
+
+Requirements:
+
+• gather deterministic evidence first
+• send the collected evidence to AI for reasoning
+• return a structured root-cause hypothesis, not raw context only
 
 ---
 

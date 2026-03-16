@@ -23,6 +23,7 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const canSubmit = useMemo(
     () => input.trim().length > 0 && !isSubmitting,
@@ -86,17 +87,33 @@ export function ChatPanel({
   }
 
   return (
-    <section className="ops-sheet flex h-full flex-col rounded-[28px]">
+    <section className="ops-sheet overflow-hidden rounded-[28px]">
       <div className="border-b border-[rgba(24,24,27,0.08)] px-6 py-5">
-        <p className="ops-kicker text-[11px] font-semibold uppercase">
-          Conversational incident analysis
-        </p>
-        <h2 className="mt-2 text-xl font-semibold text-[#171717]">{title}</h2>
-        <p className="mt-1.5 text-sm leading-6 text-[#5f6470]">{description}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="ops-kicker text-[11px] font-semibold uppercase">
+              Conversational incident analysis
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-[#171717]">{title}</h2>
+            <p className="mt-1.5 text-sm leading-6 text-[#5f6470]">{description}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsExpanded((current) => !current)}
+            className="ops-button-secondary rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-wide"
+            aria-pressed={isExpanded}
+          >
+            {isExpanded ? "Compact" : "Expand"}
+          </button>
+        </div>
         <div className="mt-4 h-px w-36 bg-[linear-gradient(90deg,#171717,rgba(23,23,23,0.08))]" />
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+      <div
+        className={`space-y-4 overflow-y-auto px-6 py-5 ${
+          isExpanded ? "max-h-[36rem]" : "max-h-[18rem]"
+        }`}
+      >
         {suggestedPrompts.length > 0 && messages.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-[#8f735c]">

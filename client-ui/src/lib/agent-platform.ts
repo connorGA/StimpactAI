@@ -5,6 +5,7 @@ import type {
   IncidentChatResponse,
   IncidentDetailResponse,
   IncidentListResponse,
+  IncidentRootCause,
 } from "@/lib/types";
 
 const AGENT_PLATFORM_API_URL =
@@ -111,6 +112,22 @@ export async function getIncidentClassification(
 
   return fetchFromAgentPlatform<IncidentClassification>({
     path: `/incidents/${incidentId}/classification${query ? `?${query}` : ""}`,
+    method: "GET",
+  });
+}
+
+export async function getIncidentRootCause(
+  incidentId: string,
+  options?: { eventLimit?: number },
+): Promise<IncidentRootCause> {
+  const searchParams = new URLSearchParams();
+  if (options?.eventLimit) {
+    searchParams.set("event_limit", String(options.eventLimit));
+  }
+  const query = searchParams.toString();
+
+  return fetchFromAgentPlatform<IncidentRootCause>({
+    path: `/incidents/${incidentId}/root-cause${query ? `?${query}` : ""}`,
     method: "GET",
   });
 }

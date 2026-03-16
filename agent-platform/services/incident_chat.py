@@ -7,6 +7,8 @@ from openai import AsyncOpenAI
 from api.core.errors import APIError
 from api.repositories.incident_repository import IncidentRepository
 from api.schemas.chat import ChatMessage, GlobalIncidentChatRequest, IncidentChatResponse, IncidentDetailChatRequest
+from services.code_context import CodeContextService
+from services.failure_classifier import FailureClassifier
 
 
 class IncidentChatService:
@@ -16,10 +18,14 @@ class IncidentChatService:
         *,
         client: AsyncOpenAI,
         model: str,
+        classifier: FailureClassifier | None = None,
+        code_context: CodeContextService | None = None,
     ) -> None:
         self._repository = repository
         self._client = client
         self._model = model
+        self._classifier = classifier or FailureClassifier()
+        self._code_context = code_context or CodeContextService()
 
     async def chat_about_incidents(self, request: GlobalIncidentChatRequest) -> IncidentChatResponse:
         incidents, _ = await self._repository.list_incidents(
@@ -75,6 +81,14 @@ class IncidentChatService:
             )
 
         events = await self._repository.list_incident_events(incident_id, limit=request.event_limit)
+        latest_telemetry = await self._repository.get_telemetry(incident.latest_telemetry_id)
+        classification = self._classifier.classify(incident, events)
+        evidence = self._code_context.build_evidence(
+            incident=incident,
+            events=events,
+            classification=classification,
+            latest_telemetry=latest_telemetry,
+        )
         event_lines = [
             (
                 f"- telemetry_id={event.telemetry_id} type={event.event_type} occurred_at={event.occurred_at.isoformat()} "
@@ -100,6 +114,48 @@ class IncidentChatService:
                     f"last_seen_at={incident.last_seen_at.isoformat()}\n"
                     f"fingerprint={incident.fingerprint}"
                 ),
+                (
+                    f"Deterministic classification:\n"
+                    f"category={classification.category.value}\n"
+                    f"confidence={classification.confidence}\n"
+                    f"summary={classification.summary}\n"
+                    f"matched_signals={classification.matched_signals}"
+                ),
+                (
+                    f"Retrieved code context:\n"
+                    f"suspected_component={evidence.suspected_component}\n"
+                    f"evidence_summary={evidence.evidence_summary}\n"
+                    f"evidence_confidence={evidence.evidence_confidence}\n"
+                    f"stack_trace_signals={evidence.stack_trace_signals}\n"
+                    f"search_terms={evidence.search_terms}\n"
+                    f"latest_commit_sha={evidence.latest_commit_sha}"
+                ),
+                "Top code candidates:",
+                *[
+                    (
+                        f"- file={candidate.file_path} symbol={candidate.symbol} "
+                        f"confidence={candidate.confidence} reason={candidate.match_reason} "
+                        f"matched_terms={candidate.matched_terms}"
+                    )
+                    for candidate in evidence.code_candidates
+                ],
+                "Relevant code snippets:",
+                *[
+                    (
+                        f"--- snippet file={snippet.file_path} lines={snippet.start_line}-{snippet.end_line} "
+                        f"symbol={snippet.symbol} confidence={snippet.confidence} reason={snippet.match_reason}\n"
+                        f"{snippet.content}"
+                    )
+                    for snippet in evidence.code_snippets
+                ],
+                "Relevant git history:",
+                *[
+                    (
+                        f"- file={signal.file_path} commit={signal.commit_sha[:12]} "
+                        f"summary={signal.commit_summary} reason={signal.relevance_reason}"
+                    )
+                    for signal in evidence.git_signals
+                ],
                 "Recent incident events:",
                 *event_lines,
             ]
@@ -130,8 +186,10 @@ class IncidentChatService:
                     "role": "system",
                     "content": (
                         "You are an incident analysis assistant for a self-healing software platform. "
-                        "Answer using only the supplied incident context. "
+                        "Answer using only the supplied incident and repository context. "
                         "If the answer is not supported by the context, say so plainly. "
+                        "Treat retrieved code snippets, code candidates, and git history as grounded evidence. "
+                        "Prefer operational answers that tie claims back to the supplied evidence. "
                         "Be concise, specific, and operationally useful."
                     ),
                 },
