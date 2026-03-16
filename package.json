@@ -1,0 +1,16 @@
+{
+  "name": "stimpact-ai",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": ".venv/bin/python -m uvicorn api.main:app --app-dir agent-platform --reload --host 127.0.0.1 --port 8000",
+    "dev:frontend": "npm --prefix client-ui run dev",
+    "build": "npm --prefix client-ui run build",
+    "lint": "npm --prefix client-ui run lint && .venv/bin/python -m compileall agent-platform shared"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.14",
+    "concurrently": "^9.2.1",
+    "tailwindcss": "^4.1.14"
+  }
+}
