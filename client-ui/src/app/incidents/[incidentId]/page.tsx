@@ -5,7 +5,12 @@ import { ChatPanel } from "@/components/chat-panel";
 import { PageHeader, PreviewNotice, SectionCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
-import { AgentPlatformError, getIncident } from "@/lib/agent-platform";
+import {
+  AgentPlatformError,
+  getIncident,
+  getIncidentClassification,
+} from "@/lib/agent-platform";
+import type { FailureCategory } from "@/lib/types";
 import { formatTimestamp } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +39,9 @@ export default async function IncidentDetailPage({
     throw caughtError;
   }
 
+  const classification = await getIncidentClassification(incidentId, {
+    eventLimit: 50,
+  });
   const { incident, events } = detail;
 
   return (
@@ -123,6 +131,35 @@ export default async function IncidentDetailPage({
         </section>
 
         <div className="space-y-6">
+          <section className="ops-sheet-muted rounded-[22px] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="ops-kicker text-[11px] font-semibold uppercase">
+                  Failure classification
+                </p>
+                <h3 className="mt-3 text-base font-semibold text-[#171717]">
+                  {formatFailureCategory(classification.category)}
+                </h3>
+              </div>
+              <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
+                {Math.round(classification.confidence * 100)}% confidence
+              </span>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-[#746d66]">
+              {classification.summary}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {classification.matched_signals.map((signal) => (
+                <span
+                  key={signal}
+                  className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-[#5d7898]"
+                >
+                  {signal}
+                </span>
+              ))}
+            </div>
+          </section>
+
           <ChatPanel
             title="Incident detail chat"
             description="Ask grounded questions about this incident, its event history, stack traces, and captured request or response data."
@@ -202,4 +239,11 @@ function serializeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatFailureCategory(category: FailureCategory): string {
+  return category
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }

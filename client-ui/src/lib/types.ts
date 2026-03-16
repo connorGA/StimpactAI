@@ -1,6 +1,18 @@
 export type IncidentStatus = "open" | "resolved";
 export type IncidentSeverity = "low" | "medium" | "high" | "critical";
 export type Environment = "production" | "staging" | "development" | "test";
+export type FailureCategory =
+  | "application_bug"
+  | "authorization_failure"
+  | "configuration_error"
+  | "database_failure"
+  | "dependency_failure"
+  | "network_failure"
+  | "null_reference"
+  | "resource_exhaustion"
+  | "timeout"
+  | "validation_failure"
+  | "unknown";
 
 export type IncidentSummary = {
   id: string;
@@ -42,6 +54,15 @@ export type IncidentListResponse = {
 export type IncidentDetailResponse = {
   incident: IncidentSummary;
   events: IncidentEvent[];
+};
+
+export type IncidentClassification = {
+  incident_id: string;
+  category: FailureCategory;
+  confidence: number;
+  summary: string;
+  matched_signals: string[];
+  inspected_event_count: number;
 };
 
 export type ChatMessage = {

@@ -1,6 +1,7 @@
 .env
 
 /.venv/
+.pytest_cache/
 **/__pycache__/
 node_modules/
 client-ui/node_modules/

@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
 from shared.types.telemetry import Environment
 
@@ -76,3 +77,26 @@ class IncidentDetailResponse(BaseModel):
 
     incident: IncidentSummaryResponse
     events: list[IncidentEventResponse] = Field(default_factory=list)
+
+
+class IncidentClassificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    category: FailureCategory
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str
+    matched_signals: list[str] = Field(default_factory=list)
+    inspected_event_count: int = Field(ge=0)
+
+    @classmethod
+    def from_classification(
+        cls,
+        *,
+        incident_id: str,
+        classification: FailureClassification,
+    ) -> "IncidentClassificationResponse":
+        return cls(
+            incident_id=incident_id,
+            **classification.model_dump(),
+        )

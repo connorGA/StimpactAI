@@ -8,12 +8,14 @@ from api.core.errors import APIError
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.repositories.incident_repository import IncidentRepository
 from api.schemas.incidents import (
+    IncidentClassificationResponse,
     IncidentDetailResponse,
     IncidentEventResponse,
     IncidentListResponse,
     IncidentSummaryResponse,
 )
 from models.incident import IncidentStatus
+from services.failure_classifier import FailureClassifier
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -22,6 +24,10 @@ def get_incident_repository(
     manager: PostgresConnectionManager = Depends(get_postgres_manager),
 ) -> IncidentRepository:
     return IncidentRepository(manager.pool)
+
+
+def get_failure_classifier() -> FailureClassifier:
+    return FailureClassifier()
 
 
 @router.get("", response_model=IncidentListResponse, status_code=status.HTTP_200_OK)
@@ -65,4 +71,31 @@ async def get_incident(
     return IncidentDetailResponse(
         incident=IncidentSummaryResponse.from_record(incident),
         events=[IncidentEventResponse.from_record(event) for event in events],
+    )
+
+
+@router.get(
+    "/{incident_id}/classification",
+    response_model=IncidentClassificationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def classify_incident(
+    incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    classifier: FailureClassifier = Depends(get_failure_classifier),
+    event_limit: int = Query(default=50, ge=1, le=200),
+) -> IncidentClassificationResponse:
+    incident = await repository.get_incident(incident_id)
+    if incident is None:
+        raise APIError(
+            f"Incident {incident_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="incident_not_found",
+        )
+
+    events = await repository.list_incident_events(incident_id, limit=event_limit)
+    classification = classifier.classify(incident, events)
+    return IncidentClassificationResponse.from_classification(
+        incident_id=incident.id,
+        classification=classification,
     )

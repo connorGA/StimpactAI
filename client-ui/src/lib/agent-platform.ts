@@ -1,6 +1,7 @@
 import "server-only";
 
 import type {
+  IncidentClassification,
   IncidentChatResponse,
   IncidentDetailResponse,
   IncidentListResponse,
@@ -94,6 +95,22 @@ export async function getIncident(
 
   return fetchFromAgentPlatform<IncidentDetailResponse>({
     path: `/incidents/${incidentId}${query ? `?${query}` : ""}`,
+    method: "GET",
+  });
+}
+
+export async function getIncidentClassification(
+  incidentId: string,
+  options?: { eventLimit?: number },
+): Promise<IncidentClassification> {
+  const searchParams = new URLSearchParams();
+  if (options?.eventLimit) {
+    searchParams.set("event_limit", String(options.eventLimit));
+  }
+  const query = searchParams.toString();
+
+  return fetchFromAgentPlatform<IncidentClassification>({
+    path: `/incidents/${incidentId}/classification${query ? `?${query}` : ""}`,
     method: "GET",
   });
 }
