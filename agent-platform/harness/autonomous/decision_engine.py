@@ -60,6 +60,14 @@ class OpenAIAutonomousDecisionEngine:
                         "You must choose only from the provided tools and never invent new tools. "
                         "Prefer a disciplined workflow: inspect first, edit only when necessary, verify explicitly, "
                         "and recover to the checkpoint when execution failures suggest the working tree is unreliable. "
+                        "Use any relevant available tool, including repository command execution, to install, reproduce, "
+                        "verify, inspect failures, and retry fixes. "
+                        "If a tool call or verification fails, prefer investigating the failure and trying again over "
+                        "giving up immediately unless the run is clearly blocked or unsafe. "
+                        "Only set verification_kind when the tool call is the actual feature verification step; "
+                        "diagnostic probes like environment inspection or interpreter discovery must not be labeled as verification. "
+                        "Do not mask verification failures with shell patterns like `|| true`, `; true`, or `&& true`; "
+                        "run diagnostics separately from the command that is meant to count as verification. "
                         "Return raw JSON with keys: summary, rationale, action, selected_tool, arguments, "
                         "arguments_summary, feature_id, verification_kind. "
                         "Use action=invoke_tool to make the next tool call, action=complete only when the feature "
@@ -76,19 +84,22 @@ class OpenAIAutonomousDecisionEngine:
         content = completion.choices[0].message.content
         if not content:
             raise ValueError("OpenAI returned an empty autonomous decision.")
-        decision = AutonomousDecision.model_validate_json(_extract_json_object(content))
+        decision = AutonomousDecision.model_validate(_extract_json_object(content))
         if decision.action is AutonomousDecisionAction.INVOKE_TOOL and not decision.selected_tool:
             raise ValueError("Autonomous decision must include selected_tool when invoking a tool.")
         return decision
 
 
-def _extract_json_object(content: str) -> str:
+def _extract_json_object(content: str) -> dict[str, object]:
     normalized = content.strip()
-    if normalized.startswith("{") and normalized.endswith("}"):
-        return normalized
-
     start = normalized.find("{")
-    end = normalized.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         raise ValueError("No JSON object found in autonomous decision response.")
-    return normalized[start : end + 1]
+    decoder = json.JSONDecoder()
+    try:
+        parsed, end = decoder.raw_decode(normalized[start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError("No valid JSON object found in autonomous decision response.") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Autonomous decision response must begin with a JSON object.")
+    return parsed

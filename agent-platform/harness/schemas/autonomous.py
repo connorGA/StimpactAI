@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AutonomousRunStatus(StrEnum):
@@ -22,6 +22,26 @@ class AutonomousRunPhase(StrEnum):
     RECOVERY = "recovery"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class AutonomousExecutionMode(StrEnum):
+    INVESTIGATE_ONLY = "investigate_only"
+    REPAIR_ONLY = "repair_only"
+    REPAIR_AND_PROPOSE = "repair_and_propose"
+
+
+class AutonomousApprovalStatus(StrEnum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class AutonomousPromotionStatus(StrEnum):
+    NOT_REQUESTED = "not_requested"
+    READY = "ready"
+    PROPOSED = "proposed"
+    BLOCKED = "blocked"
 
 
 class AutonomousEventType(StrEnum):
@@ -59,12 +79,21 @@ class AutonomousDecision(BaseModel):
     feature_id: str | None = Field(default=None, max_length=128)
     verification_kind: str | None = Field(default=None, max_length=64)
 
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def normalize_arguments(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError("arguments must be a dictionary when provided")
+        return value
+
 
 class AutonomousLoopState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_index: int = Field(ge=0, default=0)
-    max_steps: int = Field(ge=1, default=8)
+    max_steps: int = Field(ge=1, default=12)
     checkpoint_ref: str | None = Field(default=None, max_length=256)
     recovery_attempts: int = Field(ge=0, default=0)
     consecutive_failures: int = Field(ge=0, default=0)
@@ -74,18 +103,42 @@ class AutonomousLoopState(BaseModel):
     last_tool_result: dict[str, Any] = Field(default_factory=dict)
 
 
+class AutonomousPolicyDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auto_run_allowed: bool = False
+    requires_human_approval: bool = False
+    allow_writeback: bool = False
+    allowed_execution_backends: list[str] = Field(default_factory=list)
+    allowed_tool_categories: list[str] = Field(default_factory=list)
+    require_browser_verification: bool = False
+    max_repair_attempts: int = Field(ge=1, default=1)
+    max_retry_budget: int = Field(ge=0, default=0)
+    reasons: list[str] = Field(default_factory=list)
+
+
 class AutonomousRepairRunRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=128)
     incident_id: str | None = Field(default=None, max_length=128)
+    async_job_id: str | None = Field(default=None, max_length=128)
+    repo_profile_id: str | None = Field(default=None, max_length=128)
+    patch_run_id: str | None = Field(default=None, max_length=128)
+    sandbox_run_id: str | None = Field(default=None, max_length=128)
+    promotion_branch_name: str | None = Field(default=None, max_length=256)
+    promotion_url: str | None = Field(default=None, max_length=2048)
     repository_root: str = Field(min_length=1, max_length=4096)
     objective: str = Field(min_length=1, max_length=1_000)
     status: AutonomousRunStatus
     phase: AutonomousRunPhase
+    execution_mode: AutonomousExecutionMode = AutonomousExecutionMode.REPAIR_ONLY
+    approval_status: AutonomousApprovalStatus = AutonomousApprovalStatus.NOT_REQUIRED
+    promotion_status: AutonomousPromotionStatus = AutonomousPromotionStatus.NOT_REQUESTED
     initializer_session_id: str | None = Field(default=None, max_length=128)
     coding_session_id: str | None = Field(default=None, max_length=128)
     last_error: str | None = Field(default=None, max_length=4_000)
+    policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     loop_state: AutonomousLoopState = Field(default_factory=AutonomousLoopState)
     created_at: datetime
     updated_at: datetime
@@ -120,6 +173,9 @@ class AutonomousRunOutcome(BaseModel):
     phase: AutonomousRunPhase
     objective: str = Field(min_length=1, max_length=1_000)
     repository_root: str = Field(min_length=1, max_length=4096)
+    execution_mode: AutonomousExecutionMode = AutonomousExecutionMode.REPAIR_ONLY
+    approval_status: AutonomousApprovalStatus = AutonomousApprovalStatus.NOT_REQUIRED
+    promotion_status: AutonomousPromotionStatus = AutonomousPromotionStatus.NOT_REQUESTED
     checkpoint_ref: str | None = Field(default=None, max_length=256)
     recovery_attempts: int = Field(ge=0, default=0)
     total_steps: int = Field(ge=0, default=0)
@@ -127,6 +183,7 @@ class AutonomousRunOutcome(BaseModel):
     total_tool_calls: int = Field(ge=0, default=0)
     total_events: int = Field(ge=0, default=0)
     last_error: str | None = Field(default=None, max_length=4_000)
+    policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     created_at: datetime
     completed_at: datetime
 

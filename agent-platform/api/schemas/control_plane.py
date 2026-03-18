@@ -10,6 +10,7 @@ from models.control_plane import (
     ProviderKind,
     ProviderRepositoryRecord,
     RepoProfileRecord,
+    RepoProfileSecretBindingRecord,
     RuntimeKind,
     SecretBackend,
     SecretRefRecord,
@@ -191,6 +192,31 @@ class CreateRepoProfileRequest(BaseModel):
     success_criteria: str | None = Field(default=None, max_length=1_000)
     network_allowlist: list[str] = Field(default_factory=list, max_length=50)
     secret_ref_ids: list[str] = Field(default_factory=list, max_length=50)
+    secret_mounts: list["RepoProfileSecretMountRequest"] = Field(default_factory=list, max_length=50)
+
+
+class RepoProfileSecretMountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    secret_ref_id: str
+    mount_as: str = Field(min_length=1, max_length=512)
+
+
+class RepoProfileSecretMountResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mount_as: str
+    secret_ref: SecretRefResponse
+
+    @classmethod
+    def from_record(
+        cls,
+        record: RepoProfileSecretBindingRecord,
+    ) -> "RepoProfileSecretMountResponse":
+        return cls(
+            mount_as=record.mount_as,
+            secret_ref=SecretRefResponse.from_record(record.secret_ref),
+        )
 
 
 class RepoProfileResponse(BaseModel):
@@ -208,6 +234,7 @@ class RepoProfileResponse(BaseModel):
     success_criteria: str | None = None
     network_allowlist: list[str] = Field(default_factory=list)
     secret_refs: list[SecretRefResponse] = Field(default_factory=list)
+    secret_mounts: list[RepoProfileSecretMountResponse] = Field(default_factory=list)
     active: bool
     created_at: datetime
     updated_at: datetime
@@ -217,11 +244,16 @@ class RepoProfileResponse(BaseModel):
         cls,
         record: RepoProfileRecord,
         *,
-        secret_refs: list[SecretRefRecord] | None = None,
+        secret_mounts: list[RepoProfileSecretBindingRecord] | None = None,
     ) -> "RepoProfileResponse":
         payload = record.model_dump(mode="json")
+        mounts = secret_mounts or []
         payload["secret_refs"] = [
-            SecretRefResponse.from_record(secret_ref).model_dump(mode="json")
-            for secret_ref in secret_refs or []
+            SecretRefResponse.from_record(binding.secret_ref).model_dump(mode="json")
+            for binding in mounts
+        ]
+        payload["secret_mounts"] = [
+            RepoProfileSecretMountResponse.from_record(binding).model_dump(mode="json")
+            for binding in mounts
         ]
         return cls(**payload)

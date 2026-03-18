@@ -27,6 +27,19 @@ class SandboxExecutionResult:
 
 
 class LocalSandboxRunner:
+    _PASSTHROUGH_ENV_VARS = {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "SHELL",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+    }
+
     def run(
         self,
         *,
@@ -35,6 +48,8 @@ class LocalSandboxRunner:
         commands: SandboxCommandSet,
         incident_id: str,
         patch_run_id: str,
+        secret_env: dict[str, str] | None = None,
+        secret_files: dict[str, str] | None = None,
     ) -> SandboxExecutionResult:
         if not repository_root.exists():
             return SandboxExecutionResult(
@@ -49,6 +64,12 @@ class LocalSandboxRunner:
             workspace = Path(temp_dir) / "workspace"
             clone_log = self._prepare_workspace(repository_root=repository_root, workspace=workspace)
             logs = [clone_log]
+            materialized_secret_files = self._materialize_secret_files(
+                workspace=workspace,
+                secret_files=secret_files or {},
+            )
+            if materialized_secret_files:
+                logs.append(materialized_secret_files)
 
             if commands.install_command:
                 install_result = self._run_shell_command(
@@ -58,6 +79,7 @@ class LocalSandboxRunner:
                     incident_id=incident_id,
                     patch_run_id=patch_run_id,
                     step_name="install",
+                    secret_env=secret_env,
                 )
                 logs.append(install_result.log_text)
                 if install_result.returncode != 0:
@@ -76,6 +98,7 @@ class LocalSandboxRunner:
                 incident_id=incident_id,
                 patch_run_id=patch_run_id,
                 step_name="reproduce",
+                secret_env=secret_env,
             )
             logs.append(reproduce_result.log_text)
             if reproduce_result.returncode != 0:
@@ -109,6 +132,7 @@ class LocalSandboxRunner:
                 incident_id=incident_id,
                 patch_run_id=patch_run_id,
                 step_name="verify",
+                secret_env=secret_env,
             )
             logs.append(verify_result.log_text)
             if verify_result.returncode != 0:
@@ -191,6 +215,27 @@ class LocalSandboxRunner:
             step_name="patch-apply",
         )
 
+    def _materialize_secret_files(self, *, workspace: Path, secret_files: dict[str, str]) -> str | None:
+        if not secret_files:
+            return None
+        written_paths: list[str] = []
+        for mount_as, value in secret_files.items():
+            target = Path(mount_as)
+            if target.is_absolute():
+                raise ValueError("Absolute secret file mounts are not supported for local sandbox execution.")
+            destination = workspace / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(value, encoding="utf-8")
+            written_paths.append(str(target))
+        return _format_log(
+            step_name="secret-materialize",
+            command="materialize secret files",
+            returncode=0,
+            elapsed_ms=0,
+            stdout="\n".join(f"wrote {path}" for path in written_paths),
+            stderr="",
+        )
+
     def _run_shell_command(
         self,
         *,
@@ -200,13 +245,20 @@ class LocalSandboxRunner:
         incident_id: str,
         patch_run_id: str,
         step_name: str,
+        secret_env: dict[str, str] | None = None,
     ) -> "_CommandResult":
         env = {
-            **os.environ,
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if key in self._PASSTHROUGH_ENV_VARS
+            },
             "STIMPACT_INCIDENT_ID": incident_id,
             "STIMPACT_PATCH_RUN_ID": patch_run_id,
             "STIMPACT_SANDBOX_WORKSPACE": str(workspace),
         }
+        if secret_env:
+            env.update(secret_env)
         return self._run_subprocess(
             ["/bin/sh", "-lc", command],
             workspace=workspace,
@@ -214,6 +266,7 @@ class LocalSandboxRunner:
             step_name=step_name,
             env=env,
             command_override=command,
+            secret_values=list(secret_env.values()) if secret_env else None,
         )
 
     def _run_subprocess(
@@ -225,6 +278,7 @@ class LocalSandboxRunner:
         step_name: str,
         env: dict[str, str] | None = None,
         command_override: str | None = None,
+        secret_values: list[str] | None = None,
     ) -> "_CommandResult":
         started = monotonic()
         try:
@@ -245,8 +299,8 @@ class LocalSandboxRunner:
                     command=command_override or " ".join(args),
                     returncode=completed.returncode,
                     elapsed_ms=elapsed_ms,
-                    stdout=completed.stdout,
-                    stderr=completed.stderr,
+                    stdout=_redact_log_text(completed.stdout, secret_values),
+                    stderr=_redact_log_text(completed.stderr, secret_values),
                 ),
             )
         except subprocess.TimeoutExpired as exc:
@@ -258,8 +312,8 @@ class LocalSandboxRunner:
                     command=command_override or " ".join(args),
                     returncode=124,
                     elapsed_ms=elapsed_ms,
-                    stdout=exc.stdout or "",
-                    stderr=(exc.stderr or "") + "\nCommand timed out.",
+                    stdout=_redact_log_text(exc.stdout or "", secret_values),
+                    stderr=_redact_log_text((exc.stderr or "") + "\nCommand timed out.", secret_values),
                 ),
             )
 
@@ -297,3 +351,14 @@ def _format_log(
         f"stdout:\n{stdout.strip()}\n"
         f"stderr:\n{stderr.strip()}"
     )
+
+
+def _redact_log_text(value: str, secret_values: list[str] | None = None) -> str:
+    redacted = value
+    for token in ("ghp_", "glpat-", "AKIA", "ASIA"):
+        if token in redacted:
+            redacted = redacted.replace(token, f"{token[:2]}[redacted]")
+    for secret in sorted((item for item in (secret_values or []) if item), key=len, reverse=True):
+        if len(secret) >= 4 and secret in redacted:
+            redacted = redacted.replace(secret, "[redacted-secret]")
+    return redacted

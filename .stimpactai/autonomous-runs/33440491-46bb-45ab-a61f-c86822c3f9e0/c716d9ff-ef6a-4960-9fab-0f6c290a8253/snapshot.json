@@ -1,0 +1,183 @@
+{
+  "events": [
+    {
+      "created_at": "2026-03-18T19:04:12.034372Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": null,
+        "feature_id": null,
+        "rationale": "The runner must load the repo profile, generate initializer artifacts, and hand off a coding-ready context.",
+        "selected_tool": null,
+        "summary": "Bootstrap initializer and coding sessions before autonomous tool selection begins.",
+        "verification_kind": null
+      },
+      "event_type": "run_started",
+      "id": "afa09f19-f1ca-4cc4-a7d1-a4869d217c8c",
+      "payload": {
+        "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318185351' for service portfolioDeluxe.",
+        "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target"
+      },
+      "phase": "initializer",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Autonomous repair run started."
+    },
+    {
+      "created_at": "2026-03-18T19:04:12.037663Z",
+      "decision": null,
+      "event_type": "session_initialized",
+      "id": "d2b43253-1e26-4c1b-a560-045bbe205237",
+      "payload": {
+        "role": "initializer",
+        "session_id": "f084329d-acbf-4f7e-ae13-480dd429ae79"
+      },
+      "phase": "initializer",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Initializer session created."
+    },
+    {
+      "created_at": "2026-03-18T19:04:12.041471Z",
+      "decision": null,
+      "event_type": "initializer_output_generated",
+      "id": "42b4937c-aa45-44e0-92e5-289f883125ba",
+      "payload": {
+        "feature_count": 1,
+        "recommended_commands": [
+          "npm run build",
+          "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+          "npm run dev"
+        ]
+      },
+      "phase": "initializer",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Initializer output generated."
+    },
+    {
+      "created_at": "2026-03-18T19:04:12.046243Z",
+      "decision": null,
+      "event_type": "initializer_output_persisted",
+      "id": "9107dce6-8b34-4389-8fe3-0470a0d7a570",
+      "payload": {
+        "feature_catalog_path": ".stimpactai/features.json",
+        "feature_ids": [
+          "portfoliodeluxe-retry-after-header-handling-raised-keyerror-retry-after-seconds-20260318185351"
+        ],
+        "init_script_path": "init.sh"
+      },
+      "phase": "initializer",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Initializer artifacts persisted to disk."
+    },
+    {
+      "created_at": "2026-03-18T19:04:12.047408Z",
+      "decision": null,
+      "event_type": "phase_changed",
+      "id": "5d64d686-4e47-4f2f-bc08-dc01705936f2",
+      "payload": {
+        "phase": "coding"
+      },
+      "phase": "coding",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Run moved into coding phase."
+    },
+    {
+      "created_at": "2026-03-18T19:04:12.049143Z",
+      "decision": null,
+      "event_type": "coding_session_ready",
+      "id": "3b94d86c-4191-44b8-8648-c3fa6e9468f0",
+      "payload": {
+        "available_tools": [
+          "browser_assert_text",
+          "browser_click",
+          "browser_close",
+          "browser_get_url",
+          "browser_open",
+          "browser_screenshot",
+          "browser_snapshot_dom",
+          "browser_type",
+          "browser_wait_for",
+          "capture_console_logs",
+          "capture_network_summary",
+          "current_page_state",
+          "dom_snapshot",
+          "take_screenshot",
+          "edit_file",
+          "checkpoint",
+          "current_branch_info",
+          "diff_since_checkpoint",
+          "discard_failed_work",
+          "reset_failed_attempt",
+          "revert_to_checkpoint",
+          "find_file",
+          "search_dir",
+          "search_file",
+          "open_file",
+          "view_at_line",
+          "view_centered",
+          "view_next",
+          "view_prev"
+        ],
+        "feature_ids": [
+          "portfoliodeluxe-retry-after-header-handling-raised-keyerror-retry-after-seconds-20260318185351"
+        ],
+        "session_id": "915f4caa-2bb9-4bbc-806f-a56b03f4c6b4"
+      },
+      "phase": "coding",
+      "run_id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+      "summary": "Coding session is ready for autonomous decisions."
+    }
+  ],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "0093a39e-b3b0-4005-9563-787f8f3b06d9",
+    "coding_session_id": "915f4caa-2bb9-4bbc-806f-a56b03f4c6b4",
+    "created_at": "2026-03-18T19:04:12.030903Z",
+    "execution_mode": "repair_and_propose",
+    "id": "c716d9ff-ef6a-4960-9fab-0f6c290a8253",
+    "incident_id": "33440491-46bb-45ab-a61f-c86822c3f9e0",
+    "initializer_session_id": "f084329d-acbf-4f7e-ae13-480dd429ae79",
+    "last_error": null,
+    "loop_state": {
+      "checkpoint_ref": null,
+      "consecutive_failures": 0,
+      "last_tool_name": null,
+      "last_tool_ok": null,
+      "last_tool_result": {},
+      "max_steps": 8,
+      "recent_tool_names": [],
+      "recovery_attempts": 0,
+      "step_index": 0
+    },
+    "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318185351' for service portfolioDeluxe.",
+    "patch_run_id": null,
+    "phase": "coding",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": true,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "not_requested",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+    "sandbox_run_id": null,
+    "status": "queued",
+    "updated_at": "2026-03-18T19:04:12.048424Z"
+  }
+}

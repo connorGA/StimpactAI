@@ -5,10 +5,12 @@ from uuid import uuid4
 
 from harness.autonomous.decision_engine import AutonomousDecisionEngine
 from harness.autonomous.events import InMemoryAutonomousRunEventStream
+from harness.git_ops.checkpoints import GitCheckpointManager
 from harness.orchestrator.service import HarnessSessionOrchestrator
 from harness.schemas.autonomous import (
     AutonomousDecision,
     AutonomousDecisionAction,
+    AutonomousExecutionMode,
     AutonomousEventType,
     AutonomousRepairRunRecord,
     AutonomousRunEvent,
@@ -22,6 +24,7 @@ from harness.schemas.orchestrator import (
     OrchestratorSessionStartRequest,
     ToolInvocationRequest,
 )
+from harness.schemas.profile import HarnessRepositoryProfile
 from harness.schemas.runtime import HarnessAgentRole
 from harness.schemas.verification import VerificationKind, VerificationStatus
 
@@ -30,6 +33,8 @@ class AutonomousRepairRunner:
     _RECENT_EVENT_LIMIT = 8
     _RECENT_TOOL_HISTORY_LIMIT = 12
     _MAX_EXCEPTION_RECOVERIES = 2
+    _EVENT_SUMMARY_LIMIT = 1_000
+    _RUN_ERROR_LIMIT = 4_000
 
     def __init__(
         self,
@@ -44,9 +49,16 @@ class AutonomousRepairRunner:
         self,
         *,
         incident_id: str | None = None,
+        async_job_id: str | None = None,
+        repo_profile_id: str | None = None,
         repository_root: str,
         objective: str,
         initializer_summary: str,
+        execution_mode=None,
+        approval_status=None,
+        promotion_status=None,
+        policy=None,
+        repository_profile_override: HarnessRepositoryProfile | None = None,
         feature_seeds: list[FeatureSeed] | None = None,
     ) -> AutonomousRunSnapshot:
         now = datetime.now(UTC)
@@ -54,10 +66,16 @@ class AutonomousRepairRunner:
         run = AutonomousRepairRunRecord(
             id=run_id,
             incident_id=incident_id,
+            async_job_id=async_job_id,
+            repo_profile_id=repo_profile_id,
             repository_root=repository_root,
             objective=objective,
             status=AutonomousRunStatus.RUNNING,
             phase=AutonomousRunPhase.INITIALIZER,
+            execution_mode=execution_mode or AutonomousRepairRunRecord.model_fields["execution_mode"].default,
+            approval_status=approval_status or AutonomousRepairRunRecord.model_fields["approval_status"].default,
+            promotion_status=promotion_status or AutonomousRepairRunRecord.model_fields["promotion_status"].default,
+            policy=policy or AutonomousRepairRunRecord.model_fields["policy"].default_factory(),
             created_at=now,
             updated_at=now,
         )
@@ -79,6 +97,7 @@ class AutonomousRepairRunner:
                 role=HarnessAgentRole.INITIALIZER,
                 repository_root=repository_root,
                 objective=objective,
+                repository_profile_override=repository_profile_override,
             )
         )
         run = run.model_copy(
@@ -148,6 +167,7 @@ class AutonomousRepairRunner:
                 repository_root=repository_root,
                 objective=objective,
                 initializer_session_id=initializer_snapshot.session.id,
+                repository_profile_override=repository_profile_override,
             )
         )
         run = run.model_copy(
@@ -176,6 +196,91 @@ class AutonomousRepairRunner:
     def get_snapshot(self, run_id: str) -> AutonomousRunSnapshot:
         return self._event_stream.get_snapshot(run_id)
 
+    def ensure_sessions(
+        self,
+        *,
+        run_id: str,
+        repository_root: str,
+        objective: str,
+        initializer_summary: str,
+        repository_profile_override: HarnessRepositoryProfile | None = None,
+        feature_seeds: list[FeatureSeed] | None = None,
+    ) -> AutonomousRunSnapshot:
+        run = self.get_snapshot(run_id).run
+        if run.initializer_session_id is not None and run.coding_session_id is not None:
+            try:
+                self._orchestrator.restore_session(run.initializer_session_id)
+                self._orchestrator.restore_session(run.coding_session_id)
+                return self.get_snapshot(run_id)
+            except KeyError:
+                pass
+
+        initializer_snapshot = self._orchestrator.initialize_session(
+            OrchestratorSessionStartRequest(
+                role=HarnessAgentRole.INITIALIZER,
+                repository_root=repository_root,
+                objective=objective,
+                repository_profile_override=repository_profile_override,
+            )
+        )
+        run = run.model_copy(
+            update={
+                "initializer_session_id": initializer_snapshot.session.id,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._persist_run(run)
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.SESSION_INITIALIZED,
+            phase=run.phase,
+            summary="Initializer session restored for async execution.",
+            payload={"session_id": initializer_snapshot.session.id, "role": HarnessAgentRole.INITIALIZER.value},
+        )
+
+        initializer_output = self._orchestrator.generate_initializer_output(
+            initializer_snapshot.session.id,
+            GenerateInitializerOutputRequest(
+                summary=initializer_summary,
+                feature_seeds=feature_seeds or [],
+            ),
+        )
+        self._orchestrator.persist_initializer_output(
+            initializer_snapshot.session.id,
+            initializer_output,
+        )
+
+        coding_snapshot = self._orchestrator.initialize_session(
+            OrchestratorSessionStartRequest(
+                role=HarnessAgentRole.CODING,
+                repository_root=repository_root,
+                objective=objective,
+                initializer_session_id=initializer_snapshot.session.id,
+                repository_profile_override=repository_profile_override,
+            )
+        )
+        run = run.model_copy(
+            update={
+                "coding_session_id": coding_snapshot.session.id,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._persist_run(run)
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.CODING_SESSION_READY,
+            phase=run.phase,
+            summary="Coding session restored for async execution.",
+            payload={
+                "session_id": coding_snapshot.session.id,
+                "available_tools": [tool.name for tool in coding_snapshot.available_tools.tools],
+                "feature_ids": [feature.id for feature in coding_snapshot.feature_catalog.features]
+                if coding_snapshot.feature_catalog is not None
+                else [],
+            },
+        )
+        return self.get_snapshot(run_id)
+
     async def run_until_stop(
         self,
         *,
@@ -184,14 +289,16 @@ class AutonomousRepairRunner:
         objective: str,
         initializer_summary: str,
         decision_engine: AutonomousDecisionEngine,
+        repository_profile_override: HarnessRepositoryProfile | None = None,
         feature_seeds: list[FeatureSeed] | None = None,
-        max_steps: int = 8,
+        max_steps: int = 12,
     ) -> AutonomousRunSnapshot:
         snapshot = self.bootstrap_run(
             incident_id=incident_id,
             repository_root=repository_root,
             objective=objective,
             initializer_summary=initializer_summary,
+            repository_profile_override=repository_profile_override,
             feature_seeds=feature_seeds,
         )
         return await self.continue_run(
@@ -205,7 +312,7 @@ class AutonomousRepairRunner:
         *,
         run_id: str,
         decision_engine: AutonomousDecisionEngine,
-        max_steps: int = 8,
+        max_steps: int = 12,
     ) -> AutonomousRunSnapshot:
         run = self.get_snapshot(run_id).run
         updated_loop_state = run.loop_state.model_copy(update={"max_steps": max_steps})
@@ -240,6 +347,11 @@ class AutonomousRepairRunner:
 
             if decision.action is AutonomousDecisionAction.COMPLETE:
                 if self._all_features_verified(coding_snapshot):
+                    if self._repair_mode_requires_code_change(run) and not self._has_changes_since_checkpoint(run):
+                        return self._fail_run(
+                            run_id,
+                            "Autonomous repair cannot complete without producing a code change relative to the baseline checkpoint.",
+                        )
                     return self._complete_run(run_id)
                 return self._fail_run(
                     run_id,
@@ -325,7 +437,7 @@ class AutonomousRepairRunner:
                 run_id=run_id,
                 event_type=event_type,
                 phase=phase,
-                summary=summary,
+                summary=self._truncate(summary, self._EVENT_SUMMARY_LIMIT),
                 decision=decision,
                 payload=payload or {},
                 created_at=datetime.now(UTC),
@@ -356,9 +468,7 @@ class AutonomousRepairRunner:
                     arguments=decision.arguments,
                     summary=decision.summary,
                     feature_id=decision.feature_id,
-                    verification_kind=VerificationKind(decision.verification_kind)
-                    if decision.verification_kind is not None
-                    else None,
+                    verification_kind=self._coerce_verification_kind(decision.verification_kind),
                 ),
             )
         except Exception as exc:
@@ -403,6 +513,17 @@ class AutonomousRepairRunner:
             )
         return invocation_result
 
+    def _coerce_verification_kind(self, value: str | None) -> VerificationKind | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        try:
+            return VerificationKind(normalized)
+        except ValueError:
+            return None
+
     def _complete_run(self, run_id: str) -> AutonomousRunSnapshot:
         run = self.get_snapshot(run_id).run
         completed = run.model_copy(
@@ -424,11 +545,12 @@ class AutonomousRepairRunner:
 
     def _fail_run(self, run_id: str, error_message: str) -> AutonomousRunSnapshot:
         run = self.get_snapshot(run_id).run
+        truncated_error = self._truncate(error_message, self._RUN_ERROR_LIMIT)
         failed = run.model_copy(
             update={
                 "status": AutonomousRunStatus.FAILED,
                 "phase": AutonomousRunPhase.FAILED,
-                "last_error": error_message,
+                "last_error": truncated_error,
                 "updated_at": datetime.now(UTC),
             }
         )
@@ -437,10 +559,15 @@ class AutonomousRepairRunner:
             run_id=run_id,
             event_type=AutonomousEventType.RUN_FAILED,
             phase=AutonomousRunPhase.FAILED,
-            summary=error_message,
-            payload={"status": AutonomousRunStatus.FAILED.value, "error": error_message},
+            summary=truncated_error,
+            payload={"status": AutonomousRunStatus.FAILED.value, "error": truncated_error},
         )
         return self.get_snapshot(run_id)
+
+    def _truncate(self, value: str, limit: int) -> str:
+        if len(value) <= limit:
+            return value
+        return f"{value[: limit - 3]}..."
 
     def _all_features_verified(self, coding_snapshot) -> bool:
         catalog = coding_snapshot.feature_catalog
@@ -570,3 +697,19 @@ class AutonomousRepairRunner:
             return list(recent_tool_names)
         updated = [*recent_tool_names, tool_name]
         return updated[-self._RECENT_TOOL_HISTORY_LIMIT :]
+
+    def _repair_mode_requires_code_change(self, run: AutonomousRepairRunRecord) -> bool:
+        return run.execution_mode is not AutonomousExecutionMode.INVESTIGATE_ONLY
+
+    def _has_changes_since_checkpoint(self, run: AutonomousRepairRunRecord) -> bool:
+        checkpoint_ref = run.loop_state.checkpoint_ref
+        if checkpoint_ref is None:
+            return False
+        diff_result = GitCheckpointManager().diff_since_checkpoint(
+            repository_root=run.repository_root,
+            checkpoint_ref=checkpoint_ref,
+        )
+        diff = diff_result.diff
+        if diff is None:
+            return False
+        return bool(diff.changed_files or diff.patch.strip())

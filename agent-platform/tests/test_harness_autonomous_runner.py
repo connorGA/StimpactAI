@@ -6,6 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 import subprocess
+import sys
 
 import pytest
 
@@ -98,6 +99,53 @@ def test_autonomous_event_stream_notifies_subscribers_for_appended_events(tmp_pa
     assert received == [AutonomousEventType.DECISION_MADE]
 
 
+def test_autonomous_repair_runner_truncates_long_failure_messages(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    stream = InMemoryAutonomousRunEventStream()
+    runner = AutonomousRepairRunner(event_stream=stream)
+
+    snapshot = runner.bootstrap_run(
+        repository_root=str(tmp_path),
+        objective="Record a bounded failure event.",
+        initializer_summary="Prepare coding session.",
+    )
+    failed = runner._fail_run(snapshot.run.id, "x" * 5_000)  # noqa: SLF001
+
+    assert failed.run.last_error is not None
+    assert len(failed.run.last_error) == 4_000
+    assert failed.events[-1].event_type is AutonomousEventType.RUN_FAILED
+    assert len(failed.events[-1].summary) == 1_000
+
+
+def test_autonomous_repair_runner_ignores_unknown_verification_kind_metadata(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "bug.py"
+    target.write_text("print('ok')\n", encoding="utf-8")
+
+    runner = AutonomousRepairRunner()
+    snapshot = runner.bootstrap_run(
+        repository_root=str(tmp_path),
+        objective="Inspect a file without crashing on invalid verification metadata.",
+        initializer_summary="Prepare coding session.",
+    )
+
+    result = runner._execute_decision_tool(  # noqa: SLF001
+        run_id=snapshot.run.id,
+        run=snapshot.run,
+        decision=AutonomousDecision(
+            summary="Inspect the file.",
+            rationale="Unknown verification labels from the model should be ignored.",
+            action=AutonomousDecisionAction.INVOKE_TOOL,
+            selected_tool="open_file",
+            arguments={"file_path": "bug.py"},
+            verification_kind="inspection",
+        ),
+    )
+
+    assert result.ok is True
+    assert result.result["file_path"].endswith("bug.py")
+
+
 @pytest.mark.asyncio
 async def test_autonomous_repair_runner_executes_decision_loop_until_verified_completion(
     tmp_path: Path,
@@ -164,6 +212,93 @@ if (result) {
     assert AutonomousEventType.VERIFICATION_STATE_UPDATED in event_types
     assert AutonomousEventType.RUN_COMPLETED in event_types
     assert "After Autonomous Run" in (site_root / "app.js").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_autonomous_repair_runner_can_complete_after_command_verification(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "buggy_retry.py"
+    target.write_text(
+        "def read_retry_after(headers):\n    return int(headers['retry_after_seconds'])\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_buggy_retry.py"
+    test_file.write_text(
+        (
+            "from buggy_retry import read_retry_after\n\n"
+            "def test_read_retry_after_uses_standard_header():\n"
+            "    assert read_retry_after({'Retry-After': '7'}) == 7\n"
+        ),
+        encoding="utf-8",
+    )
+    _init_git_repo(tmp_path)
+
+    runner = AutonomousRepairRunner()
+    feature_id = "retry-after-verifies-via-command"
+    snapshot = await runner.run_until_stop(
+        repository_root=str(tmp_path),
+        objective="Fix retry-after parsing and verify via command.",
+        initializer_summary="Prepare coding and command verification.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="retry-after verifies via command",
+                description="The retry-after parser should pass the integration verification command.",
+                verification_method="Run pytest verification command",
+                required_verification=[VerificationKind.INTEGRATION],
+                browser_required=False,
+            )
+        ],
+        decision_engine=CommandVerificationDecisionEngine(feature_id=feature_id),
+        max_steps=8,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.SUCCEEDED
+    assert snapshot.run.phase is AutonomousRunPhase.COMPLETED
+    assert snapshot.run.loop_state.last_tool_name == "run_command"
+    assert snapshot.run.loop_state.last_tool_ok is True
+    assert snapshot.run.loop_state.step_index >= 2
+    assert "Retry-After" in target.read_text(encoding="utf-8")
+    assert any(
+        event.event_type is AutonomousEventType.VERIFICATION_STATE_UPDATED
+        and event.payload.get("feature_status") == "fully_verified"
+        for event in snapshot.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_repair_runner_fails_repair_completion_without_code_changes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    test_file = tmp_path / "test_target.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+
+    runner = AutonomousRepairRunner()
+    snapshot = await runner.run_until_stop(
+        repository_root=str(tmp_path),
+        objective="Attempt to complete a repair without producing a fix.",
+        initializer_summary="Prepare coding and verification.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="repair must include a code change",
+                description="Repair mode should not succeed without a diff.",
+                verification_method="Run pytest verification command",
+                verification_command="python -m pytest test_target.py -q",
+                required_verification=[VerificationKind.INTEGRATION],
+                browser_required=False,
+            )
+        ],
+        decision_engine=NoCodeChangeDecisionEngine(),
+        max_steps=4,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.FAILED
+    assert snapshot.run.phase is AutonomousRunPhase.FAILED
+    assert snapshot.run.last_error is not None
+    assert "without producing a code change" in snapshot.run.last_error.lower()
 
 
 @pytest.mark.asyncio
@@ -312,6 +447,84 @@ class PrematureCompleteDecisionEngine:
         return AutonomousDecision(
             summary="Stop now.",
             rationale="Intentional failure for validation.",
+            action=AutonomousDecisionAction.COMPLETE,
+        )
+
+
+class CommandVerificationDecisionEngine:
+    def __init__(self, *, feature_id: str) -> None:
+        self._feature_id = feature_id
+
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        step_index = run.loop_state.step_index
+        if step_index == 0:
+            return AutonomousDecision(
+                summary="Fix the retry-after header lookup.",
+                rationale="The implementation should use the standard Retry-After header before verification runs.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="edit_file",
+                arguments={
+                    "relative_path": "buggy_retry.py",
+                    "new_content": (
+                        "def read_retry_after(headers):\n"
+                        "    return int(headers['Retry-After'])\n"
+                    ),
+                },
+                arguments_summary="Replace the buggy file contents.",
+                feature_id=self._feature_id,
+            )
+        if step_index == 1:
+            return AutonomousDecision(
+                summary="Run the verification command.",
+                rationale="The feature requires integration verification using the repository command path.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={
+                    "command": f"{sys.executable} -m pytest test_buggy_retry.py -q"
+                },
+                arguments_summary="Run pytest for the retry-after fixture.",
+                feature_id=self._feature_id,
+                verification_kind=VerificationKind.INTEGRATION.value,
+            )
+        return AutonomousDecision(
+            summary="The required verification command passed.",
+            rationale="Integration verification is fully satisfied.",
+            action=AutonomousDecisionAction.COMPLETE,
+        )
+
+
+class NoCodeChangeDecisionEngine:
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        if run.loop_state.step_index == 0:
+            return AutonomousDecision(
+                summary="Run the passing verification command.",
+                rationale="This intentionally verifies without editing so the runner can reject no-op repair success.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={"command": f"{sys.executable} -m pytest test_target.py -q"},
+                arguments_summary="Run pytest for the existing passing test.",
+                feature_id="repair-must-include-a-code-change",
+                verification_kind=VerificationKind.INTEGRATION.value,
+            )
+        return AutonomousDecision(
+            summary="Verification passed, so complete the run.",
+            rationale="The runner should reject this because no code changed.",
             action=AutonomousDecisionAction.COMPLETE,
         )
 

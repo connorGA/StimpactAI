@@ -228,14 +228,25 @@ async def create_repo_profile(
         success_criteria=payload.success_criteria,
         network_allowlist=payload.network_allowlist,
     )
-    for secret_ref_id in payload.secret_ref_ids:
+    mounts_to_attach = [(mount.secret_ref_id, mount.mount_as) for mount in payload.secret_mounts]
+    if not mounts_to_attach and payload.secret_ref_ids:
+        for secret_ref_id in payload.secret_ref_ids:
+            secret_ref = await repository.get_secret_ref(secret_ref_id)
+            if secret_ref is None:
+                raise APIError(
+                    f"Secret ref {secret_ref_id} was not found.",
+                    status_code=404,
+                    code="secret_ref_not_found",
+                )
+            mounts_to_attach.append((secret_ref_id, secret_ref.label))
+    for secret_ref_id, mount_as in mounts_to_attach:
         await repository.attach_secret_ref_to_repo_profile(
             repo_profile_id=record.id,
             secret_ref_id=secret_ref_id,
-            mount_as=secret_ref_id,
+            mount_as=mount_as,
         )
-    secret_refs = await repository.list_repo_profile_secret_refs(record.id)
-    return RepoProfileResponse.from_record(record, secret_refs=secret_refs)
+    secret_mounts = await repository.list_repo_profile_secret_bindings(record.id)
+    return RepoProfileResponse.from_record(record, secret_mounts=secret_mounts)
 
 
 @router.get("/repo-profiles", response_model=list[RepoProfileResponse], status_code=status.HTTP_200_OK)
@@ -246,8 +257,8 @@ async def list_repo_profiles(
     records = await repository.list_repo_profiles(project_id)
     responses: list[RepoProfileResponse] = []
     for record in records:
-        secret_refs = await repository.list_repo_profile_secret_refs(record.id)
-        responses.append(RepoProfileResponse.from_record(record, secret_refs=secret_refs))
+        secret_mounts = await repository.list_repo_profile_secret_bindings(record.id)
+        responses.append(RepoProfileResponse.from_record(record, secret_mounts=secret_mounts))
     return responses
 
 

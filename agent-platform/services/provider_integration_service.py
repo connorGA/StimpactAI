@@ -45,6 +45,15 @@ class GitLabCallbackResult:
     connected_account: ProviderInstallation
 
 
+@dataclass(slots=True)
+class ProviderWritebackResult:
+    branch_name: str
+    commit_sha: str
+    change_request_url: str
+    reference_id: str | None = None
+    mergeable: bool | None = None
+
+
 class ProviderIntegrationService:
     def __init__(
         self,
@@ -282,6 +291,44 @@ class ProviderIntegrationService:
             value=access.secret_value,
         )
         return external_ref, access.secret_format
+
+    async def propose_patch_writeback(
+        self,
+        *,
+        provider_repository_id: str,
+        branch_name: str,
+        patch_diff: str,
+        title: str,
+        description: str,
+        commit_message: str,
+    ) -> ProviderWritebackResult:
+        repository = await self._repository.get_provider_repository(provider_repository_id)
+        if repository is None:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        integration = await self._require_integration(repository.provider_integration_id)
+        credentials_secret_ref = await self._load_credentials_secret_ref(integration)
+        client = get_provider_client(integration.provider)
+        change_request = await client.propose_patch(
+            integration,
+            repository,
+            branch_name=branch_name,
+            patch_diff=patch_diff,
+            title=title,
+            description=description,
+            commit_message=commit_message,
+            credentials_secret_ref=credentials_secret_ref,
+        )
+        return ProviderWritebackResult(
+            branch_name=change_request.branch_name,
+            commit_sha=change_request.commit_sha,
+            change_request_url=change_request.change_request_url,
+            reference_id=change_request.reference_id,
+            mergeable=change_request.mergeable,
+        )
 
     def verify_github_webhook(self, *, body: bytes, signature_header: str | None) -> None:
         secret = get_github_webhook_secret()

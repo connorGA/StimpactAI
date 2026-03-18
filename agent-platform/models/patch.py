@@ -45,6 +45,7 @@ class PatchRunRecord(BaseModel):
 
     id: str
     incident_id: str
+    repo_profile_id: str | None = None
     status: PatchRunStatus
     patch_summary: str
     rationale: str
@@ -66,6 +67,7 @@ class PatchRunRecord(BaseModel):
         return cls(
             id=str(row["id"]),
             incident_id=str(row["incident_id"]),
+            repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
             status=PatchRunStatus(str(row["status"])),
             patch_summary=str(row["patch_summary"]),
             rationale=str(row["rationale"]),

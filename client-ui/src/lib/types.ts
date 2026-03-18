@@ -130,6 +130,7 @@ export type PatchTargetFile = {
 export type IncidentPatch = {
   id: string;
   incident_id: string;
+  repo_profile_id: string | null;
   status: PatchRunStatus;
   patch_summary: string;
   rationale: string;
@@ -238,6 +239,23 @@ export type AutonomousRunPhase =
   | "completed"
   | "failed";
 
+export type AutonomousExecutionMode =
+  | "investigate_only"
+  | "repair_only"
+  | "repair_and_propose";
+
+export type AutonomousApprovalStatus =
+  | "not_required"
+  | "pending"
+  | "approved"
+  | "rejected";
+
+export type AutonomousPromotionStatus =
+  | "not_requested"
+  | "ready"
+  | "proposed"
+  | "blocked";
+
 export type AutonomousDecisionAction = "invoke_tool" | "complete" | "fail";
 
 export type AutonomousDecision = {
@@ -263,16 +281,38 @@ export type AutonomousLoopState = {
   last_tool_result: Record<string, unknown>;
 };
 
+export type AutonomousPolicyDecision = {
+  auto_run_allowed: boolean;
+  requires_human_approval: boolean;
+  allow_writeback: boolean;
+  allowed_execution_backends: string[];
+  allowed_tool_categories: string[];
+  require_browser_verification: boolean;
+  max_repair_attempts: number;
+  max_retry_budget: number;
+  reasons: string[];
+};
+
 export type AutonomousRun = {
   id: string;
   incident_id: string | null;
+  async_job_id: string | null;
+  repo_profile_id: string | null;
+  patch_run_id: string | null;
+  sandbox_run_id: string | null;
+  promotion_branch_name: string | null;
+  promotion_url: string | null;
   repository_root: string;
   objective: string;
   status: AutonomousRunStatus;
   phase: AutonomousRunPhase;
+  execution_mode: AutonomousExecutionMode;
+  approval_status: AutonomousApprovalStatus;
+  promotion_status: AutonomousPromotionStatus;
   initializer_session_id: string | null;
   coding_session_id: string | null;
   last_error: string | null;
+  policy: AutonomousPolicyDecision;
   loop_state: AutonomousLoopState;
   created_at: string;
   updated_at: string;
@@ -296,6 +336,9 @@ export type AutonomousRunOutcome = {
   phase: AutonomousRunPhase;
   objective: string;
   repository_root: string;
+  execution_mode: AutonomousExecutionMode;
+  approval_status: AutonomousApprovalStatus;
+  promotion_status: AutonomousPromotionStatus;
   checkpoint_ref: string | null;
   recovery_attempts: number;
   total_steps: number;
@@ -303,6 +346,7 @@ export type AutonomousRunOutcome = {
   total_tool_calls: number;
   total_events: number;
   last_error: string | null;
+  policy: AutonomousPolicyDecision;
   created_at: string;
   completed_at: string;
 };
@@ -322,6 +366,7 @@ export type IncidentAutonomousRunDetail = {
 
 export type AutonomousRunQueuedResponse = {
   run: AutonomousRun;
+  async_job_id: string | null;
 };
 
 export type ChatMessage = {

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+import json
 from pathlib import Path
+import socket
 
 from api.core.config import (
     get_repository_root,
@@ -12,15 +15,17 @@ from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.incident_repository import IncidentRepository
+from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
 from models.artifact import ArtifactStorageBackend, ArtifactType
 from models.async_job import AsyncJobRecord, AsyncJobStatus, AsyncJobType
-from models.control_plane import RepoProfileRecord
+from models.control_plane import RepoProfileRecord, RepoProfileSecretBindingRecord
+from models.patch import PatchRunRecord
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
-from sandbox.kubernetes_runner import KubernetesSandboxRunner
+from sandbox.kubernetes_runner import KubernetesJobMonitor, KubernetesSandboxRunner
 from sandbox.runner import LocalSandboxRunner, SandboxCommandSet
 from services.artifact_storage import ArtifactStorage, S3ArtifactStorage
-from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter
+from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter, SecretsReader
 from services.patch_generation import PatchGenerationService
 from services.provider_integration_service import ProviderIntegrationService
 from services.repository_provider import get_provider_adapter
@@ -35,11 +40,14 @@ class SandboxVerificationService:
         control_plane_repository: ControlPlaneRepository,
         async_job_repository: AsyncJobRepository,
         artifact_repository: ArtifactRepository,
+        patch_repository: PatchRepository,
         patch_generation: PatchGenerationService,
         local_runner: LocalSandboxRunner | None = None,
         kubernetes_runner: KubernetesSandboxRunner | None = None,
+        kubernetes_monitor: KubernetesJobMonitor | None = None,
         artifact_storage: ArtifactStorage | None = None,
         provider_integration_service: ProviderIntegrationService | None = None,
+        secrets_reader: SecretsReader | None = None,
         runner: LocalSandboxRunner | None = None,
         repository_root: Path | None = None,
     ) -> None:
@@ -48,15 +56,18 @@ class SandboxVerificationService:
         self._control_plane_repository = control_plane_repository
         self._async_job_repository = async_job_repository
         self._artifact_repository = artifact_repository
+        self._patch_repository = patch_repository
         self._patch_generation = patch_generation
         self._local_runner = local_runner or runner or LocalSandboxRunner()
         self._kubernetes_runner = kubernetes_runner or KubernetesSandboxRunner()
+        self._kubernetes_monitor = kubernetes_monitor or KubernetesJobMonitor()
         self._artifact_storage = artifact_storage or S3ArtifactStorage()
         self._repository_root = repository_root or get_repository_root()
+        self._secrets_reader = secrets_reader or AwsSecretsManagerReader()
         self._provider_integration_service = provider_integration_service or ProviderIntegrationService(
             control_plane_repository,
             secrets_writer=AwsSecretsManagerWriter(),
-            secrets_reader=AwsSecretsManagerReader(),
+            secrets_reader=self._secrets_reader,
         )
 
     async def get_latest_run(self, incident_id: str) -> SandboxRunRecord | None:
@@ -102,6 +113,7 @@ class SandboxVerificationService:
         *,
         event_limit: int = 50,
         refresh_patch: bool = False,
+        patch_run_id: str | None = None,
     ) -> tuple[SandboxRunRecord, AsyncJobRecord]:
         incident = await self._incident_repository.get_incident(incident_id)
         if incident is None:
@@ -112,9 +124,10 @@ class SandboxVerificationService:
             )
 
         repo_profile = await self._get_repo_profile_for_project(incident.project_id)
-        patch_run = await self._patch_generation.get_or_generate_patch(
-            incident_id,
-            refresh=refresh_patch,
+        patch_run = await self._resolve_patch_run(
+            incident_id=incident_id,
+            patch_run_id=patch_run_id,
+            refresh_patch=refresh_patch,
             event_limit=event_limit,
         )
 
@@ -172,9 +185,10 @@ class SandboxVerificationService:
                 code="sandbox_run_not_found",
             )
 
-        patch_run = await self._patch_generation.get_or_generate_patch(
-            incident_id,
-            refresh=bool(job.payload.get("refresh_patch", False)),
+        patch_run = await self._resolve_patch_run(
+            incident_id=incident_id,
+            patch_run_id=str(job.payload["patch_run_id"]) if job.payload.get("patch_run_id") is not None else None,
+            refresh_patch=bool(job.payload.get("refresh_patch", False)),
             event_limit=int(job.payload.get("event_limit", 50)),
         )
         repo_profile = await self._require_repo_profile(str(job.payload["repo_profile_id"]))
@@ -215,6 +229,53 @@ class SandboxVerificationService:
             repo_profile=repo_profile,
         )
 
+    async def poll_kubernetes_runs(self, *, limit: int = 50) -> list[SandboxRunRecord]:
+        runs = await self._sandbox_repository.list_active_kubernetes_runs(limit=limit)
+        updated_runs: list[SandboxRunRecord] = []
+        for run in runs:
+            if run.external_job_id is None:
+                continue
+            status = self._kubernetes_monitor.poll_status(external_job_id=run.external_job_id)
+            if status.status == "running":
+                updated_runs.append(run)
+                continue
+            terminal_status = (
+                SandboxRunStatus.SUCCEEDED if status.status == "succeeded" else SandboxRunStatus.FAILED
+            )
+            artifact_id = None
+            if status.execution_log:
+                artifact_id = await self._store_log_artifact(
+                    incident_id=run.incident_id,
+                    patch_run_id=run.patch_run_id,
+                    sandbox_run_id=run.id,
+                    object_key=f"sandbox-runs/{run.id}/kubernetes-execution.log",
+                    content=status.execution_log,
+                    content_type="text/plain",
+                    artifact_type=ArtifactType.EXECUTION_LOG,
+                )
+            await self._sandbox_repository.create_sandbox_run_step(
+                sandbox_run_id=run.id,
+                step_name="monitor-kubernetes-job",
+                status=terminal_status,
+                command="kubernetes job monitor",
+                summary=status.summary,
+                artifact_id=artifact_id,
+                exit_code=0 if terminal_status is SandboxRunStatus.SUCCEEDED else 1,
+                finished=True,
+            )
+            updated_runs.append(
+                await self._sandbox_repository.update_sandbox_run(
+                    run.id,
+                    status=terminal_status,
+                    reproduction_succeeded=terminal_status is SandboxRunStatus.SUCCEEDED,
+                    patch_applied=terminal_status is SandboxRunStatus.SUCCEEDED,
+                    verification_succeeded=terminal_status is SandboxRunStatus.SUCCEEDED,
+                    summary=status.summary,
+                    execution_log=status.execution_log or run.execution_log,
+                )
+            )
+        return updated_runs
+
     async def _execute_local_run(
         self,
         *,
@@ -228,12 +289,15 @@ class SandboxVerificationService:
             verify_command=repo_profile.verify_command,
             timeout_seconds=get_sandbox_timeout_seconds(),
         )
+        secret_env, secret_files, _secret_refs = await self._resolve_secret_bindings(repo_profile.id)
         execution = self._local_runner.run(
             repository_root=self._repository_root,
             patch_diff=patch_diff,
             commands=commands,
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
+            secret_env=secret_env,
+            secret_files=secret_files,
         )
         artifact_id = await self._store_log_artifact(
             incident_id=sandbox_run.incident_id,
@@ -305,6 +369,14 @@ class SandboxVerificationService:
                 repository=provider_repository,
             )
         )
+        provider_access_value = None
+        if provider_access_secret_arn:
+            provider_access_value = self._secrets_reader.get_secret(external_ref=provider_access_secret_arn)
+        authenticated_clone_url = self._extract_authenticated_clone_url(
+            provider_access_value=provider_access_value,
+            provider_access_secret_format=provider_access_secret_format,
+            fallback_clone_url=snapshot.clone_url,
+        )
         patch_diff_artifact_uri = await self._store_artifact_content(
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
@@ -314,19 +386,35 @@ class SandboxVerificationService:
             content_type="text/x-diff",
             artifact_type=ArtifactType.PATCH_DIFF,
         )
-        secret_refs = await self._control_plane_repository.list_repo_profile_secret_refs(repo_profile.id)
+        secret_env, secret_files, secret_refs = await self._resolve_secret_bindings(repo_profile.id)
         submission = self._kubernetes_runner.submit(
             incident_id=sandbox_run.incident_id,
             sandbox_run_id=sandbox_run.id,
             snapshot=snapshot,
             repo_profile=repo_profile,
             patch_diff_s3_uri=patch_diff_artifact_uri,
+            patch_diff_content=patch_run.unified_diff,
             network_allowlist=repo_profile.network_allowlist,
-            secret_env_refs=[secret_ref.label for secret_ref in secret_refs],
+            network_allowlist_cidrs=self._resolve_network_allowlist_cidrs(repo_profile.network_allowlist),
+            secret_env_refs=[binding.secret_ref.label for binding in secret_refs],
+            secret_env=secret_env,
+            secret_files=secret_files,
+            authenticated_clone_url=authenticated_clone_url,
             provider_access_secret_arn=provider_access_secret_arn,
             provider_access_secret_format=provider_access_secret_format,
         )
-        manifest_text = str(submission.manifest)
+        manifest_text = self._redact_manifest(
+            submission.manifest,
+            secret_env={
+                **secret_env,
+                **(
+                    {"STIMPACT_AUTHENTICATED_CLONE_URL": authenticated_clone_url}
+                    if authenticated_clone_url
+                    else {}
+                ),
+            },
+            secret_files=secret_files,
+        )
         manifest_artifact_id = await self._store_log_artifact(
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
@@ -380,6 +468,29 @@ class SandboxVerificationService:
     ) -> SandboxRunRecord | None:
         runs = await self._sandbox_repository.list_sandbox_runs(incident_id, limit=50)
         return next((run for run in runs if run.async_job_id == async_job_id), None)
+
+    async def _resolve_patch_run(
+        self,
+        *,
+        incident_id: str,
+        patch_run_id: str | None,
+        refresh_patch: bool,
+        event_limit: int,
+    ) -> PatchRunRecord:
+        if patch_run_id is not None:
+            patch_run = await self._patch_repository.get_patch_run(patch_run_id)
+            if patch_run is None or patch_run.incident_id != incident_id:
+                raise APIError(
+                    f"Patch run {patch_run_id} was not found for incident {incident_id}.",
+                    status_code=404,
+                    code="patch_run_not_found",
+                )
+            return patch_run
+        return await self._patch_generation.get_or_generate_patch(
+            incident_id,
+            refresh=refresh_patch,
+            event_limit=event_limit,
+        )
 
     async def _store_log_artifact(
         self,
@@ -448,3 +559,148 @@ class SandboxVerificationService:
             checksum_sha256=checksum,
         )
         return uri
+
+    async def _resolve_secret_bindings(
+        self,
+        repo_profile_id: str,
+    ) -> tuple[dict[str, str], dict[str, str], list[RepoProfileSecretBindingRecord]]:
+        bindings = await self._control_plane_repository.list_repo_profile_secret_bindings(repo_profile_id)
+        secret_env: dict[str, str] = {}
+        secret_files: dict[str, str] = {}
+        for binding in bindings:
+            value = self._secrets_reader.get_secret(external_ref=binding.secret_ref.external_ref)
+            if "/" in binding.mount_as:
+                secret_files[binding.mount_as] = value
+            else:
+                secret_env[binding.mount_as] = value
+        return secret_env, secret_files, bindings
+
+    def _resolve_network_allowlist_cidrs(self, network_allowlist: list[str]) -> list[str]:
+        resolved: set[str] = set()
+        for entry in network_allowlist:
+            normalized = entry.strip()
+            if not normalized:
+                continue
+            try:
+                network = ipaddress.ip_network(normalized, strict=False)
+            except ValueError:
+                try:
+                    address = ipaddress.ip_address(normalized)
+                except ValueError:
+                    try:
+                        addrinfo = socket.getaddrinfo(normalized, None)
+                    except OSError:
+                        continue
+                    for item in addrinfo:
+                        address_text = item[4][0]
+                        try:
+                            address = ipaddress.ip_address(address_text)
+                        except ValueError:
+                            continue
+                        resolved.add(f"{address}/32" if address.version == 4 else f"{address}/128")
+                else:
+                    resolved.add(f"{address}/32" if address.version == 4 else f"{address}/128")
+            else:
+                resolved.add(str(network))
+        return sorted(resolved)
+
+    def _extract_authenticated_clone_url(
+        self,
+        *,
+        provider_access_value: str | None,
+        provider_access_secret_format: str | None,
+        fallback_clone_url: str,
+    ) -> str:
+        if not provider_access_value:
+            return fallback_clone_url
+        if provider_access_secret_format != "json":
+            return fallback_clone_url
+        try:
+            payload = json.loads(provider_access_value)
+        except json.JSONDecodeError:
+            return fallback_clone_url
+        clone_url = payload.get("clone_url")
+        if not isinstance(clone_url, str) or not clone_url.strip():
+            return fallback_clone_url
+        return clone_url.strip()
+
+    def _redact_manifest(
+        self,
+        manifest: dict[str, object],
+        *,
+        secret_env: dict[str, str],
+        secret_files: dict[str, str],
+    ) -> str:
+        secrets_by_name = {
+            **{name: "***REDACTED***" for name in secret_env},
+            **{
+                f"STIMPACT_SECRET_FILE_{index}": "***REDACTED***"
+                for index, _item in enumerate(sorted(secret_files.items()))
+            },
+        }
+
+        def _redact_job(job_manifest: dict[str, object]) -> dict[str, object]:
+            spec = job_manifest.get("spec")
+            if not isinstance(spec, dict):
+                return job_manifest
+            template = spec.get("template")
+            if not isinstance(template, dict):
+                return job_manifest
+            pod_spec = template.get("spec")
+            if not isinstance(pod_spec, dict):
+                return job_manifest
+            containers = pod_spec.get("containers")
+            init_containers = pod_spec.get("initContainers")
+            if not isinstance(containers, list):
+                return job_manifest
+
+            def _redact_container_list(raw_containers: list[object]) -> list[object]:
+                redacted_containers: list[object] = []
+                for container in raw_containers:
+                    if not isinstance(container, dict):
+                        redacted_containers.append(container)
+                        continue
+                    copied_container = dict(container)
+                    env_entries = copied_container.get("env")
+                    if isinstance(env_entries, list):
+                        copied_container["env"] = [
+                            (
+                                {
+                                    **entry,
+                                    "value": secrets_by_name.get(str(entry.get("name")), entry.get("value")),
+                                }
+                                if isinstance(entry, dict)
+                                else entry
+                            )
+                            for entry in env_entries
+                        ]
+                    redacted_containers.append(copied_container)
+                return redacted_containers
+
+            redacted_containers = _redact_container_list(containers)
+            redacted_init_containers = (
+                _redact_container_list(init_containers)
+                if isinstance(init_containers, list)
+                else init_containers
+            )
+
+            redacted_manifest = dict(job_manifest)
+            redacted_spec = dict(spec)
+            redacted_template = dict(template)
+            redacted_pod_spec = dict(pod_spec)
+            redacted_pod_spec["containers"] = redacted_containers
+            if isinstance(redacted_init_containers, list):
+                redacted_pod_spec["initContainers"] = redacted_init_containers
+            redacted_template["spec"] = redacted_pod_spec
+            redacted_spec["template"] = redacted_template
+            redacted_manifest["spec"] = redacted_spec
+            return redacted_manifest
+
+        if manifest.get("kind") == "List" and isinstance(manifest.get("items"), list):
+            redacted = dict(manifest)
+            redacted["items"] = [
+                _redact_job(item) if isinstance(item, dict) and item.get("kind") == "Job" else item
+                for item in manifest["items"]
+            ]
+            return str(redacted)
+        return str(_redact_job(manifest))

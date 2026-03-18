@@ -72,6 +72,11 @@ class AutonomousRunArtifactStore:
             outcome_path=str(self._outcome_path(incident_id, run_id)),
         )
 
+    def clear_outcome(self, incident_id: str | None, run_id: str) -> None:
+        outcome_path = self._outcome_path(incident_id, run_id)
+        if outcome_path.exists():
+            outcome_path.unlink()
+
     def build_outcome(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunOutcome:
         run = snapshot.run
         events = snapshot.events
@@ -82,6 +87,9 @@ class AutonomousRunArtifactStore:
             phase=run.phase,
             objective=run.objective,
             repository_root=run.repository_root,
+            execution_mode=run.execution_mode,
+            approval_status=run.approval_status,
+            promotion_status=run.promotion_status,
             checkpoint_ref=run.loop_state.checkpoint_ref,
             recovery_attempts=run.loop_state.recovery_attempts,
             total_steps=run.loop_state.step_index,
@@ -89,6 +97,7 @@ class AutonomousRunArtifactStore:
             total_tool_calls=sum(1 for event in events if event.event_type is AutonomousEventType.TOOL_CALL_COMPLETED),
             total_events=len(events),
             last_error=run.last_error,
+            policy=run.policy,
             created_at=run.created_at,
             completed_at=run.updated_at,
         )

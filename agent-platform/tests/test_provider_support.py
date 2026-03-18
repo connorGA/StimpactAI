@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+from pathlib import Path
+import subprocess
 
 from models.control_plane import ProviderIntegrationRecord, ProviderIntegrationStatus, ProviderKind, ProviderRepositoryRecord
+from services.provider_clients import apply_patch_and_push_branch
 from services.github_provider import GitHubProviderClient
 from services.gitlab_provider import GitLabProviderClient
 from services.repository_provider import get_provider_adapter
@@ -96,3 +99,43 @@ async def test_github_provider_client_builds_sandbox_access(monkeypatch) -> None
     assert payload["provider"] == "github"
     assert payload["auth_type"] == "github_app_installation_token"
     assert payload["clone_url"].startswith("https://x-access-token:token-123@github.com/")
+
+
+def test_apply_patch_and_push_branch_accepts_diff_without_trailing_newline(tmp_path: Path) -> None:
+    remote_dir = tmp_path / "remote.git"
+    work_dir = tmp_path / "work"
+    subprocess.run(["git", "init", "--bare", str(remote_dir)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "clone", str(remote_dir), str(work_dir)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "checkout", "-b", "main"], cwd=work_dir, check=True, capture_output=True, text=True)
+    (work_dir / "app.py").write_text("print('broken')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=work_dir, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+        cwd=work_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=work_dir, check=True, capture_output=True, text=True)
+
+    (work_dir / "app.py").write_text("print('fixed')\n", encoding="utf-8")
+    patch = subprocess.run(
+        ["git", "diff", "--", "app.py"],
+        cwd=work_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.rstrip("\n")
+    subprocess.run(["git", "checkout", "--", "app.py"], cwd=work_dir, check=True, capture_output=True, text=True)
+    commit_sha = apply_patch_and_push_branch(
+        clone_url=str(remote_dir),
+        default_branch="main",
+        branch_name="stimpact/fix/test",
+        patch_diff=patch,
+        commit_message="Apply fix",
+    )
+
+    verification_dir = tmp_path / "verify"
+    subprocess.run(["git", "clone", "--branch", "stimpact/fix/test", str(remote_dir), str(verification_dir)], check=True, capture_output=True, text=True)
+    assert len(commit_sha) == 40
+    assert (verification_dir / "app.py").read_text(encoding="utf-8") == "print('fixed')\n"

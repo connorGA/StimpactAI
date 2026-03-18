@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T21:03:43.383750Z",
+  "created_at": "2026-03-18T21:03:21.552808Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "fd756fa8-41a9-4abf-b157-418dfa9ae04f",
+  "last_error": "Code fix is applied and syntax-validated; the required integration verification is still outstanding, so the next step is to run the configured verification command.",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318210314' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 1,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/portfolioDeluxe",
+  "run_id": "83c61dfc-172f-4883-82cc-ca714c238d8d",
+  "status": "failed",
+  "total_decisions": 5,
+  "total_events": 31,
+  "total_steps": 4,
+  "total_tool_calls": 6
+}

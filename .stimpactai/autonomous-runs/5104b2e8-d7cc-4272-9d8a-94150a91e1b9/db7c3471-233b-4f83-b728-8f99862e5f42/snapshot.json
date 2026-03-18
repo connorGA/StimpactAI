@@ -1,0 +1,78 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "9ff0f82b-bfe8-40ad-a79f-759fd2051954",
+    "coding_session_id": "1fa4b155-1ecb-4cd9-9f0b-103183eec4f1",
+    "created_at": "2026-03-18T22:59:05.862163Z",
+    "execution_mode": "repair_and_propose",
+    "id": "db7c3471-233b-4f83-b728-8f99862e5f42",
+    "incident_id": "5104b2e8-d7cc-4272-9d8a-94150a91e1b9",
+    "initializer_session_id": "6419998f-29ed-4b3f-bcc7-5a20d5a97cf2",
+    "last_error": "Kubernetes job stimpact-sandbox-d943b4fc failed with pod phase Failed.",
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_tool_name": "run_command",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "command": "python3 -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "exit_code": 0,
+        "message": "Command completed successfully.",
+        "ok": true,
+        "output": "stdout:\n.                                                                        [100%]\n1 passed in 0.00s",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\n1 passed in 0.00s\n",
+        "timed_out": false,
+        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/portfolioDeluxe-drill-20260318142455"
+      },
+      "max_steps": 12,
+      "recent_tool_names": [
+        "checkpoint",
+        "run_command",
+        "run_command",
+        "run_command",
+        "search_dir",
+        "discard_failed_work",
+        "run_command",
+        "open_file",
+        "edit_file",
+        "run_command"
+      ],
+      "recovery_attempts": 1,
+      "step_index": 8
+    },
+    "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry policy skipped HTTP 429 20260318225859' for service portfolioDeluxe.",
+    "patch_run_id": "9d10f56e-e085-4f9e-98df-c970ba766594",
+    "phase": "failed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "blocked",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/portfolioDeluxe-drill-20260318142455",
+    "sandbox_run_id": "d943b4fc-ae63-4aa1-8293-b5a38a25b072",
+    "status": "failed",
+    "updated_at": "2026-03-18T22:59:49.766397Z"
+  }
+}

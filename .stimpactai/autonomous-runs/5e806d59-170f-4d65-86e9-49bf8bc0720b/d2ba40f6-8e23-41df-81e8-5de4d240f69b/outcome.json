@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T19:20:51.246470Z",
+  "created_at": "2026-03-18T19:19:55.390395Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "5e806d59-170f-4d65-86e9-49bf8bc0720b",
+  "last_error": "Kubernetes job stimpact-sandbox-33c855c9 failed with pod phase Failed.",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318191810' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "blocked",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "d2ba40f6-8e23-41df-81e8-5de4d240f69b",
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 6,
+  "total_tool_calls": 0
+}

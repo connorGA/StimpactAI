@@ -3,7 +3,10 @@ import Link from "next/link";
 import { PreviewNotice } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
-import { getIncidents } from "@/lib/agent-platform";
+import {
+  getIncidents,
+  getLatestIncidentAutonomousRunDetail,
+} from "@/lib/agent-platform";
 import {
   buildIncidentTrendSeries,
   calculateLinePath,
@@ -14,7 +17,11 @@ import {
   getLiveStatusSummary,
   getServiceHealthRows,
 } from "@/lib/dashboard";
-import type { IncidentSummary } from "@/lib/types";
+import type {
+  AutonomousRunStatus,
+  IncidentAutonomousRunDetail,
+  IncidentSummary,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +35,8 @@ export default async function Home() {
   const serviceHealth = getServiceHealthRows(incidents);
   const incidentTrend = buildIncidentTrendSeries(incidents);
   const linePath = calculateLinePath(incidentTrend, 112, 480);
-  const activeUpdates = buildActiveUpdates(incidents);
+  const autonomousRuns = await loadLatestAutonomousRuns(incidents.slice(0, 4));
+  const activeUpdates = buildActiveUpdates(incidents, autonomousRuns);
 
   return (
     <main className="space-y-8">
@@ -147,6 +155,11 @@ export default async function Home() {
                   <div>
                     <p className="text-sm font-semibold text-[#171717]">{update.title}</p>
                     <p className="mt-1 text-sm leading-6 text-[#5f6470]">{update.detail}</p>
+                    {update.autonomousLabel ? (
+                      <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#b4453d]">
+                        {update.autonomousLabel}
+                      </p>
+                    ) : null}
                   </div>
                   <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8f735c]">
                     {update.timestamp}
@@ -198,6 +211,11 @@ export default async function Home() {
                       <div className="flex flex-wrap items-center gap-2">
                         <SeverityBadge severity={incident.severity} />
                         <StatusBadge status={incident.status} />
+                        {autonomousRuns[incident.id] ? (
+                          <AutonomousRunBadge
+                            status={autonomousRuns[incident.id]!.run.status}
+                          />
+                        ) : null}
                         <span className="text-xs uppercase tracking-[0.14em] text-[#8f735c]">
                           {incident.service}
                         </span>
@@ -209,6 +227,15 @@ export default async function Home() {
                         {incident.project_id} • {incident.environment} • last update{" "}
                         {formatTimestamp(incident.last_seen_at)}
                       </p>
+                      {autonomousRuns[incident.id]?.run.status === "failed" &&
+                      autonomousRuns[incident.id]?.run.last_error ? (
+                        <p className="mt-2 text-sm text-[#b4453d]">
+                          Latest autonomous repair failed:{" "}
+                          {truncateAutonomousError(
+                            autonomousRuns[incident.id]!.run.last_error,
+                          )}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="grid min-w-[220px] grid-cols-2 gap-6 xl:text-right">
@@ -312,25 +339,100 @@ function FeedStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function buildActiveUpdates(incidents: IncidentSummary[]) {
+type AutonomousRunLookup = Record<string, IncidentAutonomousRunDetail | null>;
+
+function buildActiveUpdates(
+  incidents: IncidentSummary[],
+  autonomousRuns: AutonomousRunLookup,
+) {
   if (incidents.length === 0) {
     return [
       {
         title: "No active incident updates",
         detail: "The platform is currently not reporting a new active warning.",
         timestamp: "Now",
+        autonomousLabel: null,
       },
       {
         title: "Uptime looks stable",
         detail: "Current preview uptime is healthy while no live incidents are visible.",
         timestamp: "Now",
+        autonomousLabel: null,
       },
     ];
   }
 
-  return incidents.slice(0, 3).map((incident) => ({
-    title: incident.title,
-    detail: `${incident.service} in ${incident.environment} has ${incident.event_count} attached events.`,
-    timestamp: formatTimestamp(incident.last_seen_at),
-  }));
+  return incidents.slice(0, 3).map((incident) => {
+    const autonomousRun = autonomousRuns[incident.id];
+    if (autonomousRun?.run.status === "failed") {
+      return {
+        title: incident.title,
+        detail: `${incident.service} in ${incident.environment} has ${incident.event_count} attached events. The latest autonomous repair attempt stopped before completion.`,
+        timestamp: formatTimestamp(incident.last_seen_at),
+        autonomousLabel: "Autonomous repair failed",
+      };
+    }
+    return {
+      title: incident.title,
+      detail: `${incident.service} in ${incident.environment} has ${incident.event_count} attached events.`,
+      timestamp: formatTimestamp(incident.last_seen_at),
+      autonomousLabel: autonomousRun ? buildAutonomousLabel(autonomousRun.run.status) : null,
+    };
+  });
+}
+
+async function loadLatestAutonomousRuns(
+  incidents: IncidentSummary[],
+): Promise<AutonomousRunLookup> {
+  const pairs = await Promise.all(
+    incidents.map(async (incident) => {
+      try {
+        const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
+        return [incident.id, detail] as const;
+      } catch {
+        return [incident.id, null] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(pairs);
+}
+
+function buildAutonomousLabel(status: AutonomousRunStatus): string | null {
+  if (status === "failed") {
+    return "Autonomous repair failed";
+  }
+  if (status === "running" || status === "queued") {
+    return "Autonomous repair active";
+  }
+  return null;
+}
+
+function truncateAutonomousError(error: string): string {
+  return error.length <= 120 ? error : `${error.slice(0, 117)}...`;
+}
+
+function AutonomousRunBadge({ status }: { status: AutonomousRunStatus }) {
+  const label =
+    status === "failed"
+      ? "Autonomous failed"
+      : status === "running" || status === "queued"
+        ? "Autonomous active"
+        : status === "succeeded"
+          ? "Autonomous succeeded"
+          : "Autonomous cancelled";
+  const className =
+    status === "failed"
+      ? "bg-[rgba(233,89,80,0.12)] text-[#b4453d]"
+      : status === "running" || status === "queued"
+        ? "bg-[rgba(44,123,229,0.12)] text-[#35547d]"
+        : status === "succeeded"
+          ? "bg-[rgba(67,160,71,0.12)] text-[#2f6f35]"
+          : "bg-[rgba(24,24,27,0.08)] text-[#5f6470]";
+  return (
+    <span
+      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${className}`}
+    >
+      {label}
+    </span>
+  );
 }

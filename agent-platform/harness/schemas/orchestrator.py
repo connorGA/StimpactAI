@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from harness.schemas.context import PromptReadyContextPacket
 from harness.schemas.initializer import FeatureCatalog, FeatureSeed
+from harness.schemas.profile import HarnessRepositoryProfile
 from harness.schemas.runtime import (
     CodingAgentInputContract,
     HarnessAgentRole,
@@ -20,6 +21,7 @@ class ToolCategory(StrEnum):
     SEARCH = "search"
     VIEW = "view"
     EDIT = "edit"
+    COMMAND = "command"
     BROWSER = "browser"
     GIT = "git"
 
@@ -50,6 +52,7 @@ class OrchestratorSessionStartRequest(BaseModel):
     repository_root: str = Field(min_length=1, max_length=4096)
     objective: str | None = Field(default=None, max_length=1000)
     initializer_session_id: str | None = Field(default=None, max_length=128)
+    repository_profile_override: HarnessRepositoryProfile | None = None
 
     @field_validator("repository_root")
     @classmethod

@@ -12,6 +12,7 @@ from models.control_plane import (
     ProviderKind,
     ProviderRepositoryRecord,
     RepoProfileRecord,
+    RepoProfileSecretBindingRecord,
     RuntimeKind,
     SecretBackend,
     SecretRefRecord,
@@ -173,8 +174,13 @@ INSERT INTO repo_profile_secret_refs (
 ON CONFLICT (repo_profile_id, secret_ref_id, mount_as) DO NOTHING;
 """
 
-LIST_REPO_PROFILE_SECRET_REFS_SQL = """
-SELECT secret_refs.*
+LIST_REPO_PROFILE_SECRET_BINDINGS_SQL = """
+SELECT
+    secret_refs.*,
+    repo_profile_secret_refs.repo_profile_id,
+    repo_profile_secret_refs.secret_ref_id,
+    repo_profile_secret_refs.mount_as,
+    repo_profile_secret_refs.created_at AS binding_created_at
 FROM repo_profile_secret_refs
 JOIN secret_refs ON secret_refs.id = repo_profile_secret_refs.secret_ref_id
 WHERE repo_profile_secret_refs.repo_profile_id = $1
@@ -409,9 +415,16 @@ class ControlPlaneRepository:
             mount_as,
         )
 
+    async def list_repo_profile_secret_bindings(
+        self,
+        repo_profile_id: str,
+    ) -> list[RepoProfileSecretBindingRecord]:
+        rows = await self._fetch(LIST_REPO_PROFILE_SECRET_BINDINGS_SQL, repo_profile_id)
+        return [RepoProfileSecretBindingRecord.from_db_row(row) for row in rows]
+
     async def list_repo_profile_secret_refs(self, repo_profile_id: str) -> list[SecretRefRecord]:
-        rows = await self._fetch(LIST_REPO_PROFILE_SECRET_REFS_SQL, repo_profile_id)
-        return [SecretRefRecord.from_db_row(row) for row in rows]
+        bindings = await self.list_repo_profile_secret_bindings(repo_profile_id)
+        return [binding.secret_ref for binding in bindings]
 
     async def _fetchrow(
         self,

@@ -108,3 +108,19 @@ def test_search_dir_returns_refinement_response_when_results_exceed_limit(tmp_pa
     assert response.result_count == 51
     assert response.results == []
     assert response.refinement_guidance is not None
+
+
+def test_search_dir_skips_binary_files(tmp_path: Path) -> None:
+    (tmp_path / "text.txt").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n\x1a\nbinary")
+
+    response = search_dir(
+        SearchDirRequest(
+            root_path=str(tmp_path),
+            query="needle",
+        )
+    )
+
+    assert response.ok is True
+    assert response.result_count == 1
+    assert response.results[0].path == "text.txt"

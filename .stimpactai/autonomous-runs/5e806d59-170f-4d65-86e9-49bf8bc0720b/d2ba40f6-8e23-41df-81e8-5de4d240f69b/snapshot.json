@@ -1,0 +1,81 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "9c5d112e-757a-4791-8807-5dea1c27c8f5",
+    "coding_session_id": "2cdc7ee5-0981-4b78-b031-c2daf22255e6",
+    "created_at": "2026-03-18T19:19:55.390395Z",
+    "execution_mode": "repair_and_propose",
+    "id": "d2ba40f6-8e23-41df-81e8-5de4d240f69b",
+    "incident_id": "5e806d59-170f-4d65-86e9-49bf8bc0720b",
+    "initializer_session_id": "4387dedd-0bf5-434a-8209-a0197fef721a",
+    "last_error": "Kubernetes job stimpact-sandbox-33c855c9 failed with pod phase Failed.",
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_tool_name": "search_dir",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "error": null,
+        "ok": true,
+        "query": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "refinement_guidance": null,
+        "result_count": 1,
+        "results": [
+          {
+            "line_number": 18,
+            "line_text": "echo \" - python -m pytest staging_drill_fixture/test_buggy_retry.py -q\"",
+            "path": "init.sh"
+          }
+        ],
+        "scope_path": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+        "too_many_results": false
+      },
+      "max_steps": 8,
+      "recent_tool_names": [
+        "checkpoint",
+        "search_dir",
+        "discard_failed_work",
+        "open_file",
+        "discard_failed_work",
+        "open_file",
+        "open_file",
+        "edit_file",
+        "search_dir"
+      ],
+      "recovery_attempts": 2,
+      "step_index": 6
+    },
+    "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318191810' for service portfolioDeluxe.",
+    "patch_run_id": "7244706b-3ab5-4c22-87c8-68072e60eebc",
+    "phase": "failed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": true,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "blocked",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+    "sandbox_run_id": "33c855c9-480a-4982-b1ce-c8513ca65fda",
+    "status": "failed",
+    "updated_at": "2026-03-18T19:20:51.246470Z"
+  }
+}

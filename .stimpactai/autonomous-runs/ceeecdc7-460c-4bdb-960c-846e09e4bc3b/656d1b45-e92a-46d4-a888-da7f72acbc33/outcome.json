@@ -1,0 +1,41 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T22:58:21.010405Z",
+  "created_at": "2026-03-18T22:57:39.051898Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "ceeecdc7-460c-4bdb-960c-846e09e4bc3b",
+  "last_error": "Kubernetes job stimpact-sandbox-75e533de failed with pod phase Failed.",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After parsing dropped the first digit 20260318225732' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "blocked",
+  "recovery_attempts": 1,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/portfolioDeluxe-drill-20260318142455",
+  "run_id": "656d1b45-e92a-46d4-a888-da7f72acbc33",
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

@@ -189,6 +189,30 @@ def get_sandbox_base_image() -> str:
     return normalized or "public.ecr.aws/docker/library/python:3.12"
 
 
+def get_kubeconfig_path() -> str | None:
+    return get_nonempty_env("KUBECONFIG", "AGENT_PLATFORM_KUBECONFIG")
+
+
+def get_kubeconfig_context() -> str | None:
+    return get_nonempty_env("AGENT_PLATFORM_KUBECONFIG_CONTEXT")
+
+
+def get_worker_idle_seconds() -> float:
+    value = os.getenv("AGENT_PLATFORM_WORKER_IDLE_SECONDS", "2").strip()
+    try:
+        return max(0.1, float(value))
+    except ValueError:
+        return 2.0
+
+
+def get_kubernetes_monitor_interval_seconds() -> float:
+    value = os.getenv("AGENT_PLATFORM_KUBERNETES_MONITOR_INTERVAL_SECONDS", "5").strip()
+    try:
+        return max(0.5, float(value))
+    except ValueError:
+        return 5.0
+
+
 def get_github_app_name() -> str | None:
     return get_nonempty_env("GITHUB_APP_NAME")
 

@@ -195,6 +195,7 @@ class IncidentPatchResponse(BaseModel):
 
     id: str
     incident_id: str
+    repo_profile_id: str | None = None
     status: PatchRunStatus
     patch_summary: str
     rationale: str

@@ -95,6 +95,8 @@ class PuppeteerBrowserBackend(BrowserAutomationBackend):
                 "payload": payload,
             }
         )
+        if response.get("action") == "unknown":
+            response["action"] = action.value
         response.setdefault("provider", BrowserProvider.PUPPETEER.value)
         response.setdefault("action", action.value)
         response.setdefault("message", action.value)

@@ -14,9 +14,11 @@ from api.core.errors import APIError
 from models.control_plane import ProviderKind, ProviderRepositoryRecord
 from models.control_plane import ProviderIntegrationRecord, SecretRefRecord
 from services.provider_clients import (
+    ProviderChangeRequest,
     ProviderInstallation,
     ProviderRepositoryMetadata,
     ProviderSandboxAccess,
+    apply_patch_and_push_branch,
 )
 from services.repository_provider import RepositorySnapshot
 
@@ -131,6 +133,47 @@ class GitHubProviderClient:
             secret_format="json",
         )
 
+    async def propose_patch(
+        self,
+        integration: ProviderIntegrationRecord,
+        repository: ProviderRepositoryRecord,
+        *,
+        branch_name: str,
+        patch_diff: str,
+        title: str,
+        description: str,
+        commit_message: str,
+        credentials_secret_ref: SecretRefRecord | None = None,
+    ) -> ProviderChangeRequest:
+        _ = credentials_secret_ref
+        installation_token = await self._create_installation_token(self._get_installation_id(integration))
+        authenticated_clone_url = self._build_authenticated_clone_url(repository.clone_url, token=installation_token)
+        commit_sha = apply_patch_and_push_branch(
+            clone_url=authenticated_clone_url,
+            default_branch=repository.default_branch,
+            branch_name=branch_name,
+            patch_diff=patch_diff,
+            commit_message=commit_message,
+        )
+        payload = await self._request_with_bearer(
+            "POST",
+            f"/repos/{repository.owner}/{repository.name}/pulls",
+            token=installation_token,
+            json_body={
+                "title": title,
+                "head": branch_name,
+                "base": repository.default_branch,
+                "body": description,
+            },
+        )
+        return ProviderChangeRequest(
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            change_request_url=str(payload.get("html_url") or self._build_compare_url(repository, branch_name)),
+            reference_id=str(payload.get("number")) if payload.get("number") is not None else None,
+            mergeable=payload.get("mergeable") if isinstance(payload.get("mergeable"), bool) else None,
+        )
+
     def _get_installation_id(self, integration: ProviderIntegrationRecord) -> str:
         metadata_value = integration.metadata.get("installation_id")
         if metadata_value is not None and str(metadata_value).strip():
@@ -195,7 +238,14 @@ class GitHubProviderClient:
             },
         )
 
-    async def _request_with_bearer(self, method: str, path: str, *, token: str) -> dict[str, object]:
+    async def _request_with_bearer(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str,
+        json_body: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         return await self._request(
             method,
             path,
@@ -203,6 +253,7 @@ class GitHubProviderClient:
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
             },
+            json_body=json_body,
         )
 
     async def _request(
@@ -211,6 +262,7 @@ class GitHubProviderClient:
         path: str,
         *,
         headers: dict[str, str],
+        json_body: dict[str, object] | None = None,
     ) -> dict[str, object]:
         try:
             import httpx  # type: ignore
@@ -223,7 +275,7 @@ class GitHubProviderClient:
 
         url = f"{self._api_base_url}{path}"
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.request(method, url, headers=headers)
+            response = await client.request(method, url, headers=headers, json=json_body)
         if response.status_code >= 400:
             raise APIError(
                 f"GitHub API request failed with status {response.status_code}.",
@@ -238,6 +290,12 @@ class GitHubProviderClient:
                 code="github_api_request_failed",
             )
         return payload
+
+    def _build_compare_url(self, repository: ProviderRepositoryRecord, branch_name: str) -> str:
+        return (
+            f"https://github.com/{repository.owner}/{repository.name}"
+            f"/compare/{repository.default_branch}...{branch_name}?expand=1"
+        )
 
     def _build_authenticated_clone_url(self, clone_url: str, *, token: str) -> str:
         normalized = clone_url.strip()

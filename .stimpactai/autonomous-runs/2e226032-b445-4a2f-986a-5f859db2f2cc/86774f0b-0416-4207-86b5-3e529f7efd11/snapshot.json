@@ -1,0 +1,77 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "15a42f06-1e5f-4a2a-8f4a-098224081b69",
+    "coding_session_id": "080d9975-5110-41cc-81f1-5836d1ca9c19",
+    "created_at": "2026-03-18T20:33:10.527442Z",
+    "execution_mode": "repair_and_propose",
+    "id": "86774f0b-0416-4207-86b5-3e529f7efd11",
+    "incident_id": "2e226032-b445-4a2f-986a-5f859db2f2cc",
+    "initializer_session_id": "4538325b-7608-47a9-be6c-01b16e1ccb1b",
+    "last_error": null,
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_tool_name": "open_file",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "current_end_line": 3,
+        "current_start_line": 1,
+        "error": null,
+        "file_path": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target/staging_drill_fixture/buggy_retry.py",
+        "lines": [
+          "1|def read_retry_after(headers: dict[str, str]) -> int:",
+          "2|    value = headers[\"Retry-After\"]",
+          "3|    return int(value)"
+        ],
+        "ok": true,
+        "page_size": 100,
+        "total_line_count": 3
+      },
+      "max_steps": 12,
+      "recent_tool_names": [
+        "checkpoint",
+        "open_file",
+        "open_file",
+        "edit_file",
+        "discard_failed_work",
+        "edit_file",
+        "open_file"
+      ],
+      "recovery_attempts": 1,
+      "step_index": 5
+    },
+    "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318203302' for service portfolioDeluxe.",
+    "patch_run_id": "a40b2669-37cc-495e-9b14-42767cc17996",
+    "phase": "completed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": true,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": "stimpact/fix/2e226032-b445-4a2f-986a-5f859db2f2cc-86774f0b",
+    "promotion_status": "proposed",
+    "promotion_url": "https://github.com/connorGA/portfolioDeluxe/pull/1",
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+    "sandbox_run_id": "a99c1ecf-a660-4f3f-8ab1-71f158057027",
+    "status": "succeeded",
+    "updated_at": "2026-03-18T20:33:32.094750Z"
+  }
+}

@@ -77,5 +77,6 @@ class PersistentAutonomousRunEventStream(InMemoryAutonomousRunEventStream):
     def _maybe_persist_outcome(self, run_id: str) -> None:
         snapshot = self.get_snapshot(run_id)
         if snapshot.run.status.value not in {"succeeded", "failed", "cancelled"}:
+            self._artifact_store.clear_outcome(snapshot.run.incident_id, run_id)
             return
         self._artifact_store.persist_outcome(snapshot)

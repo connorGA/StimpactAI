@@ -52,7 +52,12 @@ class InitializerOutputBuilder:
             feature_catalog=FeatureCatalog(
                 generated_at=generated_at,
                 repository_root=str(root),
-                features=self._build_feature_catalog(feature_seeds, generated_at, verification_engine),
+                features=self._build_feature_catalog(
+                    feature_seeds,
+                    generated_at,
+                    verification_engine,
+                    profile,
+                ),
             ),
             checkpoint_strategy=self._checkpoint_strategy(),
             environment_notes=notes,
@@ -88,6 +93,7 @@ class InitializerOutputBuilder:
         feature_seeds: list[FeatureSeed] | None,
         generated_at: datetime,
         verification_engine: VerificationRulesEngine,
+        profile: HarnessRepositoryProfile,
     ) -> list[FeatureRecord]:
         seeds = feature_seeds or self._default_feature_seeds()
         features: list[FeatureRecord] = []
@@ -102,6 +108,9 @@ class InitializerOutputBuilder:
                     description=seed.description,
                     status=FeatureStatus.UNVERIFIED,
                     verification_method=seed.verification_method,
+                    reproduction_command=seed.reproduction_command,
+                    verification_command=seed.verification_command
+                    or self._default_verification_command(seed, profile),
                     required_verification=seed.required_verification,
                     verification_state=verification_engine.build_initial_state(
                         required_verification=seed.required_verification,
@@ -112,6 +121,17 @@ class InitializerOutputBuilder:
                 )
             )
         return features
+
+    def _default_verification_command(
+        self,
+        seed: FeatureSeed,
+        profile: HarnessRepositoryProfile,
+    ) -> str | None:
+        if not seed.required_verification:
+            return None
+        if seed.browser_required:
+            return None
+        return profile.test_command
 
     def _build_init_script(
         self,

@@ -34,6 +34,7 @@ from api.routes.telemetry import (
 from api.schemas.autonomous import AutonomousRunCreateRequest, AutonomousRunDetailResponse
 from harness.schemas.autonomous import (
     AutonomousArtifactPaths,
+    AutonomousPromotionStatus,
     AutonomousRepairRunRecord,
     AutonomousRunEvent,
     AutonomousRunOutcome,
@@ -49,6 +50,7 @@ from models.control_plane import (
     ProviderKind,
     ProviderRepositoryRecord,
     RepoProfileRecord,
+    RepoProfileSecretBindingRecord,
     RuntimeKind,
     SecretBackend,
     SecretRefRecord,
@@ -177,6 +179,7 @@ class StubFailureClassifier:
 class StubControlPlaneRepository:
     def __init__(self) -> None:
         now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
+        self.attached_mounts: list[str] = []
         self.secret_ref = SecretRefRecord(
             id="secret-1",
             project_id="project-1",
@@ -224,6 +227,9 @@ class StubControlPlaneRepository:
         assert project_id == "project-1"
         return [self.secret_ref]
 
+    async def get_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
+        return self.secret_ref if secret_ref_id == self.secret_ref.id else None
+
     async def create_provider_integration(self, **kwargs) -> ProviderIntegrationRecord:
         assert kwargs["provider"] is ProviderKind.GITHUB
         return self.provider_integration
@@ -252,10 +258,25 @@ class StubControlPlaneRepository:
 
     async def attach_secret_ref_to_repo_profile(self, **kwargs) -> None:
         assert kwargs["repo_profile_id"] == self.repo_profile.id
+        self.attached_mounts.append(kwargs["mount_as"])
 
     async def list_repo_profile_secret_refs(self, repo_profile_id: str) -> list[SecretRefRecord]:
         assert repo_profile_id == self.repo_profile.id
         return [self.secret_ref]
+
+    async def list_repo_profile_secret_bindings(
+        self,
+        repo_profile_id: str,
+    ) -> list[RepoProfileSecretBindingRecord]:
+        assert repo_profile_id == self.repo_profile.id
+        return [
+            RepoProfileSecretBindingRecord(
+                repo_profile_id=self.repo_profile.id,
+                mount_as=self.attached_mounts[-1] if self.attached_mounts else self.secret_ref.label,
+                secret_ref=self.secret_ref,
+                created_at=self.secret_ref.created_at,
+            )
+        ]
 
     async def list_repo_profiles(self, project_id: str) -> list[RepoProfileRecord]:
         assert project_id == "project-1"
@@ -609,6 +630,32 @@ class StubAutonomousRunService:
         assert run_id == "auto-run-1"
         return self._detail()
 
+    async def approve_run(self, incident_id: str, run_id: str, request) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        assert run_id == "auto-run-1"
+        detail = self._detail()
+        return detail.model_copy(
+            update={
+                "run": detail.run.model_copy(update={"approval_status": request.approval_status}),
+            }
+        )
+
+    async def promote_run(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        assert run_id == "auto-run-1"
+        detail = self._detail()
+        return detail.model_copy(
+            update={
+                "run": detail.run.model_copy(
+                    update={
+                        "promotion_status": AutonomousPromotionStatus.PROPOSED,
+                        "promotion_branch_name": "stimpact/fix/incident-1",
+                        "promotion_url": "https://github.com/acme/billing-api/compare/main...stimpact/fix/incident-1?expand=1",
+                    }
+                ),
+            }
+        )
+
     def get_run_detail_sync(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
         assert incident_id == "incident-1"
         assert run_id == "auto-run-1"
@@ -942,6 +989,34 @@ def test_stream_autonomous_run_events_returns_sse_snapshot() -> None:
     assert '"event_type": "run_completed"' in payload
 
 
+def test_approve_autonomous_run_returns_updated_detail() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    response = client.post(
+        "/incidents/incident-1/autonomous-runs/auto-run-1/approval",
+        json={"approval_status": "approved"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run"]["approval_status"] == "approved"
+
+
+def test_promote_autonomous_run_returns_promotion_metadata() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    response = client.post("/incidents/incident-1/autonomous-runs/auto-run-1/promote")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run"]["promotion_status"] == "proposed"
+    assert body["run"]["promotion_branch_name"] == "stimpact/fix/incident-1"
+
+
 def test_create_secret_ref_writes_to_secret_manager_and_returns_metadata() -> None:
     app = build_test_app()
     app.dependency_overrides[get_control_plane_repository] = StubControlPlaneRepository
@@ -967,7 +1042,8 @@ def test_create_secret_ref_writes_to_secret_manager_and_returns_metadata() -> No
 
 def test_create_repo_profile_returns_profile_with_secret_refs() -> None:
     app = build_test_app()
-    app.dependency_overrides[get_control_plane_repository] = StubControlPlaneRepository
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
 
     client = TestClient(app)
     response = client.post(
@@ -992,6 +1068,35 @@ def test_create_repo_profile_returns_profile_with_secret_refs() -> None:
     assert body["project_id"] == "project-1"
     assert body["runtime_kind"] == "python"
     assert body["secret_refs"][0]["id"] == "secret-1"
+    assert body["secret_mounts"][0]["mount_as"] == "OPENAI_API_KEY"
+
+
+def test_create_repo_profile_accepts_explicit_secret_mounts() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.post(
+        "/control-plane/repo-profiles",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "runtime_kind": "python",
+            "reproduce_command": "python reproduce.py",
+            "verify_command": "pytest",
+            "secret_mounts": [
+                {
+                    "secret_ref_id": "secret-1",
+                    "mount_as": "/var/run/stimpact/openai.key",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["secret_mounts"][0]["mount_as"] == "/var/run/stimpact/openai.key"
 
 
 def test_create_github_app_integration_returns_verified_record() -> None:

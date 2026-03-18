@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T19:16:57.863091Z",
+  "created_at": "2026-03-18T19:16:33.204452Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "c692a52a-e28b-4b99-80be-85bfb700da75",
+  "last_error": "Tool execution failed: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318191359' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "1f0d910c-b658-4713-9c03-c4c71df9d1dd",
+  "status": "failed",
+  "total_decisions": 6,
+  "total_events": 39,
+  "total_steps": 5,
+  "total_tool_calls": 9
+}

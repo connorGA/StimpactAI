@@ -2,7 +2,10 @@ import Link from "next/link";
 
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
-import { getIncidents } from "@/lib/agent-platform";
+import {
+  getIncidents,
+  getLatestIncidentAutonomousRunDetail,
+} from "@/lib/agent-platform";
 import {
   countCriticalIncidents,
   countOpenIncidents,
@@ -33,6 +36,9 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
 
   const incidents = incidentList.items;
   const featured = incidents[0];
+  const featuredAutonomousRun = featured
+    ? await getLatestIncidentAutonomousRunDetail(featured.id).catch(() => null)
+    : null;
 
   return (
     <main className="space-y-8">
@@ -164,9 +170,25 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
                   {featured ? "Live incident progress" : "Progress feed waiting"}
                 </h2>
               </div>
-              <span className="ops-pill-strong rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]">
-                {featured ? featured.status : "Idle"}
-              </span>
+              <div className="flex flex-col items-end gap-2">
+                <span className="ops-pill-strong rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]">
+                  {featured ? featured.status : "Idle"}
+                </span>
+                {featuredAutonomousRun ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                      featuredAutonomousRun.run.status === "failed"
+                        ? "bg-[rgba(233,89,80,0.16)] text-[#ffd5d1]"
+                        : featuredAutonomousRun.run.status === "running" ||
+                            featuredAutonomousRun.run.status === "queued"
+                          ? "bg-[rgba(111,158,210,0.18)] text-white"
+                          : "bg-white/10 text-white/78"
+                    }`}
+                  >
+                    {buildAutonomousSummaryLabel(featuredAutonomousRun.run.status)}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
             {featured ? (
@@ -177,6 +199,13 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
                     {featured.service} • {featured.environment} • fingerprint{" "}
                     {featured.fingerprint.slice(0, 14)}
                   </p>
+                  {featuredAutonomousRun?.run.status === "failed" &&
+                  featuredAutonomousRun.run.last_error ? (
+                    <p className="mt-3 text-sm leading-6 text-[#ffd5d1]">
+                      Latest autonomous repair failed:{" "}
+                      {truncateAutonomousError(featuredAutonomousRun.run.last_error)}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="mt-6 space-y-5">
@@ -275,4 +304,21 @@ function buildIncidentProgress(incident: {
       timestamp: "Awaiting update",
     },
   ];
+}
+
+function buildAutonomousSummaryLabel(status: string): string {
+  if (status === "failed") {
+    return "Autonomous failed";
+  }
+  if (status === "running" || status === "queued") {
+    return "Autonomous active";
+  }
+  if (status === "succeeded") {
+    return "Autonomous succeeded";
+  }
+  return "Autonomous cancelled";
+}
+
+function truncateAutonomousError(error: string): string {
+  return error.length <= 140 ? error : `${error.slice(0, 137)}...`;
 }

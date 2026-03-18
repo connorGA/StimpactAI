@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -8,6 +9,7 @@ from typing import Any, Callable
 from pydantic import BaseModel
 
 from harness.context.manager import HarnessContextManager
+from harness.schemas.commands import RunCommandRequest, RunCommandResponse
 from harness.runtime.session import HarnessRuntime, RuntimePrimitives
 from harness.schemas.browser import BrowserAction
 from harness.schemas.context import ContextEvent, ContextEventKind
@@ -28,7 +30,7 @@ from harness.schemas.orchestrator import (
 )
 from harness.schemas.runtime import HarnessAgentRole, InitializerOutputContract, RuntimeSessionRecord
 from harness.schemas.search import FindFileRequest, SearchDirRequest, SearchFileRequest
-from harness.schemas.verification import FeatureVerificationState
+from harness.schemas.verification import FeatureVerificationState, VerificationKind
 from harness.schemas.viewer import FileViewAtLineRequest, FileViewRequest
 from harness.tools import search_tools
 
@@ -45,6 +47,7 @@ class HarnessSessionOrchestrator:
         self._turn_counts: dict[str, int] = {}
         self._tool_history: dict[str, list[str]] = {}
         self._feature_catalogs: dict[str, FeatureCatalog | None] = {}
+        self._browser_session_ids: dict[str, str] = {}
         self._tool_registry = self._build_tool_registry()
 
     def initialize_session(self, request: OrchestratorSessionStartRequest) -> HarnessSessionSnapshot:
@@ -60,6 +63,7 @@ class HarnessSessionOrchestrator:
             repository_root=request.repository_root,
             objective=request.objective,
             initializer_output=inherited_initializer_output,
+            repository_profile_override=request.repository_profile_override,
         )
         self._turn_counts[session.id] = 0
         self._tool_history[session.id] = []
@@ -68,6 +72,7 @@ class HarnessSessionOrchestrator:
             if inherited_initializer_output is not None
             else None
         )
+        self._browser_session_ids.pop(session.id, None)
         return self.restore_session(session.id)
 
     def restore_session(self, session_id: str) -> HarnessSessionSnapshot:
@@ -145,7 +150,14 @@ class HarnessSessionOrchestrator:
         registered_tool = self._require_registered_tool(session, request.tool_name)
         normalized_arguments = self._normalize_arguments(session, request.tool_name, request.arguments)
         result_model = registered_tool.handler(session, primitives, normalized_arguments)
-        feature_state = self._apply_feature_updates(session_id, request, result_model)
+        result_model = self._normalize_verification_result(request, normalized_arguments, result_model)
+        self._sync_browser_session_state(session.id, request.tool_name, result_model)
+        feature_state = self._apply_feature_updates(
+            session_id,
+            request,
+            normalized_arguments,
+            result_model,
+        )
         turn_id = self._record_tool_event(
             session_id=session_id,
             request=request,
@@ -215,9 +227,45 @@ class HarnessSessionOrchestrator:
     ) -> dict[str, Any]:
         normalized = dict(arguments)
         if tool_name in {"find_file", "search_dir"} and "root_path" not in normalized:
+            for alias in ("relative_path", "directory", "path", "scope_path"):
+                candidate = normalized.pop(alias, None)
+                if isinstance(candidate, str) and candidate.strip():
+                    normalized["root_path"] = candidate
+                    break
+        if tool_name in {"find_file", "search_dir"} and "root_path" not in normalized:
             normalized["root_path"] = session.repository_root
+        if tool_name in {"open_file", "view_next", "view_prev", "view_at_line", "view_centered"} and "file_path" not in normalized:
+            for alias in ("relative_path", "path"):
+                candidate = normalized.pop(alias, None)
+                if isinstance(candidate, str) and candidate.strip():
+                    normalized["file_path"] = candidate
+                    break
+        if tool_name == "edit_file" and "file_path" not in normalized:
+            for alias in ("relative_path", "path"):
+                candidate = normalized.pop(alias, None)
+                if isinstance(candidate, str) and candidate.strip():
+                    normalized["file_path"] = candidate
+                    break
+        if tool_name == "run_command" and "working_directory" not in normalized:
+            for alias in ("cwd", "directory", "path"):
+                candidate = normalized.pop(alias, None)
+                if isinstance(candidate, str) and candidate.strip():
+                    normalized["working_directory"] = candidate
+                    break
+        if tool_name == "run_command" and "working_directory" not in normalized:
+            normalized["working_directory"] = session.repository_root
+        if tool_name in self._browser_tools_requiring_session_id() and "session_id" not in normalized:
+            for alias in ("browser_session_id", "session"):
+                candidate = normalized.pop(alias, None)
+                if isinstance(candidate, str) and candidate.strip():
+                    normalized["session_id"] = candidate
+                    break
+        if tool_name in self._browser_tools_requiring_session_id() and "session_id" not in normalized:
+            browser_session_id = self._browser_session_ids.get(session.id)
+            if browser_session_id is not None:
+                normalized["session_id"] = browser_session_id
 
-        for key in ("root_path", "file_path", "output_path"):
+        for key in ("root_path", "file_path", "output_path", "working_directory"):
             if key in normalized and isinstance(normalized[key], str):
                 path_value = normalized[key]
                 if not path_value.startswith("/") and not self._looks_like_url(path_value):
@@ -255,6 +303,13 @@ class HarnessSessionOrchestrator:
         )
         return turn_id
 
+    def _sync_browser_session_state(self, session_id: str, tool_name: str, result_model: BaseModel) -> None:
+        browser_session_id = getattr(result_model, "session_id", None)
+        if isinstance(browser_session_id, str) and browser_session_id.strip():
+            self._browser_session_ids[session_id] = browser_session_id
+        if tool_name == "browser_close" and bool(getattr(result_model, "ok", False)):
+            self._browser_session_ids.pop(session_id, None)
+
     def _event_kind_for_request(self, request: ToolInvocationRequest) -> ContextEventKind:
         if request.verification_kind is not None:
             return ContextEventKind.VERIFICATION
@@ -272,6 +327,33 @@ class HarnessSessionOrchestrator:
         if request.tool_name in {"open_file", "view_next", "view_prev", "view_at_line", "view_centered"}:
             return ContextEventKind.OBSERVATION
         return ContextEventKind.ACTION
+
+    def _normalize_verification_result(
+        self,
+        request: ToolInvocationRequest,
+        normalized_arguments: dict[str, Any],
+        result_model: BaseModel,
+    ) -> BaseModel:
+        if (
+            request.tool_name != "run_command"
+            or request.verification_kind is None
+            or not isinstance(result_model, RunCommandResponse)
+        ):
+            return result_model
+        command = normalized_arguments.get("command")
+        if not isinstance(command, str) or not self._verification_command_masks_failure(command):
+            return result_model
+        note = (
+            "Verification commands must not mask failures with shell fallbacks like "
+            "`|| true`, `; true`, or `&& true`."
+        )
+        return result_model.model_copy(
+            update={
+                "ok": False,
+                "message": note,
+                "output": self._truncate(f"{result_model.output}\n\n{note}".strip(), 2000),
+            }
+        )
 
     def _build_summary(self, tool_name: str, ok: bool, result_model: BaseModel) -> str:
         verb = "Succeeded" if ok else "Failed"
@@ -301,6 +383,9 @@ class HarnessSessionOrchestrator:
             value = request.arguments.get(key)
             if isinstance(value, str):
                 paths.append(value)
+        working_directory = request.arguments.get("working_directory")
+        if isinstance(working_directory, str):
+            paths.append(working_directory)
         if isinstance(result_model, EditFileResponse):
             paths.append(result_model.file_path)
         if isinstance(result_model, GitActionResult) and result_model.diff is not None:
@@ -327,6 +412,7 @@ class HarnessSessionOrchestrator:
             BrowserAction.ASSERT_TEXT.value,
             BrowserAction.WAIT_FOR.value,
             BrowserAction.CURRENT_PAGE_STATE.value,
+            "run_command",
         }:
             return "verification evidence captured"
         return None
@@ -335,6 +421,7 @@ class HarnessSessionOrchestrator:
         self,
         session_id: str,
         request: ToolInvocationRequest,
+        normalized_arguments: dict[str, Any],
         result_model: BaseModel,
     ) -> FeatureVerificationState | None:
         catalog = self._feature_catalogs.get(session_id)
@@ -349,15 +436,116 @@ class HarnessSessionOrchestrator:
 
         if request.verification_kind is not None:
             summary = request.summary or getattr(result_model, "message", None) or getattr(result_model, "output", None) or request.tool_name
+            passed, verification_summary = self._evaluate_verification_attempt(
+                feature=feature,
+                request=request,
+                normalized_arguments=normalized_arguments,
+                result_model=result_model,
+                summary=str(summary),
+            )
             updated_state = primitives.verification_rules_engine.record_attempt(
                 state=updated_state,
                 kind=request.verification_kind,
-                passed=bool(getattr(result_model, "ok", False)),
-                summary=str(summary),
+                passed=passed,
+                summary=verification_summary,
             )
 
         feature.verification_state = updated_state
         return updated_state
+
+    def _evaluate_verification_attempt(
+        self,
+        *,
+        feature: FeatureRecord,
+        request: ToolInvocationRequest,
+        normalized_arguments: dict[str, Any],
+        result_model: BaseModel,
+        summary: str,
+    ) -> tuple[bool, str]:
+        if not bool(getattr(result_model, "ok", False)):
+            return False, summary
+
+        if request.verification_kind is VerificationKind.BROWSER:
+            if request.tool_name == "browser_assert_text":
+                return True, summary
+            return False, (
+                f"{summary} Browser verification only counts when an assertion tool proves the expected UI state."
+            )
+
+        if request.tool_name != "run_command":
+            return False, (
+                f"{summary} Unit and integration verification must execute an explicit repository command."
+            )
+
+        actual_command = normalized_arguments.get("command")
+        if not isinstance(actual_command, str) or not actual_command.strip():
+            return False, f"{summary} Verification command was missing."
+
+        expected_command = feature.verification_command
+        if expected_command:
+            if self._commands_match_verification_target(actual_command, expected_command):
+                return True, summary
+            return False, (
+                f"{summary} Command did not match the expected verification target: {expected_command}"
+            )
+
+        if self._looks_like_test_command(actual_command):
+            return True, summary
+        return False, (
+            f"{summary} Verification must run an actual test or verification command, not a diagnostic probe."
+        )
+
+    def _commands_match_verification_target(self, actual_command: str, expected_command: str) -> bool:
+        actual_segments = self._verification_command_segments(actual_command)
+        expected_segments = self._verification_command_segments(expected_command)
+        for expected_segment in expected_segments:
+            for actual_segment in actual_segments:
+                if expected_segment in actual_segment or actual_segment in expected_segment:
+                    return True
+        return False
+
+    def _canonicalize_command(self, command: str) -> str:
+        normalized = re.sub(r"\s+", " ", command.strip().lower())
+        normalized = re.sub(
+            r"(?<!\S)(?:[^\s]+/)?python(?:\d+(?:\.\d+)*)?(?!\S)",
+            "python",
+            normalized,
+        )
+        normalized = re.sub(r"\bpython\s+-m\s+pytest\b", "pytest", normalized)
+        normalized = re.sub(r"\bpython\s+-m\s+unittest\b", "unittest", normalized)
+        return normalized
+
+    def _looks_like_test_command(self, command: str) -> bool:
+        normalized = self._canonicalize_command(command)
+        patterns = (
+            "pytest",
+            "unittest",
+            "npm test",
+            "npm run test",
+            "pnpm test",
+            "pnpm run test",
+            "yarn test",
+            "vitest",
+            "jest",
+            "go test",
+            "cargo test",
+            "mvn test",
+            "gradle test",
+            "ctest",
+            "phpunit",
+            "rspec",
+            "deno test",
+        )
+        return any(pattern in normalized for pattern in patterns)
+
+    def _verification_command_segments(self, command: str) -> list[str]:
+        segments = [
+            self._canonicalize_command(segment)
+            for segment in re.split(r"\s*(?:&&|\|\||;|\|)\s*", command)
+            if segment.strip()
+        ]
+        verification_segments = [segment for segment in segments if self._looks_like_test_command(segment)]
+        return verification_segments or segments
 
     def _find_feature(self, catalog: FeatureCatalog, feature_id: str) -> FeatureRecord:
         for feature in catalog.features:
@@ -372,6 +560,27 @@ class HarnessSessionOrchestrator:
 
     def _looks_like_url(self, value: str) -> bool:
         return value.startswith("http://") or value.startswith("https://")
+
+    def _verification_command_masks_failure(self, command: str) -> bool:
+        normalized = command.lower()
+        return "|| true" in normalized or "; true" in normalized or "&& true" in normalized
+
+    def _browser_tools_requiring_session_id(self) -> set[str]:
+        return {
+            "browser_click",
+            "browser_type",
+            "browser_wait_for",
+            "browser_snapshot_dom",
+            "browser_screenshot",
+            "browser_get_url",
+            "browser_assert_text",
+            "dom_snapshot",
+            "take_screenshot",
+            "capture_console_logs",
+            "capture_network_summary",
+            "current_page_state",
+            "browser_close",
+        }
 
     def _truncate(self, value: str, limit: int) -> str:
         return value if len(value) <= limit else f"{value[: limit - 3]}..."
@@ -459,6 +668,13 @@ class HarnessSessionOrchestrator:
             ToolCategory.EDIT,
             lambda session, primitives, args: primitives.file_editor.edit_file(EditFileRequest.model_validate(args)),
             requires_modify_files=True,
+        )
+        register(
+            "run_command",
+            "Run repository command and capture output",
+            ToolCategory.COMMAND,
+            lambda session, primitives, args: primitives.command_runner.run(RunCommandRequest.model_validate(args)),
+            requires_verification=True,
         )
         register(
             "browser_open",

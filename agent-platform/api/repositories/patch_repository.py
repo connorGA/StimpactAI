@@ -16,10 +16,18 @@ ORDER BY created_at DESC
 LIMIT 1;
 """
 
+GET_PATCH_RUN_SQL = """
+SELECT *
+FROM patch_runs
+WHERE id = $1
+LIMIT 1;
+"""
+
 INSERT_PATCH_RUN_SQL = """
 INSERT INTO patch_runs (
     id,
     incident_id,
+    repo_profile_id,
     status,
     patch_summary,
     rationale,
@@ -32,7 +40,7 @@ INSERT INTO patch_runs (
     diff_line_count,
     file_count
 ) VALUES (
-    $1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10, $11, $12, $13
+    $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10, $11, $12, $13, $14
 )
 RETURNING *;
 """
@@ -56,10 +64,25 @@ class PatchRepository:
             return None
         return PatchRunRecord.from_db_row(row)
 
+    async def get_patch_run(self, patch_run_id: str) -> PatchRunRecord | None:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for patch runs.")
+
+        try:
+            async with self._pool.acquire() as connection:
+                row = await connection.fetchrow(GET_PATCH_RUN_SQL, patch_run_id)
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to fetch the patch run.") from exc
+
+        if row is None:
+            return None
+        return PatchRunRecord.from_db_row(row)
+
     async def create_patch_run(
         self,
         *,
         incident_id: str,
+        repo_profile_id: str | None,
         proposal: PatchProposal,
         model_name: str,
         based_on_commit_sha: str | None,
@@ -76,6 +99,7 @@ class PatchRepository:
                     INSERT_PATCH_RUN_SQL,
                     str(uuid4()),
                     incident_id,
+                    repo_profile_id,
                     status.value,
                     proposal.patch_summary,
                     proposal.rationale,

@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T20:24:49.630180Z",
+  "created_at": "2026-03-18T20:24:14.644834Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "bdcfcc08-a049-4216-b44f-3983d27ca2fd",
+  "last_error": "Run exceeded the max step budget of 8.",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318202409' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "ba1a67ba-9922-48f5-964c-00f172d545f4",
+  "status": "failed",
+  "total_decisions": 8,
+  "total_events": 48,
+  "total_steps": 8,
+  "total_tool_calls": 11
+}

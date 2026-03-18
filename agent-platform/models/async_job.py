@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+import json
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class AsyncJobType(StrEnum):
     SANDBOX_RUN = "sandbox_run"
+    AUTONOMOUS_REPAIR = "autonomous_repair"
 
 
 class AsyncJobStatus(StrEnum):
@@ -37,6 +39,11 @@ class AsyncJobRecord(BaseModel):
     @classmethod
     def from_db_row(cls, row: Any) -> "AsyncJobRecord":
         payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {}
         if not isinstance(payload, dict):
             payload = {}
         return cls(

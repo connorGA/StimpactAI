@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from api.repositories.async_job_repository import AsyncJobRepository
-from models.async_job import AsyncJobStatus
+from models.async_job import AsyncJobStatus, AsyncJobType
+from services.autonomous_runs import AutonomousRunService
 from services.sandbox_verification import SandboxVerificationService
 
 
@@ -11,20 +12,24 @@ class SandboxJobDispatcher:
         repository: AsyncJobRepository,
         service: SandboxVerificationService,
         *,
+        autonomous_run_service: AutonomousRunService | None = None,
         worker_id: str = "sandbox-dispatcher",
     ) -> None:
         self._repository = repository
         self._service = service
+        self._autonomous_run_service = autonomous_run_service
         self._worker_id = worker_id
 
     async def run_once(self, *, limit: int = 10) -> int:
-        jobs = await self._repository.lease_jobs(limit=limit)
+        jobs = await self._repository.lease_jobs(limit=limit, job_type=AsyncJobType.SANDBOX_RUN)
         processed = 0
 
         for job in jobs:
             processed += 1
             try:
-                await self._service.process_async_job(job)
+                sandbox_run = await self._service.process_async_job(job)
+                if self._autonomous_run_service is not None:
+                    await self._autonomous_run_service.record_sandbox_result(sandbox_run)
                 await self._repository.mark_job_status(job.id, status=AsyncJobStatus.SUCCEEDED)
                 await self._repository.create_job_attempt(
                     async_job_id=job.id,

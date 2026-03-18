@@ -1,0 +1,41 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T21:58:37.228927Z",
+  "created_at": "2026-03-18T21:58:12.533936Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "9daaaaa8-303f-45e4-9926-47ae57155e6e",
+  "last_error": "Tool execution failed: 4 validation errors for EditFileRequest\nstart_line\n  Field required [type=missing, input_value={'edits': [{'old_text': '...fixture/buggy_retry.py'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nend_line\n  Field required [type=missing, input_value={'edits': [{'old_text': '...fixture/buggy_retry.py'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nreplacement_text\n  Field required [type=missing, input_value={'edits': [{'old_text': '...fixture/buggy_retry.py'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nedits\n  Extra inputs are not permitted [type=extra_forbidden, input_value=[{'old_text': 'def read_r...  return int(value)\\n'}], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318215809' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/portfolioDeluxe-drill-20260318142455",
+  "run_id": "60ef8432-cc29-46f9-910c-61c02a18396e",
+  "status": "failed",
+  "total_decisions": 6,
+  "total_events": 39,
+  "total_steps": 5,
+  "total_tool_calls": 9
+}

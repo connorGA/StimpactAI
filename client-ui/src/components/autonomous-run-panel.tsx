@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { IncidentAutonomousRunDetail } from "@/lib/types";
+import type {
+  AutonomousApprovalStatus,
+  AutonomousExecutionMode,
+  IncidentAutonomousRunDetail,
+} from "@/lib/types";
 import { formatTimestamp } from "@/lib/dashboard";
 
 type AutonomousRunPanelProps = {
@@ -18,27 +22,125 @@ export function AutonomousRunPanel({
   const [connectionState, setConnectionState] = useState<"live" | "reconnecting">(
     "live",
   );
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const activeRunId = detail?.run.id ?? null;
   const isActiveRun =
     detail?.run.status === "running" || detail?.run.status === "queued";
   const streamState = !isActiveRun ? "idle" : connectionState;
 
+  const refreshLatestDetail = useCallback(async () => {
+    const response = await fetch(
+      `/api/incidents/${incidentId}/autonomous-runs/latest`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) {
+      throw new Error("Failed to load the latest autonomous run.");
+    }
+    const latest = (await response.json()) as IncidentAutonomousRunDetail;
+    setDetail(latest);
+    return latest;
+  }, [incidentId]);
+
+  async function runJsonAction<T>(
+    path: string,
+    options?: RequestInit,
+  ): Promise<T> {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers ?? {}),
+      },
+    });
+    if (!response.ok) {
+      let message = "Autonomous action failed.";
+      try {
+        const payload = (await response.json()) as { error?: { message?: string } };
+        if (payload.error?.message) {
+          message = payload.error.message;
+        }
+      } catch {
+        // Keep the default fallback message.
+      }
+      throw new Error(message);
+    }
+    return (await response.json()) as T;
+  }
+
+  async function startRun(executionMode: AutonomousExecutionMode) {
+    setActionError(null);
+    setActiveAction(`start:${executionMode}`);
+    try {
+      await runJsonAction(
+        `/api/incidents/${incidentId}/autonomous-runs`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            execution_mode: executionMode,
+            allow_writeback: executionMode === "repair_and_propose",
+            require_human_approval: executionMode === "repair_and_propose",
+          }),
+        },
+      );
+      await refreshLatestDetail();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to start autonomous run.");
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
+  async function setApprovalStatus(approvalStatus: AutonomousApprovalStatus) {
+    if (!detail) {
+      return;
+    }
+    setActionError(null);
+    setActiveAction(`approval:${approvalStatus}`);
+    try {
+      const next = await runJsonAction<IncidentAutonomousRunDetail>(
+        `/api/incidents/${incidentId}/autonomous-runs/${detail.run.id}/approval`,
+        {
+          method: "POST",
+          body: JSON.stringify({ approval_status: approvalStatus }),
+        },
+      );
+      setDetail(next);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to update approval state.");
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
+  async function promoteRun() {
+    if (!detail) {
+      return;
+    }
+    setActionError(null);
+    setActiveAction("promote");
+    try {
+      const next = await runJsonAction<IncidentAutonomousRunDetail>(
+        `/api/incidents/${incidentId}/autonomous-runs/${detail.run.id}/promote`,
+        { method: "POST" },
+      );
+      setDetail(next);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to promote autonomous run.");
+    } finally {
+      setActiveAction(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     async function refreshLatest() {
       try {
-        const response = await fetch(
-          `/api/incidents/${incidentId}/autonomous-runs/latest`,
-          { cache: "no-store" },
-        );
-        if (!response.ok) {
+        await refreshLatestDetail();
+        if (cancelled) {
           return;
-        }
-        const latest = (await response.json()) as IncidentAutonomousRunDetail;
-        if (!cancelled) {
-          setDetail(latest);
         }
       } catch {
         // Keep the previous detail when the poll fails.
@@ -60,7 +162,7 @@ export function AutonomousRunPanel({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [incidentId, isActiveRun]);
+  }, [incidentId, isActiveRun, refreshLatestDetail]);
 
   useEffect(() => {
     if (!activeRunId || !isActiveRun) {
@@ -111,6 +213,11 @@ export function AutonomousRunPanel({
     [detail],
   );
 
+  const canRetry =
+    detail?.run.status === "failed" ||
+    detail?.run.status === "cancelled" ||
+    detail?.run.status === "succeeded";
+
   return (
     <section className="ops-sheet rounded-[22px] p-5">
       <div className="flex items-start justify-between gap-3">
@@ -142,6 +249,15 @@ export function AutonomousRunPanel({
         <>
           <div className="mt-4 grid gap-4">
             <AutonomousMetaRow label="Phase" value={detail.run.phase} />
+            <AutonomousMetaRow label="Mode" value={detail.run.execution_mode} />
+            <AutonomousMetaRow
+              label="Approval"
+              value={detail.run.approval_status}
+            />
+            <AutonomousMetaRow
+              label="Promotion"
+              value={detail.run.promotion_status}
+            />
             <AutonomousMetaRow
               label="Progress"
               value={`${detail.run.loop_state.step_index}/${detail.run.loop_state.max_steps} steps`}
@@ -158,6 +274,119 @@ export function AutonomousRunPanel({
               label="Checkpoint"
               value={detail.run.loop_state.checkpoint_ref ?? "No checkpoint yet"}
             />
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+              Operator controls
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <ActionButton
+                label="Investigate only"
+                disabled={activeAction !== null}
+                active={activeAction === "start:investigate_only"}
+                onClick={() => startRun("investigate_only")}
+              />
+              <ActionButton
+                label="Repair only"
+                disabled={activeAction !== null}
+                active={activeAction === "start:repair_only"}
+                onClick={() => startRun("repair_only")}
+              />
+              <ActionButton
+                label="Repair + PR/MR"
+                disabled={activeAction !== null}
+                active={activeAction === "start:repair_and_propose"}
+                onClick={() => startRun("repair_and_propose")}
+              />
+              {detail.run.approval_status === "pending" ? (
+                <>
+                  <ActionButton
+                    label="Approve"
+                    disabled={activeAction !== null}
+                    active={activeAction === "approval:approved"}
+                    onClick={() => setApprovalStatus("approved")}
+                  />
+                  <ActionButton
+                    label="Reject"
+                    disabled={activeAction !== null}
+                    active={activeAction === "approval:rejected"}
+                    onClick={() => setApprovalStatus("rejected")}
+                  />
+                </>
+              ) : null}
+              {detail.run.promotion_status === "ready" ? (
+                <ActionButton
+                  label="Promote"
+                  disabled={activeAction !== null}
+                  active={activeAction === "promote"}
+                  onClick={promoteRun}
+                />
+              ) : null}
+              {canRetry ? (
+                <ActionButton
+                  label="Retry"
+                  disabled={activeAction !== null}
+                  active={false}
+                  onClick={() => startRun(detail.run.execution_mode)}
+                />
+              ) : null}
+            </div>
+            {actionError ? (
+              <p className="mt-3 text-sm text-[#b4453d]">{actionError}</p>
+            ) : null}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+              Policy and readiness
+            </p>
+            <div className="mt-3 grid gap-3 text-sm text-[#5f6470]">
+              <AutonomousMetaRow
+                label="Auto-run allowed"
+                value={detail.run.policy.auto_run_allowed ? "Yes" : "No"}
+              />
+              <AutonomousMetaRow
+                label="Write-back allowed"
+                value={detail.run.policy.allow_writeback ? "Yes" : "No"}
+              />
+              <AutonomousMetaRow
+                label="Browser verification required"
+                value={detail.run.policy.require_browser_verification ? "Yes" : "No"}
+              />
+              <AutonomousMetaRow
+                label="Allowed backends"
+                value={detail.run.policy.allowed_execution_backends.join(", ") || "None"}
+              />
+              <AutonomousMetaRow
+                label="Allowed tools"
+                value={detail.run.policy.allowed_tool_categories.join(", ") || "None"}
+              />
+              <AutonomousMetaRow
+                label="Repo profile"
+                value={detail.run.repo_profile_id ?? "Not resolved"}
+              />
+              <AutonomousMetaRow
+                label="Patch run"
+                value={detail.run.patch_run_id ?? "Pending"}
+              />
+              <AutonomousMetaRow
+                label="Sandbox run"
+                value={detail.run.sandbox_run_id ?? "Pending"}
+              />
+            </div>
+            {detail.run.policy.reasons.length > 0 ? (
+              <div className="mt-3 rounded-2xl bg-[rgba(244,248,253,0.85)] p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                  Policy reasons
+                </p>
+                <div className="mt-2 space-y-2 text-sm text-[#5f6470]">
+                  {detail.run.policy.reasons.map((reason) => (
+                    <p key={reason}>{reason}</p>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {detail.outcome ? (
@@ -177,6 +406,14 @@ export function AutonomousRunPanel({
                 <AutonomousMetaRow
                   label="Completed"
                   value={formatTimestamp(detail.outcome.completed_at)}
+                />
+                <AutonomousMetaRow
+                  label="Approval"
+                  value={detail.outcome.approval_status}
+                />
+                <AutonomousMetaRow
+                  label="Promotion"
+                  value={detail.outcome.promotion_status}
                 />
               </div>
             </div>
@@ -232,6 +469,10 @@ export function AutonomousRunPanel({
                 label="Outcome"
                 value={detail.artifact_paths.outcome_path ?? "Pending"}
               />
+              <AutonomousMetaRow
+                label="Promotion URL"
+                value={detail.run.promotion_url ?? "Pending"}
+              />
             </div>
           </div>
 
@@ -247,11 +488,35 @@ export function AutonomousRunPanel({
           ) : null}
         </>
       ) : (
-        <p className="mt-4 text-sm leading-6 text-[#746d66]">
-          No autonomous repair run has been persisted for this incident yet. Once
-          a run starts, this panel will show the current phase, recent tool use,
-          live event timeline, and durable transcript artifacts.
-        </p>
+        <div className="mt-4 space-y-4">
+          <p className="text-sm leading-6 text-[#746d66]">
+            No autonomous repair run has been persisted for this incident yet.
+            Launch one of the regulated run modes below to begin.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <ActionButton
+              label="Investigate only"
+              disabled={activeAction !== null}
+              active={activeAction === "start:investigate_only"}
+              onClick={() => startRun("investigate_only")}
+            />
+            <ActionButton
+              label="Repair only"
+              disabled={activeAction !== null}
+              active={activeAction === "start:repair_only"}
+              onClick={() => startRun("repair_only")}
+            />
+            <ActionButton
+              label="Repair + PR/MR"
+              disabled={activeAction !== null}
+              active={activeAction === "start:repair_and_propose"}
+              onClick={() => startRun("repair_and_propose")}
+            />
+          </div>
+          {actionError ? (
+            <p className="text-sm text-[#b4453d]">{actionError}</p>
+          ) : null}
+        </div>
       )}
     </section>
   );
@@ -271,5 +536,32 @@ function AutonomousMetaRow({
         {value}
       </span>
     </div>
+  );
+}
+
+function ActionButton({
+  label,
+  disabled,
+  active,
+  onClick,
+}: {
+  label: string;
+  disabled: boolean;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+        active
+          ? "bg-[#17385d] text-white"
+          : "bg-[#f4f8fd] text-[#35547d] hover:bg-[#e6eef8]"
+      } disabled:cursor-not-allowed disabled:opacity-60`}
+    >
+      {active ? "Working..." : label}
+    </button>
   );
 }

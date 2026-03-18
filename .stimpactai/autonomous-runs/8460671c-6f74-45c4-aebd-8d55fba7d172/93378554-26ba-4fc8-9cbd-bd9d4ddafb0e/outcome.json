@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": null,
+  "completed_at": "2026-03-18T18:52:05.393711Z",
+  "created_at": "2026-03-18T18:52:04.119575Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "8460671c-6f74-45c4-aebd-8d55fba7d172",
+  "last_error": "Automatic baseline checkpoint failed: 'Session d1f6f596-eeef-42c0-95db-ca9382594866 was not found.'",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318184923' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "93378554-26ba-4fc8-9cbd-bd9d4ddafb0e",
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 9,
+  "total_steps": 0,
+  "total_tool_calls": 1
+}

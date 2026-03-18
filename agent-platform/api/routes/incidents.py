@@ -13,11 +13,14 @@ from api.core.errors import APIError
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
+from api.repositories.autonomous_repository import AutonomousRunRepository
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.incident_repository import IncidentRepository
 from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
+from api.routes.control_plane import get_provider_integration_service
 from api.schemas.autonomous import (
+    AutonomousRunApprovalRequest,
     AutonomousRunCreateRequest,
     AutonomousRunDetailResponse,
     AutonomousRunQueuedResponse,
@@ -44,6 +47,7 @@ from services.autonomous_runs import AutonomousRunService
 from services.code_context import CodeContextService
 from services.failure_classifier import FailureClassifier
 from services.patch_generation import PatchGenerationService
+from services.provider_integration_service import ProviderIntegrationService
 from services.root_cause_analysis import (
     RootCauseAnalysisService,
     RootCauseAnalyzer,
@@ -90,16 +94,10 @@ def get_artifact_repository(
     return ArtifactRepository(manager.pool)
 
 
-def get_autonomous_run_service(
-    request: Request,
+def get_autonomous_repository(
     manager: PostgresConnectionManager = Depends(get_postgres_manager),
-) -> AutonomousRunService:
-    existing = getattr(request.app.state, "autonomous_run_service", None)
-    if isinstance(existing, AutonomousRunService):
-        return existing
-    service = AutonomousRunService(IncidentRepository(manager.pool))
-    request.app.state.autonomous_run_service = service
-    return service
+) -> AutonomousRunRepository:
+    return AutonomousRunRepository(manager.pool)
 
 
 def get_failure_classifier() -> FailureClassifier:
@@ -163,6 +161,7 @@ def get_sandbox_verification_service(
     control_plane_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     async_job_repository: AsyncJobRepository = Depends(get_async_job_repository),
     artifact_repository: ArtifactRepository = Depends(get_artifact_repository),
+    patch_repository: PatchRepository = Depends(get_patch_repository),
     patch_generation: PatchGenerationService = Depends(get_patch_generation_service),
 ) -> SandboxVerificationService:
     return SandboxVerificationService(
@@ -171,8 +170,35 @@ def get_sandbox_verification_service(
         control_plane_repository=control_plane_repository,
         async_job_repository=async_job_repository,
         artifact_repository=artifact_repository,
+        patch_repository=patch_repository,
         patch_generation=patch_generation,
     )
+
+
+def get_autonomous_run_service(
+    request: Request,
+    incident_repository: IncidentRepository = Depends(get_incident_repository),
+    async_job_repository: AsyncJobRepository = Depends(get_async_job_repository),
+    control_plane_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    autonomous_repository: AutonomousRunRepository = Depends(get_autonomous_repository),
+    patch_repository: PatchRepository = Depends(get_patch_repository),
+    sandbox_verification_service: SandboxVerificationService = Depends(get_sandbox_verification_service),
+    provider_integration_service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> AutonomousRunService:
+    existing = getattr(request.app.state, "autonomous_run_service", None)
+    if isinstance(existing, AutonomousRunService):
+        return existing
+    service = AutonomousRunService(
+        incident_repository,
+        async_job_repository=async_job_repository,
+        autonomous_repository=autonomous_repository,
+        control_plane_repository=control_plane_repository,
+        patch_repository=patch_repository,
+        sandbox_verification_service=sandbox_verification_service,
+        provider_integration_service=provider_integration_service,
+    )
+    request.app.state.autonomous_run_service = service
+    return service
 
 
 @router.get("", response_model=IncidentListResponse, status_code=status.HTTP_200_OK)
@@ -370,7 +396,7 @@ async def create_autonomous_run(
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunQueuedResponse:
     detail = await service.start_run(incident_id, body)
-    return AutonomousRunQueuedResponse(run=detail.run)
+    return AutonomousRunQueuedResponse(run=detail.run, async_job_id=detail.run.async_job_id)
 
 
 @router.get(
@@ -410,6 +436,33 @@ async def get_autonomous_run_detail(
     return await service.get_run_detail(incident_id, run_id)
 
 
+@router.post(
+    "/{incident_id}/autonomous-runs/{run_id}/approval",
+    response_model=AutonomousRunDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def approve_autonomous_run(
+    incident_id: str,
+    run_id: str,
+    body: AutonomousRunApprovalRequest,
+    service: AutonomousRunService = Depends(get_autonomous_run_service),
+) -> AutonomousRunDetailResponse:
+    return await service.approve_run(incident_id, run_id, body)
+
+
+@router.post(
+    "/{incident_id}/autonomous-runs/{run_id}/promote",
+    response_model=AutonomousRunDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def promote_autonomous_run(
+    incident_id: str,
+    run_id: str,
+    service: AutonomousRunService = Depends(get_autonomous_run_service),
+) -> AutonomousRunDetailResponse:
+    return await service.promote_run(incident_id, run_id)
+
+
 @router.get(
     "/{incident_id}/autonomous-runs/{run_id}/events",
     status_code=status.HTTP_200_OK,
@@ -426,32 +479,24 @@ async def stream_autonomous_run_events(
         yield _format_sse(initial_detail.model_dump(mode="json"))
         if service.is_terminal(initial_detail.run):
             return
-
-        queue: asyncio.Queue[AutonomousRunDetailResponse] = asyncio.Queue()
-        loop = asyncio.get_running_loop()
-
-        def subscriber(_) -> None:
+        last_updated_at = initial_detail.run.updated_at
+        last_event_count = len(initial_detail.events)
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(1)
             try:
-                detail = service.get_run_detail_sync(incident_id, run_id)
+                detail = await service.get_run_detail(incident_id, run_id)
             except APIError:
-                return
-            loop.call_soon_threadsafe(queue.put_nowait, detail)
-
-        service.subscribe(run_id, subscriber)
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    detail = await asyncio.wait_for(queue.get(), timeout=15)
-                except TimeoutError:
-                    yield ": keep-alive\n\n"
-                    continue
+                break
+            if detail.run.updated_at != last_updated_at or len(detail.events) != last_event_count:
                 yield _format_sse(detail.model_dump(mode="json"))
-                if service.is_terminal(detail.run):
-                    break
-        finally:
-            service.unsubscribe(run_id, subscriber)
+                last_updated_at = detail.run.updated_at
+                last_event_count = len(detail.events)
+            else:
+                yield ": keep-alive\n\n"
+            if service.is_terminal(detail.run):
+                break
 
     return StreamingResponse(
         event_generator(),

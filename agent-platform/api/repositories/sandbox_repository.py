@@ -35,6 +35,16 @@ ORDER BY created_at DESC
 LIMIT $2;
 """
 
+LIST_ACTIVE_KUBERNETES_SANDBOX_RUNS_SQL = """
+SELECT *
+FROM sandbox_runs
+WHERE status = 'running'
+  AND executor_backend = 'kubernetes'
+  AND external_job_id IS NOT NULL
+ORDER BY created_at ASC
+LIMIT $1;
+"""
+
 INSERT_SANDBOX_RUN_SQL = """
 INSERT INTO sandbox_runs (
     id,
@@ -140,6 +150,10 @@ class SandboxRepository:
 
     async def list_sandbox_runs(self, incident_id: str, *, limit: int = 20) -> list[SandboxRunRecord]:
         rows = await self._fetch(LIST_SANDBOX_RUNS_SQL, incident_id, limit)
+        return [SandboxRunRecord.from_db_row(row) for row in rows]
+
+    async def list_active_kubernetes_runs(self, *, limit: int = 50) -> list[SandboxRunRecord]:
+        rows = await self._fetch(LIST_ACTIVE_KUBERNETES_SANDBOX_RUNS_SQL, limit)
         return [SandboxRunRecord.from_db_row(row) for row in rows]
 
     async def create_sandbox_run(

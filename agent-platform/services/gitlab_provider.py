@@ -16,9 +16,11 @@ from models.control_plane import ProviderIntegrationRecord, SecretRefRecord
 from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter
 from services.provider_clients import (
     GitLabAuthorization,
+    ProviderChangeRequest,
     ProviderInstallation,
     ProviderRepositoryMetadata,
     ProviderSandboxAccess,
+    apply_patch_and_push_branch,
 )
 
 from models.control_plane import ProviderKind, ProviderRepositoryRecord
@@ -229,6 +231,62 @@ class GitLabProviderClient:
             secret_format="json",
         )
 
+    async def propose_patch(
+        self,
+        integration: ProviderIntegrationRecord,
+        repository: ProviderRepositoryRecord,
+        *,
+        branch_name: str,
+        patch_diff: str,
+        title: str,
+        description: str,
+        commit_message: str,
+        credentials_secret_ref: SecretRefRecord | None = None,
+    ) -> ProviderChangeRequest:
+        secret_ref = self._require_credentials_secret_ref(
+            credentials_secret_ref,
+            integration=integration,
+        )
+        tokens = await self._ensure_valid_tokens(secret_ref, integration=integration)
+        clone_url = repository.clone_url
+        if clone_url.startswith("https://"):
+            clone_url = clone_url.replace(
+                "https://",
+                f"https://oauth2:{quote_plus(str(tokens['access_token']))}@",
+                1,
+            )
+        commit_sha = apply_patch_and_push_branch(
+            clone_url=clone_url,
+            default_branch=repository.default_branch,
+            branch_name=branch_name,
+            patch_diff=patch_diff,
+            commit_message=commit_message,
+        )
+        payload = await self._request_json(
+            "POST",
+            f"{self._get_base_url_for_integration(integration)}/api/v4/projects/{quote_plus(repository.external_repository_id)}/merge_requests",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            data={
+                "source_branch": branch_name,
+                "target_branch": repository.default_branch,
+                "title": title,
+                "description": description,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise APIError(
+                "GitLab merge request response was invalid.",
+                status_code=502,
+                code="gitlab_api_request_failed",
+            )
+        return ProviderChangeRequest(
+            branch_name=branch_name,
+            commit_sha=commit_sha,
+            change_request_url=str(payload.get("web_url") or self._build_fallback_mr_url(repository, branch_name)),
+            reference_id=str(payload.get("iid")) if payload.get("iid") is not None else None,
+            mergeable=payload.get("merge_status") == "can_be_merged" if payload.get("merge_status") is not None else None,
+        )
+
     def _require_credentials_secret_ref(
         self,
         secret_ref: SecretRefRecord | None,
@@ -360,3 +418,12 @@ class GitLabProviderClient:
                 code="gitlab_api_request_failed",
             )
         return response.json()
+
+    def _build_fallback_mr_url(self, repository: ProviderRepositoryRecord, branch_name: str) -> str:
+        encoded_branch = quote_plus(branch_name)
+        encoded_target = quote_plus(repository.default_branch)
+        return (
+            f"{self._base_url}/{repository.owner}/{repository.name}/-/merge_requests/new"
+            f"?merge_request%5Bsource_branch%5D={encoded_branch}"
+            f"&merge_request%5Btarget_branch%5D={encoded_target}"
+        )

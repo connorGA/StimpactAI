@@ -93,6 +93,7 @@ class PatchGenerationService:
 
         return await self._patch_repository.create_patch_run(
             incident_id=incident.id,
+            repo_profile_id=None,
             proposal=proposal,
             model_name=self._model,
             based_on_commit_sha=evidence.latest_commit_sha,

@@ -1,0 +1,236 @@
+{
+  "events": [
+    {
+      "created_at": "2026-03-18T18:49:24.228700Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": null,
+        "feature_id": null,
+        "rationale": "The runner must load the repo profile, generate initializer artifacts, and hand off a coding-ready context.",
+        "selected_tool": null,
+        "summary": "Bootstrap initializer and coding sessions before autonomous tool selection begins.",
+        "verification_kind": null
+      },
+      "event_type": "run_started",
+      "id": "d324acd4-83b2-4a3b-9351-bb9919d773a8",
+      "payload": {
+        "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318184826' for service portfolioDeluxe.",
+        "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target"
+      },
+      "phase": "initializer",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Autonomous repair run started."
+    },
+    {
+      "created_at": "2026-03-18T18:49:24.230634Z",
+      "decision": null,
+      "event_type": "session_initialized",
+      "id": "57bcde57-8ebf-483f-a8b7-c6e5e778948c",
+      "payload": {
+        "role": "initializer",
+        "session_id": "fb9c99f8-cb55-4d4b-893e-8fd25e9c2cd0"
+      },
+      "phase": "initializer",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Initializer session created."
+    },
+    {
+      "created_at": "2026-03-18T18:49:24.231618Z",
+      "decision": null,
+      "event_type": "initializer_output_generated",
+      "id": "1f4bcf2c-aad2-4eb2-9911-ea0d5b56e182",
+      "payload": {
+        "feature_count": 1,
+        "recommended_commands": [
+          "npm run build",
+          "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+          "npm run dev"
+        ]
+      },
+      "phase": "initializer",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Initializer output generated."
+    },
+    {
+      "created_at": "2026-03-18T18:49:24.233015Z",
+      "decision": null,
+      "event_type": "initializer_output_persisted",
+      "id": "573e7a77-f0ad-4284-ad2d-23d7111ed241",
+      "payload": {
+        "feature_catalog_path": ".stimpactai/features.json",
+        "feature_ids": [
+          "portfoliodeluxe-retry-after-header-handling-raised-keyerror-retry-after-seconds-20260318184826"
+        ],
+        "init_script_path": "init.sh"
+      },
+      "phase": "initializer",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Initializer artifacts persisted to disk."
+    },
+    {
+      "created_at": "2026-03-18T18:49:24.234896Z",
+      "decision": null,
+      "event_type": "phase_changed",
+      "id": "6ddc7f70-3920-42b1-887c-386a1e5ba57e",
+      "payload": {
+        "phase": "coding"
+      },
+      "phase": "coding",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Run moved into coding phase."
+    },
+    {
+      "created_at": "2026-03-18T18:49:24.236794Z",
+      "decision": null,
+      "event_type": "coding_session_ready",
+      "id": "af7c5669-7e8b-4470-8071-7aebf394871b",
+      "payload": {
+        "available_tools": [
+          "browser_assert_text",
+          "browser_click",
+          "browser_close",
+          "browser_get_url",
+          "browser_open",
+          "browser_screenshot",
+          "browser_snapshot_dom",
+          "browser_type",
+          "browser_wait_for",
+          "capture_console_logs",
+          "capture_network_summary",
+          "current_page_state",
+          "dom_snapshot",
+          "take_screenshot",
+          "edit_file",
+          "checkpoint",
+          "current_branch_info",
+          "diff_since_checkpoint",
+          "discard_failed_work",
+          "reset_failed_attempt",
+          "revert_to_checkpoint",
+          "find_file",
+          "search_dir",
+          "search_file",
+          "open_file",
+          "view_at_line",
+          "view_centered",
+          "view_next",
+          "view_prev"
+        ],
+        "feature_ids": [
+          "portfoliodeluxe-retry-after-header-handling-raised-keyerror-retry-after-seconds-20260318184826"
+        ],
+        "session_id": "88db11d6-a8d8-46a8-937b-43a1cdadd362"
+      },
+      "phase": "coding",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Coding session is ready for autonomous decisions."
+    },
+    {
+      "created_at": "2026-03-18T18:49:25.556890Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {
+          "label": "autonomous-baseline"
+        },
+        "arguments_summary": "label=autonomous-baseline",
+        "feature_id": null,
+        "rationale": "The runner should always keep a last-known-good rollback point even if the model forgets to create one.",
+        "selected_tool": "checkpoint",
+        "summary": "Create an automatic baseline checkpoint before autonomous edits begin.",
+        "verification_kind": null
+      },
+      "event_type": "tool_call_started",
+      "id": "75e50460-4adf-4556-8e0c-29e15baa2880",
+      "payload": {
+        "arguments": {
+          "label": "autonomous-baseline"
+        },
+        "tool_name": "checkpoint"
+      },
+      "phase": "recovery",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Starting tool call checkpoint."
+    },
+    {
+      "created_at": "2026-03-18T18:49:25.557972Z",
+      "decision": null,
+      "event_type": "tool_call_completed",
+      "id": "b58460f0-1e8c-4604-9f70-bb111b055ae6",
+      "payload": {
+        "error": "'Session 88db11d6-a8d8-46a8-937b-43a1cdadd362 was not found.'",
+        "ok": false,
+        "tool_name": "checkpoint"
+      },
+      "phase": "recovery",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Tool call checkpoint failed before completion."
+    },
+    {
+      "created_at": "2026-03-18T18:49:25.560171Z",
+      "decision": null,
+      "event_type": "run_failed",
+      "id": "7498d7c9-d2af-41d5-b7bc-372b3eb820c4",
+      "payload": {
+        "error": "Automatic baseline checkpoint failed: 'Session 88db11d6-a8d8-46a8-937b-43a1cdadd362 was not found.'",
+        "status": "failed"
+      },
+      "phase": "failed",
+      "run_id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+      "summary": "Automatic baseline checkpoint failed: 'Session 88db11d6-a8d8-46a8-937b-43a1cdadd362 was not found.'"
+    }
+  ],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "12b8e010-f83f-4889-91f9-3b3d81caea06",
+    "coding_session_id": "88db11d6-a8d8-46a8-937b-43a1cdadd362",
+    "created_at": "2026-03-18T18:49:24.227145Z",
+    "execution_mode": "repair_and_propose",
+    "id": "41f3406c-f986-4669-8625-c0ed3bba3be6",
+    "incident_id": "ff4edde7-37af-4d16-9a9f-1fa8c6c7a790",
+    "initializer_session_id": "fb9c99f8-cb55-4d4b-893e-8fd25e9c2cd0",
+    "last_error": "Automatic baseline checkpoint failed: 'Session 88db11d6-a8d8-46a8-937b-43a1cdadd362 was not found.'",
+    "loop_state": {
+      "checkpoint_ref": null,
+      "consecutive_failures": 0,
+      "last_tool_name": null,
+      "last_tool_ok": null,
+      "last_tool_result": {},
+      "max_steps": 8,
+      "recent_tool_names": [],
+      "recovery_attempts": 0,
+      "step_index": 0
+    },
+    "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318184826' for service portfolioDeluxe.",
+    "patch_run_id": null,
+    "phase": "failed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": true,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "not_requested",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+    "sandbox_run_id": null,
+    "status": "failed",
+    "updated_at": "2026-03-18T18:49:25.558862Z"
+  }
+}

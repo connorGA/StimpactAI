@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T19:18:22.789967Z",
+  "created_at": "2026-03-18T19:18:11.770370Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "5e24d202-d401-4ae9-8b16-22499f4c0d15",
+  "last_error": "Tool execution failed: 1 validation error for SearchDirRequest\ndirectory\n  Extra inputs are not permitted [type=extra_forbidden, input_value='.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318191631' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "29cdb270-5ce1-45f5-99e2-42c4b749d408",
+  "status": "failed",
+  "total_decisions": 3,
+  "total_events": 27,
+  "total_steps": 0,
+  "total_tool_calls": 6
+}

@@ -203,3 +203,22 @@ class RepoProfileSecretRefRecord(BaseModel):
             mount_as=str(row["mount_as"]),
             created_at=row["created_at"],
         )
+
+
+class RepoProfileSecretBindingRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repo_profile_id: str
+    mount_as: str
+    secret_ref: SecretRefRecord
+    created_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "RepoProfileSecretBindingRecord":
+        binding_created_at = row["binding_created_at"] if "binding_created_at" in row else row["created_at"]
+        return cls(
+            repo_profile_id=str(row["repo_profile_id"]),
+            mount_as=str(row["mount_as"]),
+            secret_ref=SecretRefRecord.from_db_row(row),
+            created_at=binding_created_at,
+        )

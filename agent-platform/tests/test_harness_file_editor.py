@@ -88,6 +88,72 @@ def test_guarded_editor_rejects_unsupported_file_type(tmp_path: Path) -> None:
     assert response.error.code == "unsupported_file_type"
 
 
+def test_edit_request_accepts_legacy_string_replacement_arguments(tmp_path: Path) -> None:
+    target = tmp_path / "example.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    editor = GuardedFileEditor()
+
+    response = editor.edit_file(
+        EditFileRequest.model_validate(
+            {
+                "file_path": str(target),
+                "old_string": "VALUE = 'old'\n",
+                "new_string": "VALUE = 'new'\n",
+            }
+        )
+    )
+
+    assert response.ok is True
+    assert response.start_line == 1
+    assert response.end_line == 1
+    assert target.read_text(encoding="utf-8") == "VALUE = 'new'\n"
+
+
+def test_edit_request_accepts_whole_file_replacement_arguments(tmp_path: Path) -> None:
+    target = tmp_path / "example.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    editor = GuardedFileEditor()
+
+    response = editor.edit_file(
+        EditFileRequest.model_validate(
+            {
+                "file_path": str(target),
+                "new_content": "VALUE = 'replaced'\n",
+            }
+        )
+    )
+
+    assert response.ok is True
+    assert response.start_line == 1
+    assert response.end_line == 1
+    assert target.read_text(encoding="utf-8") == "VALUE = 'replaced'\n"
+
+
+def test_edit_request_accepts_single_edit_batch_arguments(tmp_path: Path) -> None:
+    target = tmp_path / "example.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    editor = GuardedFileEditor()
+
+    response = editor.edit_file(
+        EditFileRequest.model_validate(
+            {
+                "file_path": str(target),
+                "edits": [
+                    {
+                        "old_text": "VALUE = 'old'\n",
+                        "new_text": "VALUE = 'batched'\n",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert response.ok is True
+    assert response.start_line == 1
+    assert response.end_line == 1
+    assert target.read_text(encoding="utf-8") == "VALUE = 'batched'\n"
+
+
 def test_guarded_editor_validates_javascript_edits(tmp_path: Path) -> None:
     target = tmp_path / "script.js"
     target.write_text("const value = 1;\n", encoding="utf-8")

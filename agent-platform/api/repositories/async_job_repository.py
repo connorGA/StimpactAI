@@ -23,6 +23,7 @@ WITH candidates AS (
     FROM async_jobs
     WHERE status = 'queued'
       AND available_at <= NOW()
+      AND ($3::text IS NULL OR job_type = $3)
     ORDER BY created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT $1
@@ -91,8 +92,14 @@ class AsyncJobRepository:
         *,
         limit: int = 10,
         lease_seconds: int = 300,
+        job_type: AsyncJobType | None = None,
     ) -> list[AsyncJobRecord]:
-        rows = await self._fetch(LEASE_ASYNC_JOBS_SQL, limit, lease_seconds)
+        rows = await self._fetch(
+            LEASE_ASYNC_JOBS_SQL,
+            limit,
+            lease_seconds,
+            job_type.value if job_type is not None else None,
+        )
         return [AsyncJobRecord.from_db_row(row) for row in rows]
 
     async def mark_job_status(

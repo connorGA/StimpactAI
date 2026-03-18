@@ -65,7 +65,18 @@ def search_file(request: SearchFileRequest) -> SearchFileResponse:
 
     matches: list[TextMatch] = []
     needle = request.query if request.case_sensitive else request.query.lower()
-    for line_number, line in enumerate(target_file.read_text(encoding="utf-8").splitlines(), start=1):
+    contents = _read_text_if_decodable(target_file)
+    if contents is None:
+        return SearchFileResponse(
+            ok=False,
+            scope_path=str(target_file),
+            query=request.query,
+            error=SearchError(
+                code="unreadable_file",
+                message=f"File could not be decoded as UTF-8 text: {target_file}",
+            ),
+        )
+    for line_number, line in enumerate(contents.splitlines(), start=1):
         haystack = line if request.case_sensitive else line.lower()
         if needle in haystack:
             matches.append(
@@ -100,7 +111,10 @@ def search_dir(request: SearchDirRequest) -> SearchDirResponse:
     needle = request.query if request.case_sensitive else request.query.lower()
     for candidate in _iter_files(root, include_hidden=request.include_hidden):
         relative_path = candidate.relative_to(root).as_posix()
-        for line_number, line in enumerate(candidate.read_text(encoding="utf-8").splitlines(), start=1):
+        contents = _read_text_if_decodable(candidate)
+        if contents is None:
+            continue
+        for line_number, line in enumerate(contents.splitlines(), start=1):
             haystack = line if request.case_sensitive else line.lower()
             if needle in haystack:
                 matches.append(
@@ -135,6 +149,13 @@ def _validate_file(path: Path) -> SearchError | None:
     if not path.is_file():
         return SearchError(code="invalid_path", message=f"Path is not a file: {path}")
     return None
+
+
+def _read_text_if_decodable(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _iter_files(root: Path, *, include_hidden: bool):

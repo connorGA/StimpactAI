@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from models.async_job import AsyncJobRecord, AsyncJobStatus, AsyncJobType
+from models.sandbox import SandboxRunStatus
+from workers.autonomous_job_dispatcher import AutonomousJobDispatcher
+from workers.kubernetes_monitor_dispatcher import KubernetesMonitorDispatcher
 from workers.sandbox_job_dispatcher import SandboxJobDispatcher
 
 
@@ -25,9 +28,17 @@ class StubAsyncJobRepository:
         self.marked_statuses: list[tuple[str, AsyncJobStatus, str | None]] = []
         self.attempts: list[tuple[str, AsyncJobStatus]] = []
 
-    async def lease_jobs(self, *, limit: int = 10, lease_seconds: int = 300) -> list[AsyncJobRecord]:
+    async def lease_jobs(
+        self,
+        *,
+        limit: int = 10,
+        lease_seconds: int = 300,
+        job_type: AsyncJobType | None = None,
+    ) -> list[AsyncJobRecord]:
         assert limit == 10
         _ = lease_seconds
+        if job_type is not None:
+            assert job_type is self.job.job_type
         return [self.job]
 
     async def mark_job_status(
@@ -63,6 +74,29 @@ class StubSandboxVerificationService:
         return None
 
 
+class StubAutonomousRunService:
+    def __init__(self) -> None:
+        self.processed_job_ids: list[str] = []
+        self.recorded_sandbox_ids: list[str] = []
+
+    async def process_async_job(self, job: AsyncJobRecord):
+        self.processed_job_ids.append(job.id)
+        return None
+
+    async def record_sandbox_result(self, sandbox_run) -> None:
+        self.recorded_sandbox_ids.append(sandbox_run.id)
+
+
+class StubKubernetesPollingService:
+    def __init__(self, runs) -> None:
+        self.runs = runs
+        self.polled_limits: list[int] = []
+
+    async def poll_kubernetes_runs(self, *, limit: int = 50):
+        self.polled_limits.append(limit)
+        return self.runs
+
+
 async def test_sandbox_job_dispatcher_processes_async_jobs() -> None:
     repository = StubAsyncJobRepository()
     service = StubSandboxVerificationService()
@@ -74,3 +108,51 @@ async def test_sandbox_job_dispatcher_processes_async_jobs() -> None:
     assert service.processed_job_ids == ["job-1"]
     assert repository.marked_statuses == [("job-1", AsyncJobStatus.SUCCEEDED, None)]
     assert repository.attempts == [("job-1", AsyncJobStatus.SUCCEEDED)]
+
+
+async def test_autonomous_job_dispatcher_processes_async_jobs() -> None:
+    repository = StubAsyncJobRepository()
+    repository.job = repository.job.model_copy(
+        update={
+            "job_type": AsyncJobType.AUTONOMOUS_REPAIR,
+            "dedupe_key": "autonomous:incident-1:run-1",
+            "payload": {"incident_id": "incident-1", "autonomous_run_id": "run-1"},
+        }
+    )
+    service = StubAutonomousRunService()
+    dispatcher = AutonomousJobDispatcher(repository, service)
+
+    processed = await dispatcher.run_once()
+
+    assert processed == 1
+    assert service.processed_job_ids == ["job-1"]
+    assert repository.marked_statuses == [("job-1", AsyncJobStatus.SUCCEEDED, None)]
+    assert repository.attempts == [("job-1", AsyncJobStatus.SUCCEEDED)]
+
+
+async def test_kubernetes_monitor_dispatcher_records_terminal_runs() -> None:
+    running_run = type(
+        "SandboxRun",
+        (),
+        {
+            "id": "sandbox-1",
+            "status": SandboxRunStatus.RUNNING,
+        },
+    )()
+    finished_run = type(
+        "SandboxRun",
+        (),
+        {
+            "id": "sandbox-2",
+            "status": SandboxRunStatus.SUCCEEDED,
+        },
+    )()
+    service = StubKubernetesPollingService([running_run, finished_run])
+    autonomous_service = StubAutonomousRunService()
+    dispatcher = KubernetesMonitorDispatcher(service, autonomous_run_service=autonomous_service)
+
+    processed = await dispatcher.run_once(limit=25)
+
+    assert processed == 2
+    assert service.polled_limits == [25]
+    assert autonomous_service.recorded_sandbox_ids == ["sandbox-2"]

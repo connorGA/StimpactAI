@@ -1,0 +1,40 @@
+{
+  "approval_status": "not_required",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-18T19:05:43.944817Z",
+  "created_at": "2026-03-18T19:05:19.957827Z",
+  "execution_mode": "repair_and_propose",
+  "incident_id": "35145caf-47e9-4c4f-91b9-553f0f214e62",
+  "last_error": "Tool execution failed: 5 validation errors for EditFileRequest\nstart_line\n  Field required [type=missing, input_value={'file_path': '/Users/con...   return int(value)\\n'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nend_line\n  Field required [type=missing, input_value={'file_path': '/Users/con...   return int(value)\\n'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nreplacement_text\n  Field required [type=missing, input_value={'file_path': '/Users/con...   return int(value)\\n'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.12/v/missing\nold_string\n  Extra inputs are not permitted [type=extra_forbidden, input_value='def read_retry_after(hea...    return int(value)\\n', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden\nnew_string\n  Extra inputs are not permitted [type=extra_forbidden, input_value='def read_retry_after(hea...    return int(value)\\n', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden",
+  "objective": "Investigate, repair, and verify incident 'portfolioDeluxe: Retry-After header handling raised KeyError retry_after_seconds 20260318190410' for service portfolioDeluxe.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 2,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.staging-drill-portfolio/target",
+  "run_id": "d81436d3-699a-4385-b889-b232d3812d0a",
+  "status": "failed",
+  "total_decisions": 5,
+  "total_events": 34,
+  "total_steps": 4,
+  "total_tool_calls": 8
+}

@@ -20,6 +20,7 @@ from harness.schemas.runtime import (
     RuntimeSessionStatus,
 )
 from harness.tools.browser import BrowserToolSessionManager
+from harness.tools.command_runner import CommandRunner
 from harness.tools.file_editor import GuardedFileEditor
 from harness.tools.file_viewer import FileViewerSessionManager
 
@@ -30,6 +31,7 @@ class RuntimePrimitives:
     file_viewer: FileViewerSessionManager
     file_editor: GuardedFileEditor
     browser_tools: BrowserToolSessionManager
+    command_runner: CommandRunner
     repository_profile: HarnessRepositoryProfile
     initializer_output_builder: InitializerOutputBuilder
     git_checkpoint_manager: GitCheckpointManager
@@ -43,6 +45,7 @@ class HarnessRuntime:
         self._viewers: dict[str, FileViewerSessionManager] = {}
         self._editors: dict[str, GuardedFileEditor] = {}
         self._browser_tools: dict[str, BrowserToolSessionManager] = {}
+        self._command_runners: dict[str, CommandRunner] = {}
         self._profile_loader = HarnessProfileLoader()
         self._profiles: dict[str, HarnessRepositoryProfile] = {}
         self._initializer_builders: dict[str, InitializerOutputBuilder] = {}
@@ -56,10 +59,13 @@ class HarnessRuntime:
         repository_root: str,
         objective: str | None = None,
         initializer_output: InitializerOutputContract | None = None,
+        repository_profile_override: HarnessRepositoryProfile | None = None,
     ) -> RuntimeSessionRecord:
         now = datetime.now(UTC)
         session_id = str(uuid4())
-        repository_profile = self._profile_loader.load_profile(repository_root=repository_root)
+        repository_profile = repository_profile_override or self._profile_loader.load_profile(
+            repository_root=repository_root
+        )
         record = RuntimeSessionRecord(
             id=session_id,
             role=role,
@@ -80,6 +86,7 @@ class HarnessRuntime:
         self._viewers[session_id] = FileViewerSessionManager()
         self._editors[session_id] = GuardedFileEditor()
         self._browser_tools[session_id] = BrowserToolSessionManager()
+        self._command_runners[session_id] = CommandRunner(repository_root=repository_root)
         self._profiles[session_id] = repository_profile
         self._initializer_builders[session_id] = InitializerOutputBuilder(profile_loader=self._profile_loader)
         self._git_checkpoint_managers[session_id] = GitCheckpointManager()
@@ -96,6 +103,7 @@ class HarnessRuntime:
             file_viewer=self._viewers[session_id],
             file_editor=self._editors[session_id],
             browser_tools=self._browser_tools[session_id],
+            command_runner=self._command_runners[session_id],
             repository_profile=self._profiles[session_id],
             initializer_output_builder=self._initializer_builders[session_id],
             git_checkpoint_manager=self._git_checkpoint_managers[session_id],
