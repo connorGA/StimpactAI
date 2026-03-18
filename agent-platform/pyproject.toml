@@ -10,6 +10,7 @@ dependencies = [
     "httpx",
     "openai",
     "PyJWT",
+    "PyYAML",
     "python-dotenv",
     "redis[hiredis]",
     "uvicorn[standard]",

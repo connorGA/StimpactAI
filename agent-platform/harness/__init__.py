@@ -1,0 +1,1 @@
+"""Structured harness runtime components."""

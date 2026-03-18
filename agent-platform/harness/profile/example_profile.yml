@@ -1,0 +1,28 @@
+install_command: >
+  python3 -m venv .venv &&
+  . .venv/bin/activate &&
+  python -m pip install --upgrade pip &&
+  python -m pip install -r requirements-dev.txt &&
+  (cd client-ui && npm install)
+build_command: cd client-ui && npm run build
+test_command: . .venv/bin/activate && python -m pytest && (cd client-ui && npm run lint)
+start_command: npm run dev
+browser_verification_entrypoints:
+  - name: incident-detail-page
+    url: http://127.0.0.1:3000/incidents/sample-id
+    description: Verify the incident detail workflow renders correctly.
+    ready_selector: "[data-testid='incident-detail-page']"
+environment_assumptions:
+  - PostgreSQL is available locally.
+  - Redis is available locally.
+  - Required environment variables are present in .env.
+ignored_directories:
+  - .git
+  - .venv
+  - node_modules
+  - .next
+  - dist
+language_hints:
+  ".py": python
+  ".ts": typescript
+  ".tsx": typescript
