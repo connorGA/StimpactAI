@@ -7,7 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
+from models.artifact import ArtifactRecord, ArtifactStorageBackend, ArtifactType
+from models.async_job import AsyncJobStatus
+from models.patch import PatchRunRecord, PatchRunStatus
 from models.root_cause import RootCauseAnalysis
+from models.sandbox import (
+    SandboxRunAttemptRecord,
+    SandboxRunRecord,
+    SandboxRunStatus,
+    SandboxRunStepRecord,
+)
 from shared.types.telemetry import Environment
 
 
@@ -172,3 +181,138 @@ class IncidentRootCauseResponse(BaseModel):
     @classmethod
     def from_analysis(cls, analysis: RootCauseAnalysis) -> "IncidentRootCauseResponse":
         return cls(**analysis.model_dump(mode="json"))
+
+
+class PatchTargetFileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    reason: str
+
+
+class IncidentPatchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    incident_id: str
+    status: PatchRunStatus
+    patch_summary: str
+    rationale: str
+    target_files: list[PatchTargetFileResponse] = Field(default_factory=list)
+    unified_diff: str
+    verification_steps: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    model_name: str
+    based_on_commit_sha: str | None = None
+    diff_line_count: int = Field(ge=0)
+    file_count: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: PatchRunRecord) -> "IncidentPatchResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class IncidentSandboxRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    incident_id: str
+    patch_run_id: str
+    repo_profile_id: str | None = None
+    async_job_id: str | None = None
+    status: SandboxRunStatus
+    executor_backend: str
+    external_job_id: str | None = None
+    install_command: str | None = None
+    reproduce_command: str
+    verify_command: str
+    reproduction_succeeded: bool
+    patch_applied: bool
+    verification_succeeded: bool
+    summary: str
+    execution_log: str
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: SandboxRunRecord) -> "IncidentSandboxRunResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class SandboxRunStepResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    sandbox_run_id: str
+    step_name: str
+    status: SandboxRunStatus
+    command: str | None = None
+    summary: str
+    artifact_id: str | None = None
+    exit_code: int | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: SandboxRunStepRecord) -> "SandboxRunStepResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class SandboxRunAttemptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    sandbox_run_id: str
+    async_job_id: str | None = None
+    attempt_number: int
+    status: SandboxRunStatus
+    error_message: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+
+    @classmethod
+    def from_record(cls, record: SandboxRunAttemptRecord) -> "SandboxRunAttemptResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class ArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    incident_id: str | None = None
+    patch_run_id: str | None = None
+    sandbox_run_id: str | None = None
+    artifact_type: ArtifactType
+    storage_backend: ArtifactStorageBackend
+    bucket_name: str
+    object_key: str
+    uri: str
+    content_type: str
+    size_bytes: int
+    checksum_sha256: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ArtifactRecord) -> "ArtifactResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class SandboxRunQueuedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sandbox_run: IncidentSandboxRunResponse
+    async_job_id: str
+    async_job_status: AsyncJobStatus
+
+
+class IncidentSandboxRunDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run: IncidentSandboxRunResponse
+    steps: list[SandboxRunStepResponse] = Field(default_factory=list)
+    attempts: list[SandboxRunAttemptResponse] = Field(default_factory=list)
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from dotenv import load_dotenv
 
@@ -20,6 +20,17 @@ def get_bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def get_nonempty_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        normalized = value.strip()
+        if normalized:
+            return normalized
+    return None
+
+
 def get_database_url() -> str | None:
     return os.getenv("DATABASE_URL")
 
@@ -34,14 +45,7 @@ def get_openai_api_key() -> str | None:
 
 
 def _get_model_from_env(*names: str, default: str) -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value is None:
-            continue
-        normalized = value.strip()
-        if normalized:
-            return normalized
-    return default
+    return get_nonempty_env(*names) or default
 
 
 def get_openai_model() -> str:
@@ -82,6 +86,215 @@ def get_repository_root() -> Path:
     if not candidate.is_absolute():
         candidate = (REPO_ROOT / candidate).resolve()
     return candidate
+
+
+def get_sandbox_install_command() -> str | None:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_INSTALL_COMMAND")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def get_sandbox_reproduce_command() -> str | None:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_REPRODUCE_COMMAND")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def get_sandbox_verify_command() -> str | None:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_VERIFY_COMMAND")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def get_sandbox_timeout_seconds() -> int:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_TIMEOUT_SECONDS", "300").strip()
+    try:
+        return max(10, int(value))
+    except ValueError:
+        return 300
+
+
+def get_aws_region() -> str | None:
+    return get_nonempty_env("AWS_REGION", "AWS_DEFAULT_REGION")
+
+
+def get_public_base_url() -> str | None:
+    return get_nonempty_env("AGENT_PLATFORM_PUBLIC_BASE_URL")
+
+
+def get_s3_artifact_bucket() -> str | None:
+    return get_nonempty_env("AGENT_PLATFORM_S3_ARTIFACT_BUCKET")
+
+
+def get_secrets_manager_prefix() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_SECRETS_PREFIX") or "stimpactai"
+
+
+def get_deployment_environment() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_ENVIRONMENT", "ENVIRONMENT") or "dev"
+
+
+def get_eks_cluster_name() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_EKS_CLUSTER_NAME") or "stimpactai-cluster"
+
+
+def get_control_plane_namespace() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_CONTROL_PLANE_NAMESPACE") or "control-plane"
+
+
+def get_control_plane_service_account() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_CONTROL_PLANE_SERVICE_ACCOUNT") or "stimpact-control-plane"
+
+
+def get_sandbox_namespace() -> str:
+    return get_nonempty_env(
+        "AGENT_PLATFORM_SANDBOX_NAMESPACE",
+        "AGENT_PLATFORM_KUBERNETES_NAMESPACE",
+    ) or "sandbox"
+
+
+def get_sandbox_service_account() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_SANDBOX_SERVICE_ACCOUNT") or "stimpact-sandbox-job"
+
+
+def get_kubernetes_namespace() -> str:
+    return get_sandbox_namespace()
+
+
+def get_sandbox_execution_backend() -> str:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_EXECUTION_BACKEND", "local")
+    normalized = value.strip().lower()
+    return normalized or "local"
+
+
+def get_sandbox_base_image() -> str:
+    value = os.getenv("AGENT_PLATFORM_SANDBOX_BASE_IMAGE", "public.ecr.aws/docker/library/python:3.12")
+    normalized = value.strip()
+    return normalized or "public.ecr.aws/docker/library/python:3.12"
+
+
+def get_github_app_name() -> str | None:
+    return get_nonempty_env("GITHUB_APP_NAME")
+
+
+def get_github_app_id() -> str | None:
+    return get_nonempty_env("GITHUB_APP_ID")
+
+
+def get_github_client_id() -> str | None:
+    return get_nonempty_env("GITHUB_CLIENT_ID")
+
+
+def get_github_client_secret() -> str | None:
+    return get_nonempty_env("GITHUB_CLIENT_SECRET")
+
+
+def get_github_installation_id() -> str | None:
+    return get_nonempty_env("GITHUB_INSTALLATION_ID")
+
+
+def _read_text_file(path_value: str) -> str | None:
+    candidate = Path(path_value.strip()).expanduser()
+    if not candidate.is_absolute():
+        candidate = (REPO_ROOT / candidate).resolve()
+    if not candidate.exists() or not candidate.is_file():
+        return None
+    contents = candidate.read_text(encoding="utf-8").strip()
+    return contents or None
+
+
+def _discover_github_private_key_file() -> str | None:
+    matches = sorted(REPO_ROOT.glob("*.private-key.pem"))
+    if len(matches) != 1:
+        return None
+    contents = matches[0].read_text(encoding="utf-8").strip()
+    return contents or None
+
+
+def get_github_private_key() -> str | None:
+    inline_value = os.getenv("GITHUB_PRIVATE_KEY")
+    if inline_value is not None:
+        normalized = inline_value.strip()
+        if "BEGIN" in normalized and "PRIVATE KEY" in normalized:
+            return normalized
+        path_contents = _read_text_file(normalized)
+        if path_contents is not None:
+            return path_contents
+
+    path_value = get_nonempty_env("GITHUB_PRIVATE_KEY_PATH", "GITHUB_PRIVATE_KEY_FILE")
+    if path_value is not None:
+        path_contents = _read_text_file(path_value)
+        if path_contents is not None:
+            return path_contents
+
+    return _discover_github_private_key_file()
+
+
+def get_github_api_base_url() -> str:
+    return get_nonempty_env("GITHUB_API_BASE_URL") or "https://api.github.com"
+
+
+def get_github_callback_url() -> str | None:
+    explicit = get_nonempty_env("GITHUB_CALLBACK_URL")
+    if explicit is not None:
+        return explicit
+    base_url = get_public_base_url()
+    if base_url is None:
+        return None
+    return urljoin(base_url.rstrip("/") + "/", "api/github/callback")
+
+
+def get_github_webhook_url() -> str | None:
+    explicit = get_nonempty_env("GITHUB_WEBHOOK_URL")
+    if explicit is not None:
+        return explicit
+    base_url = get_public_base_url()
+    if base_url is None:
+        return None
+    return urljoin(base_url.rstrip("/") + "/", "webhooks/github")
+
+
+def get_github_webhook_secret() -> str | None:
+    return get_nonempty_env("GITHUB_WEBHOOK_SECRET")
+
+
+def get_gitlab_app_name() -> str | None:
+    return get_nonempty_env("GITLAB_APP_NAME")
+
+
+def get_gitlab_application_id() -> str | None:
+    return get_nonempty_env("GITLAB_APPLICATION_ID")
+
+
+def get_gitlab_app_secret() -> str | None:
+    return get_nonempty_env("GITLAB_APP_SECRET")
+
+
+def get_gitlab_base_url() -> str:
+    return get_nonempty_env("GITLAB_BASE_URL") or "https://gitlab.com"
+
+
+def get_gitlab_callback_url() -> str | None:
+    explicit = get_nonempty_env("GITLAB_CALLBACK_URL")
+    if explicit is not None:
+        return explicit
+    base_url = get_public_base_url()
+    if base_url is None:
+        return None
+    return urljoin(base_url.rstrip("/") + "/", "auth/gitlab/callback")
+
+
+def get_gitlab_oauth_scopes() -> list[str]:
+    value = get_nonempty_env("GITLAB_OAUTH_SCOPES")
+    if value is None:
+        return ["api", "read_repository", "write_repository"]
+    return [scope.strip() for scope in value.split(",") if scope.strip()]
 
 
 def get_redis_url() -> str | None:

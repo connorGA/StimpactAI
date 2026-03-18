@@ -569,6 +569,10 @@
     display: none;
   }
 
+  .inline {
+    display: inline;
+  }
+
   .inline-flex {
     display: inline-flex;
   }
@@ -643,6 +647,10 @@
 
   .max-h-80 {
     max-height: calc(var(--spacing) * 80);
+  }
+
+  .max-h-96 {
+    max-height: calc(var(--spacing) * 96);
   }
 
   .max-h-\[18rem\] {

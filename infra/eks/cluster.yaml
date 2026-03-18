@@ -1,0 +1,49 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: stimpactai-cluster
+  region: us-west-2
+  version: "1.29"
+
+autoModeConfig:
+  enabled: false
+
+iam:
+  withOIDC: true
+
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+      - api
+      - audit
+      - authenticator
+      - controllerManager
+      - scheduler
+
+managedNodeGroups:
+  - name: control-plane-ng
+    instanceType: t3.large
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 3
+    labels:
+      stimpact.ai/workload: control-plane
+    tags:
+      workload: control-plane
+      managed-by: stimpact
+
+  - name: sandbox-ng
+    instanceType: m6i.large
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 10
+    labels:
+      stimpact.ai/workload: sandbox
+    taints:
+      - key: stimpact.ai/workload
+        value: sandbox
+        effect: NoSchedule
+    tags:
+      workload: sandbox
+      managed-by: stimpact

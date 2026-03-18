@@ -5,7 +5,11 @@ import type {
   IncidentChatResponse,
   IncidentDetailResponse,
   IncidentListResponse,
+  IncidentPatch,
   IncidentRootCause,
+  IncidentSandboxRunDetail,
+  IncidentSandboxRun,
+  SandboxRunQueuedResponse,
 } from "@/lib/types";
 
 const AGENT_PLATFORM_API_URL =
@@ -129,6 +133,80 @@ export async function getIncidentRootCause(
   return fetchFromAgentPlatform<IncidentRootCause>({
     path: `/incidents/${incidentId}/root-cause${query ? `?${query}` : ""}`,
     method: "GET",
+  });
+}
+
+export async function getIncidentPatch(
+  incidentId: string,
+  options?: { eventLimit?: number; refresh?: boolean },
+): Promise<IncidentPatch> {
+  const searchParams = new URLSearchParams();
+  if (options?.eventLimit) {
+    searchParams.set("event_limit", String(options.eventLimit));
+  }
+  if (options?.refresh) {
+    searchParams.set("refresh", "true");
+  }
+  const query = searchParams.toString();
+
+  return fetchFromAgentPlatform<IncidentPatch>({
+    path: `/incidents/${incidentId}/patch${query ? `?${query}` : ""}`,
+    method: "GET",
+  });
+}
+
+export async function getIncidentSandboxRun(
+  incidentId: string,
+): Promise<IncidentSandboxRun> {
+  return fetchFromAgentPlatform<IncidentSandboxRun>({
+    path: `/incidents/${incidentId}/sandbox-run`,
+    method: "GET",
+  });
+}
+
+export async function listIncidentSandboxRuns(
+  incidentId: string,
+  options?: { limit?: number },
+): Promise<IncidentSandboxRun[]> {
+  const searchParams = new URLSearchParams();
+  if (options?.limit) {
+    searchParams.set("limit", String(options.limit));
+  }
+  const query = searchParams.toString();
+
+  return fetchFromAgentPlatform<IncidentSandboxRun[]>({
+    path: `/incidents/${incidentId}/sandbox-runs${query ? `?${query}` : ""}`,
+    method: "GET",
+  });
+}
+
+export async function getIncidentSandboxRunDetail(
+  incidentId: string,
+  sandboxRunId: string,
+): Promise<IncidentSandboxRunDetail> {
+  return fetchFromAgentPlatform<IncidentSandboxRunDetail>({
+    path: `/incidents/${incidentId}/sandbox-runs/${sandboxRunId}`,
+    method: "GET",
+  });
+}
+
+export async function runIncidentSandbox(
+  incidentId: string,
+  options?: { eventLimit?: number; refreshPatch?: boolean },
+): Promise<SandboxRunQueuedResponse> {
+  const searchParams = new URLSearchParams();
+  if (options?.eventLimit) {
+    searchParams.set("event_limit", String(options.eventLimit));
+  }
+  if (options?.refreshPatch) {
+    searchParams.set("refresh_patch", "true");
+  }
+  const query = searchParams.toString();
+
+  return fetchFromAgentPlatform<SandboxRunQueuedResponse>({
+    path: `/incidents/${incidentId}/sandbox-runs${query ? `?${query}` : ""}`,
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

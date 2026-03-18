@@ -1,0 +1,299 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from time import monotonic
+
+
+@dataclass(slots=True)
+class SandboxCommandSet:
+    install_command: str | None
+    reproduce_command: str
+    verify_command: str
+    timeout_seconds: int
+
+
+@dataclass(slots=True)
+class SandboxExecutionResult:
+    reproduction_succeeded: bool
+    patch_applied: bool
+    verification_succeeded: bool
+    summary: str
+    execution_log: str
+
+
+class LocalSandboxRunner:
+    def run(
+        self,
+        *,
+        repository_root: Path,
+        patch_diff: str,
+        commands: SandboxCommandSet,
+        incident_id: str,
+        patch_run_id: str,
+    ) -> SandboxExecutionResult:
+        if not repository_root.exists():
+            return SandboxExecutionResult(
+                reproduction_succeeded=False,
+                patch_applied=False,
+                verification_succeeded=False,
+                summary="Repository root does not exist for sandbox execution.",
+                execution_log=f"Missing repository root: {repository_root}",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="stimpact-sandbox-") as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            clone_log = self._prepare_workspace(repository_root=repository_root, workspace=workspace)
+            logs = [clone_log]
+
+            if commands.install_command:
+                install_result = self._run_shell_command(
+                    command=commands.install_command,
+                    workspace=workspace,
+                    timeout_seconds=commands.timeout_seconds,
+                    incident_id=incident_id,
+                    patch_run_id=patch_run_id,
+                    step_name="install",
+                )
+                logs.append(install_result.log_text)
+                if install_result.returncode != 0:
+                    return SandboxExecutionResult(
+                        reproduction_succeeded=False,
+                        patch_applied=False,
+                        verification_succeeded=False,
+                        summary="Sandbox install step failed before reproduction.",
+                        execution_log="\n\n".join(logs),
+                    )
+
+            reproduce_result = self._run_shell_command(
+                command=commands.reproduce_command,
+                workspace=workspace,
+                timeout_seconds=commands.timeout_seconds,
+                incident_id=incident_id,
+                patch_run_id=patch_run_id,
+                step_name="reproduce",
+            )
+            logs.append(reproduce_result.log_text)
+            if reproduce_result.returncode != 0:
+                return SandboxExecutionResult(
+                    reproduction_succeeded=False,
+                    patch_applied=False,
+                    verification_succeeded=False,
+                    summary="Sandbox could not reproduce the original failure before applying the patch.",
+                    execution_log="\n\n".join(logs),
+                )
+
+            apply_result = self._apply_patch(
+                workspace=workspace,
+                patch_diff=patch_diff,
+                timeout_seconds=commands.timeout_seconds,
+            )
+            logs.append(apply_result.log_text)
+            if apply_result.returncode != 0:
+                return SandboxExecutionResult(
+                    reproduction_succeeded=True,
+                    patch_applied=False,
+                    verification_succeeded=False,
+                    summary="Sandbox reproduced the incident but failed to apply the generated patch.",
+                    execution_log="\n\n".join(logs),
+                )
+
+            verify_result = self._run_shell_command(
+                command=commands.verify_command,
+                workspace=workspace,
+                timeout_seconds=commands.timeout_seconds,
+                incident_id=incident_id,
+                patch_run_id=patch_run_id,
+                step_name="verify",
+            )
+            logs.append(verify_result.log_text)
+            if verify_result.returncode != 0:
+                return SandboxExecutionResult(
+                    reproduction_succeeded=True,
+                    patch_applied=True,
+                    verification_succeeded=False,
+                    summary="Sandbox reproduced the incident and applied the patch, but verification failed.",
+                    execution_log="\n\n".join(logs),
+                )
+
+            return SandboxExecutionResult(
+                reproduction_succeeded=True,
+                patch_applied=True,
+                verification_succeeded=True,
+                summary="Sandbox reproduced the incident, applied the patch, and verified the candidate fix.",
+                execution_log="\n\n".join(logs),
+            )
+
+    def _prepare_workspace(self, *, repository_root: Path, workspace: Path) -> str:
+        if _is_git_repo(repository_root):
+            result = subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(repository_root), str(workspace)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return _format_log(
+                    step_name="clone",
+                    command=f"git clone --quiet --no-local {repository_root} {workspace}",
+                    returncode=result.returncode,
+                    elapsed_ms=0,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+
+        shutil.copytree(
+            repository_root,
+            workspace,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                ".next",
+                "node_modules",
+                "__pycache__",
+                ".venv",
+                ".pytest_cache",
+            ),
+        )
+        return _format_log(
+            step_name="clone",
+            command=f"copytree {repository_root} -> {workspace}",
+            returncode=0,
+            elapsed_ms=0,
+            stdout="Workspace copied without git metadata.",
+            stderr="",
+        )
+
+    def _apply_patch(
+        self,
+        *,
+        workspace: Path,
+        patch_diff: str,
+        timeout_seconds: int,
+    ) -> "_CommandResult":
+        patch_path = workspace / "stimpact.patch"
+        patch_path.write_text(patch_diff, encoding="utf-8")
+        check_result = self._run_subprocess(
+            ["/bin/sh", "-lc", f"git apply --check {patch_path.name}"],
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            step_name="patch-check",
+        )
+        if check_result.returncode != 0:
+            return check_result
+        return self._run_subprocess(
+            ["/bin/sh", "-lc", f"git apply {patch_path.name}"],
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            step_name="patch-apply",
+        )
+
+    def _run_shell_command(
+        self,
+        *,
+        command: str,
+        workspace: Path,
+        timeout_seconds: int,
+        incident_id: str,
+        patch_run_id: str,
+        step_name: str,
+    ) -> "_CommandResult":
+        env = {
+            **os.environ,
+            "STIMPACT_INCIDENT_ID": incident_id,
+            "STIMPACT_PATCH_RUN_ID": patch_run_id,
+            "STIMPACT_SANDBOX_WORKSPACE": str(workspace),
+        }
+        return self._run_subprocess(
+            ["/bin/sh", "-lc", command],
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            step_name=step_name,
+            env=env,
+            command_override=command,
+        )
+
+    def _run_subprocess(
+        self,
+        args: list[str],
+        *,
+        workspace: Path,
+        timeout_seconds: int,
+        step_name: str,
+        env: dict[str, str] | None = None,
+        command_override: str | None = None,
+    ) -> "_CommandResult":
+        started = monotonic()
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+                env=env,
+            )
+            elapsed_ms = int((monotonic() - started) * 1000)
+            return _CommandResult(
+                returncode=completed.returncode,
+                log_text=_format_log(
+                    step_name=step_name,
+                    command=command_override or " ".join(args),
+                    returncode=completed.returncode,
+                    elapsed_ms=elapsed_ms,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                ),
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed_ms = int((monotonic() - started) * 1000)
+            return _CommandResult(
+                returncode=124,
+                log_text=_format_log(
+                    step_name=step_name,
+                    command=command_override or " ".join(args),
+                    returncode=124,
+                    elapsed_ms=elapsed_ms,
+                    stdout=exc.stdout or "",
+                    stderr=(exc.stderr or "") + "\nCommand timed out.",
+                ),
+            )
+
+
+@dataclass(slots=True)
+class _CommandResult:
+    returncode: int
+    log_text: str
+
+
+def _is_git_repo(path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _format_log(
+    *,
+    step_name: str,
+    command: str,
+    returncode: int,
+    elapsed_ms: int,
+    stdout: str,
+    stderr: str,
+) -> str:
+    return (
+        f"[{step_name}]\n"
+        f"command: {command}\n"
+        f"exit_code: {returncode}\n"
+        f"elapsed_ms: {elapsed_ms}\n"
+        f"stdout:\n{stdout.strip()}\n"
+        f"stderr:\n{stderr.strip()}"
+    )

@@ -9,9 +9,21 @@ import {
   AgentPlatformError,
   getIncident,
   getIncidentClassification,
+  getIncidentPatch,
   getIncidentRootCause,
+  getIncidentSandboxRunDetail,
+  listIncidentSandboxRuns,
 } from "@/lib/agent-platform";
-import type { FailureCategory, IncidentRootCause } from "@/lib/types";
+import type {
+  Artifact,
+  FailureCategory,
+  IncidentPatch,
+  IncidentRootCause,
+  IncidentSandboxRunDetail,
+  IncidentSandboxRun,
+  SandboxRunAttempt,
+  SandboxRunStep,
+} from "@/lib/types";
 import { formatTimestamp } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -29,12 +41,25 @@ export default async function IncidentDetailPage({
   let detail;
   let classification;
   let rootCause: IncidentRootCause;
+  let patch: IncidentPatch;
+  let sandboxRuns: IncidentSandboxRun[] = [];
+  let latestSandboxDetail: IncidentSandboxRunDetail | null = null;
 
   try {
-    [detail, classification, rootCause] = await Promise.all([
+    [detail, classification, rootCause, patch, sandboxRuns] = await Promise.all([
       getIncident(incidentId, { eventLimit: 100 }),
       getIncidentClassification(incidentId, { eventLimit: 50 }),
       getIncidentRootCause(incidentId, { eventLimit: 50 }),
+      getIncidentPatch(incidentId, { eventLimit: 50 }),
+      listIncidentSandboxRuns(incidentId, { limit: 10 }).catch((caughtError) => {
+        if (
+          caughtError instanceof AgentPlatformError &&
+          caughtError.status === 404
+        ) {
+          return [];
+        }
+        throw caughtError;
+      }),
     ]);
   } catch (caughtError) {
     if (
@@ -46,6 +71,22 @@ export default async function IncidentDetailPage({
     throw caughtError;
   }
   const { incident, events } = detail;
+
+  if (sandboxRuns.length > 0) {
+    try {
+      latestSandboxDetail = await getIncidentSandboxRunDetail(
+        incidentId,
+        sandboxRuns[0].id,
+      );
+    } catch (caughtError) {
+      if (
+        !(caughtError instanceof AgentPlatformError) ||
+        caughtError.status !== 404
+      ) {
+        throw caughtError;
+      }
+    }
+  }
 
   return (
     <main className="space-y-6">
@@ -279,11 +320,186 @@ export default async function IncidentDetailPage({
             ) : null}
           </section>
 
+          <section className="ops-sheet rounded-[22px] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="ops-kicker text-[11px] font-semibold uppercase">
+                  AI patch recommendation
+                </p>
+                <h3 className="mt-3 text-base font-semibold text-[#171717]">
+                  {patch.patch_summary}
+                </h3>
+              </div>
+              <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
+                {Math.round(patch.confidence * 100)}% confidence
+              </span>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-[#746d66]">
+              {patch.rationale}
+            </p>
+            <div className="mt-4 grid gap-4">
+              <RootCauseRow label="Files changed" value={String(patch.file_count)} />
+              <RootCauseRow label="Diff lines" value={String(patch.diff_line_count)} />
+              <RootCauseRow label="Patch model" value={patch.model_name} />
+            </div>
+            {patch.target_files.length > 0 ? (
+              <div className="mt-5 space-y-3">
+                {patch.target_files.map((target) => (
+                  <div
+                    key={target.path}
+                    className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4"
+                  >
+                    <p className="text-sm font-semibold text-[#17385d]">{target.path}</p>
+                    <p className="mt-1 text-sm text-[#5f6470]">{target.reason}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {patch.verification_steps.length > 0 ? (
+              <div className="mt-5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                  Suggested verification
+                </p>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-[#5f6470]">
+                  {patch.verification_steps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                Unified diff
+              </p>
+              <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[#35547d]">
+                {patch.unified_diff}
+              </pre>
+            </div>
+          </section>
+
+          <section className="ops-sheet-muted rounded-[22px] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="ops-kicker text-[11px] font-semibold uppercase">
+                  Sandbox verification
+                </p>
+                <h3 className="mt-3 text-base font-semibold text-[#171717]">
+                  {latestSandboxDetail
+                    ? latestSandboxDetail.run.summary
+                    : "No sandbox verification runs yet"}
+                </h3>
+              </div>
+              {latestSandboxDetail ? (
+                <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
+                  {latestSandboxDetail.run.status}
+                </span>
+              ) : null}
+            </div>
+            {latestSandboxDetail ? (
+              <>
+                <div className="mt-4 grid gap-4">
+                  <RootCauseRow
+                    label="Failure reproduced"
+                    value={latestSandboxDetail.run.reproduction_succeeded ? "Yes" : "No"}
+                  />
+                  <RootCauseRow
+                    label="Patch applied"
+                    value={latestSandboxDetail.run.patch_applied ? "Yes" : "No"}
+                  />
+                  <RootCauseRow
+                    label="Verification passed"
+                    value={latestSandboxDetail.run.verification_succeeded ? "Yes" : "No"}
+                  />
+                  <RootCauseRow
+                    label="Executor"
+                    value={latestSandboxDetail.run.executor_backend}
+                  />
+                </div>
+                {sandboxRuns.length > 0 ? (
+                  <div className="mt-5 space-y-3">
+                    {sandboxRuns.map((run) => (
+                      <div
+                        key={run.id}
+                        className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-semibold text-[#17385d]">
+                              {run.summary}
+                            </p>
+                            <p className="mt-1 text-sm text-[#5f6470]">
+                              {formatTimestamp(run.created_at)}
+                            </p>
+                          </div>
+                          <span className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                            {run.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {latestSandboxDetail.steps.length > 0 ? (
+                  <div className="mt-5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                      Run steps
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      {latestSandboxDetail.steps.map((step) => (
+                        <SandboxStepCard key={step.id} step={step} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {latestSandboxDetail.attempts.length > 0 ? (
+                  <div className="mt-5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                      Attempts
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      {latestSandboxDetail.attempts.map((attempt) => (
+                        <SandboxAttemptCard key={attempt.id} attempt={attempt} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {latestSandboxDetail.artifacts.length > 0 ? (
+                  <div className="mt-5">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                      Artifacts
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      {latestSandboxDetail.artifacts.map((artifact) => (
+                        <SandboxArtifactCard key={artifact.id} artifact={artifact} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+                    Execution log
+                  </p>
+                  <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[#35547d]">
+                    {latestSandboxDetail.run.execution_log || "Execution log stored via artifacts or pending external completion."}
+                  </pre>
+                </div>
+              </>
+            ) : (
+              <p className="mt-4 text-sm leading-6 text-[#746d66]">
+                No sandbox runs have been queued yet. Queue one through the
+                sandbox run API after configuring a repo profile for this
+                project. Production runs now track asynchronous state, steps,
+                and artifacts rather than only a single inline verification
+                result.
+              </p>
+            )}
+          </section>
+
           <PreviewNotice
             title="Detail-page features still to be connected"
             items={[
               "Deploy correlation, assignee ownership, and linked change requests are not wired yet.",
-              "Patch recommendations and verification planning will appear here in later phases.",
+              "PR and merge-request automation will appear after provider write integration and deployment workflow are added.",
             ]}
           />
         </div>
@@ -326,6 +542,54 @@ function ContextCard({
       >
         {content}
       </pre>
+    </div>
+  );
+}
+
+function SandboxStepCard({ step }: { step: SandboxRunStep }) {
+  return (
+    <div className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-[#17385d]">{step.step_name}</p>
+          <p className="mt-1 text-sm text-[#5f6470]">{step.summary}</p>
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+          {step.status}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SandboxAttemptCard({ attempt }: { attempt: SandboxRunAttempt }) {
+  return (
+    <div className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-[#17385d]">
+            Attempt {attempt.attempt_number}
+          </p>
+          <p className="mt-1 text-sm text-[#5f6470]">
+            {attempt.error_message ?? "No recorded error."}
+          </p>
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+          {attempt.status}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SandboxArtifactCard({ artifact }: { artifact: Artifact }) {
+  return (
+    <div className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4">
+      <p className="text-sm font-semibold text-[#17385d]">{artifact.artifact_type}</p>
+      <p className="mt-1 break-all text-sm text-[#5f6470]">{artifact.uri}</p>
+      <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
+        {artifact.storage_backend}
+      </p>
     </div>
   );
 }

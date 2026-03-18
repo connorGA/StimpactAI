@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ArtifactBucketWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::stimpactai-artifacts-dev",
+        "arn:aws:s3:::stimpactai-artifacts-dev/*"
+      ]
+    },
+    {
+      "Sid": "SecretsManagerReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-west-2:*:secret:stimpactai/*"
+    }
+  ]
+}

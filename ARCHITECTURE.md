@@ -419,6 +419,13 @@ GitLab
 Bitbucket
 
 
+Provider auth model:
+
+
+GitHub App installation auth for bot-native repository access
+GitLab OAuth application auth with repository read/write scopes
+
+
 Capabilities:
 
 

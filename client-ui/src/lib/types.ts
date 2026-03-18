@@ -120,6 +120,109 @@ export type IncidentRootCause = {
   reasoning: RootCauseReasoning;
 };
 
+export type PatchRunStatus = "generated" | "failed";
+
+export type PatchTargetFile = {
+  path: string;
+  reason: string;
+};
+
+export type IncidentPatch = {
+  id: string;
+  incident_id: string;
+  status: PatchRunStatus;
+  patch_summary: string;
+  rationale: string;
+  target_files: PatchTargetFile[];
+  unified_diff: string;
+  verification_steps: string[];
+  confidence: number;
+  model_name: string;
+  based_on_commit_sha: string | null;
+  diff_line_count: number;
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SandboxRunStatus = "queued" | "running" | "succeeded" | "failed";
+
+export type IncidentSandboxRun = {
+  id: string;
+  incident_id: string;
+  patch_run_id: string;
+  repo_profile_id: string | null;
+  async_job_id: string | null;
+  status: SandboxRunStatus;
+  executor_backend: string;
+  external_job_id: string | null;
+  install_command: string | null;
+  reproduce_command: string;
+  verify_command: string;
+  reproduction_succeeded: boolean;
+  patch_applied: boolean;
+  verification_succeeded: boolean;
+  summary: string;
+  execution_log: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SandboxRunStep = {
+  id: string;
+  sandbox_run_id: string;
+  step_name: string;
+  status: SandboxRunStatus;
+  command: string | null;
+  summary: string;
+  artifact_id: string | null;
+  exit_code: number | null;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+};
+
+export type SandboxRunAttempt = {
+  id: string;
+  sandbox_run_id: string;
+  async_job_id: string | null;
+  attempt_number: number;
+  status: SandboxRunStatus;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type Artifact = {
+  id: string;
+  incident_id: string | null;
+  patch_run_id: string | null;
+  sandbox_run_id: string | null;
+  artifact_type: string;
+  storage_backend: string;
+  bucket_name: string;
+  object_key: string;
+  uri: string;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SandboxRunQueuedResponse = {
+  sandbox_run: IncidentSandboxRun;
+  async_job_id: string;
+  async_job_status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+};
+
+export type IncidentSandboxRunDetail = {
+  run: IncidentSandboxRun;
+  steps: SandboxRunStep[];
+  attempts: SandboxRunAttempt[];
+  artifacts: Artifact[];
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;

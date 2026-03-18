@@ -5,8 +5,11 @@ description = "Telemetry ingestion and autonomous remediation backend."
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg",
+    "boto3",
     "fastapi",
+    "httpx",
     "openai",
+    "PyJWT",
     "python-dotenv",
     "redis[hiredis]",
     "uvicorn[standard]",
