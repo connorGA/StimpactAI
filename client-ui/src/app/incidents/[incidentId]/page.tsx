@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { AutonomousRunPanel } from "@/components/autonomous-run-panel";
 import { ChatPanel } from "@/components/chat-panel";
 import { PageHeader, PreviewNotice, SectionCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
@@ -8,6 +9,7 @@ import { StatusBadge } from "@/components/status-badge";
 import {
   AgentPlatformError,
   getIncident,
+  getLatestIncidentAutonomousRunDetail,
   getIncidentClassification,
   getIncidentPatch,
   getIncidentRootCause,
@@ -17,6 +19,7 @@ import {
 import type {
   Artifact,
   FailureCategory,
+  IncidentAutonomousRunDetail,
   IncidentPatch,
   IncidentRootCause,
   IncidentSandboxRunDetail,
@@ -44,6 +47,7 @@ export default async function IncidentDetailPage({
   let patch: IncidentPatch;
   let sandboxRuns: IncidentSandboxRun[] = [];
   let latestSandboxDetail: IncidentSandboxRunDetail | null = null;
+  let latestAutonomousRunDetail: IncidentAutonomousRunDetail | null = null;
 
   try {
     [detail, classification, rootCause, patch, sandboxRuns] = await Promise.all([
@@ -85,6 +89,19 @@ export default async function IncidentDetailPage({
       ) {
         throw caughtError;
       }
+    }
+  }
+
+  try {
+    latestAutonomousRunDetail = await getLatestIncidentAutonomousRunDetail(
+      incidentId,
+    );
+  } catch (caughtError) {
+    if (
+      !(caughtError instanceof AgentPlatformError) ||
+      caughtError.status !== 404
+    ) {
+      throw caughtError;
     }
   }
 
@@ -494,6 +511,11 @@ export default async function IncidentDetailPage({
               </p>
             )}
           </section>
+
+          <AutonomousRunPanel
+            incidentId={incident.id}
+            initialDetail={latestAutonomousRunDetail}
+          />
 
           <PreviewNotice
             title="Detail-page features still to be connected"

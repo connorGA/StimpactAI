@@ -1,7 +1,9 @@
 import "server-only";
 
 import type {
+  AutonomousRunQueuedResponse,
   IncidentClassification,
+  IncidentAutonomousRunDetail,
   IncidentChatResponse,
   IncidentDetailResponse,
   IncidentListResponse,
@@ -187,6 +189,35 @@ export async function getIncidentSandboxRunDetail(
   return fetchFromAgentPlatform<IncidentSandboxRunDetail>({
     path: `/incidents/${incidentId}/sandbox-runs/${sandboxRunId}`,
     method: "GET",
+  });
+}
+
+export async function listIncidentAutonomousRuns(
+  incidentId: string,
+): Promise<IncidentAutonomousRunDetail["run"][]> {
+  return fetchFromAgentPlatform<IncidentAutonomousRunDetail["run"][]>({
+    path: `/incidents/${incidentId}/autonomous-runs`,
+    method: "GET",
+  });
+}
+
+export async function getLatestIncidentAutonomousRunDetail(
+  incidentId: string,
+): Promise<IncidentAutonomousRunDetail> {
+  return fetchFromAgentPlatform<IncidentAutonomousRunDetail>({
+    path: `/incidents/${incidentId}/autonomous-runs/latest`,
+    method: "GET",
+  });
+}
+
+export async function createIncidentAutonomousRun(
+  incidentId: string,
+  body: unknown,
+): Promise<AutonomousRunQueuedResponse> {
+  return fetchFromAgentPlatform<AutonomousRunQueuedResponse>({
+    path: `/incidents/${incidentId}/autonomous-runs`,
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

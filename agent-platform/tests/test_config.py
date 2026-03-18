@@ -16,6 +16,7 @@ from api.core.config import (
     get_gitlab_callback_url,
     get_gitlab_oauth_scopes,
     get_kubernetes_namespace,
+    get_openai_autonomous_model,
     get_openai_chat_model,
     get_openai_model,
     get_openai_patch_model,
@@ -39,6 +40,7 @@ def clear_model_env(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_CHAT_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_RCA_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_PATCH_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_AUTONOMOUS_MODEL", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_SANDBOX_INSTALL_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_SANDBOX_REPRODUCE_COMMAND", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_SANDBOX_VERIFY_COMMAND", raising=False)
@@ -78,6 +80,7 @@ def test_openai_model_defaults(monkeypatch) -> None:
     assert get_openai_chat_model() == "gpt-4.1-mini"
     assert get_openai_rca_model() == "gpt-4.1-mini"
     assert get_openai_patch_model() == "gpt-4.1-mini"
+    assert get_openai_autonomous_model() == "gpt-4.1-mini"
 
 
 def test_chat_model_prefers_dedicated_override(monkeypatch) -> None:
@@ -107,6 +110,18 @@ def test_patch_model_falls_back_to_rca_then_shared(monkeypatch) -> None:
 
     monkeypatch.setenv("OPENAI_PATCH_MODEL", "patch-model")
     assert get_openai_patch_model() == "patch-model"
+
+
+def test_autonomous_model_falls_back_to_patch_then_rca_then_shared(monkeypatch) -> None:
+    clear_model_env(monkeypatch)
+    monkeypatch.setenv("OPENAI_MODEL", "shared-model")
+    monkeypatch.setenv("OPENAI_RCA_MODEL", "rca-model")
+    monkeypatch.setenv("OPENAI_PATCH_MODEL", "patch-model")
+
+    assert get_openai_autonomous_model() == "patch-model"
+
+    monkeypatch.setenv("OPENAI_AUTONOMOUS_MODEL", "autonomous-model")
+    assert get_openai_autonomous_model() == "autonomous-model"
 
 
 def test_sandbox_command_defaults(monkeypatch) -> None:

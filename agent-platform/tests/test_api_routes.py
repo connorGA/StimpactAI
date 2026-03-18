@@ -15,6 +15,7 @@ from api.routes.control_plane import (
     router as control_plane_router,
 )
 from api.routes.incidents import (
+    get_autonomous_run_service,
     get_artifact_repository,
     get_failure_classifier,
     get_incident_repository,
@@ -30,6 +31,17 @@ from api.routes.telemetry import (
     get_telemetry_repository,
     router as telemetry_router,
 )
+from api.schemas.autonomous import AutonomousRunCreateRequest, AutonomousRunDetailResponse
+from harness.schemas.autonomous import (
+    AutonomousArtifactPaths,
+    AutonomousRepairRunRecord,
+    AutonomousRunEvent,
+    AutonomousRunOutcome,
+    AutonomousRunPhase,
+    AutonomousRunStatus,
+)
+from harness.schemas.autonomous import AutonomousEventType
+from harness.schemas.initializer import FeatureSeed
 from models.async_job import AsyncJobStatus
 from models.control_plane import (
     ProviderIntegrationRecord,
@@ -574,6 +586,109 @@ class StubArtifactRepository:
         ]
 
 
+class StubAutonomousRunService:
+    async def start_run(
+        self,
+        incident_id: str,
+        request: AutonomousRunCreateRequest,
+    ) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        assert request.feature_seeds
+        return self.get_run_detail_sync(incident_id, "auto-run-1")
+
+    async def list_runs(self, incident_id: str) -> list[AutonomousRepairRunRecord]:
+        assert incident_id == "incident-1"
+        return [self._detail().run]
+
+    async def get_latest_run_detail(self, incident_id: str) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        return self._detail()
+
+    async def get_run_detail(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        assert run_id == "auto-run-1"
+        return self._detail()
+
+    def get_run_detail_sync(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
+        assert incident_id == "incident-1"
+        assert run_id == "auto-run-1"
+        return self._detail()
+
+    def subscribe(self, run_id: str, subscriber) -> None:
+        assert run_id == "auto-run-1"
+
+    def unsubscribe(self, run_id: str, subscriber) -> None:
+        assert run_id == "auto-run-1"
+
+    def is_terminal(self, run: AutonomousRepairRunRecord) -> bool:
+        return True
+
+    def _detail(self) -> AutonomousRunDetailResponse:
+        now = datetime(2026, 3, 16, 12, 10, tzinfo=UTC)
+        run = AutonomousRepairRunRecord(
+            id="auto-run-1",
+            incident_id="incident-1",
+            repository_root="/tmp/demo",
+            objective="Repair the billing timeout incident.",
+            status=AutonomousRunStatus.SUCCEEDED,
+            phase=AutonomousRunPhase.COMPLETED,
+            initializer_session_id="init-1",
+            coding_session_id="code-1",
+            last_error=None,
+            loop_state={
+                "step_index": 4,
+                "max_steps": 8,
+                "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+                "recovery_attempts": 1,
+                "consecutive_failures": 0,
+                "last_tool_name": "browser_assert_text",
+                "recent_tool_names": ["checkpoint", "edit_file", "browser_open", "browser_assert_text"],
+                "last_tool_ok": True,
+                "last_tool_result": {"ok": True},
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        events = [
+            AutonomousRunEvent(
+                id="event-1",
+                run_id=run.id,
+                event_type=AutonomousEventType.RUN_COMPLETED,
+                phase=AutonomousRunPhase.COMPLETED,
+                summary="Autonomous repair run completed successfully.",
+                payload={"status": "succeeded"},
+                created_at=now,
+            )
+        ]
+        outcome = AutonomousRunOutcome(
+            run_id=run.id,
+            incident_id="incident-1",
+            status=AutonomousRunStatus.SUCCEEDED,
+            phase=AutonomousRunPhase.COMPLETED,
+            objective=run.objective,
+            repository_root=run.repository_root,
+            checkpoint_ref="stimpact-checkpoint/autonomous-baseline",
+            recovery_attempts=1,
+            total_steps=4,
+            total_decisions=4,
+            total_tool_calls=4,
+            total_events=6,
+            last_error=None,
+            created_at=now,
+            completed_at=now,
+        )
+        return AutonomousRunDetailResponse(
+            run=run,
+            events=events,
+            outcome=outcome,
+            artifact_paths=AutonomousArtifactPaths(
+                snapshot_path="/tmp/demo/.stimpactai/autonomous-runs/incident-1/auto-run-1/snapshot.json",
+                events_path="/tmp/demo/.stimpactai/autonomous-runs/incident-1/auto-run-1/events.jsonl",
+                outcome_path="/tmp/demo/.stimpactai/autonomous-runs/incident-1/auto-run-1/outcome.json",
+            ),
+        )
+
+
 def test_ingest_error_returns_accepted_response_and_signals_outbox() -> None:
     app = build_test_app()
     telemetry_repository = RecordingTelemetryRepository()
@@ -758,6 +873,73 @@ def test_get_incident_sandbox_run_detail_returns_steps_and_artifacts() -> None:
     assert body["run"]["incident_id"] == "incident-1"
     assert body["steps"][0]["step_name"] == "submit-kubernetes-job"
     assert body["artifacts"][0]["storage_backend"] == "s3"
+
+
+def test_create_autonomous_run_returns_queued_run() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    response = client.post(
+        "/incidents/incident-1/autonomous-runs",
+        json={
+            "feature_seeds": [
+                {
+                    "feature_name": "billing timeout resolved",
+                    "description": "The billing timeout should no longer reproduce after the repair.",
+                    "verification_method": "browser assertion",
+                    "required_verification": ["browser"],
+                    "browser_required": True,
+                    "notes": [],
+                }
+            ],
+            "max_steps": 8,
+        },
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["run"]["id"] == "auto-run-1"
+    assert body["run"]["status"] == "succeeded"
+
+
+def test_list_autonomous_runs_returns_history() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    response = client.get("/incidents/incident-1/autonomous-runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["id"] == "auto-run-1"
+
+
+def test_get_latest_autonomous_run_returns_detail() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    response = client.get("/incidents/incident-1/autonomous-runs/latest")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run"]["id"] == "auto-run-1"
+    assert body["outcome"]["total_tool_calls"] == 4
+
+
+def test_stream_autonomous_run_events_returns_sse_snapshot() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
+
+    client = TestClient(app)
+    with client.stream("GET", "/incidents/incident-1/autonomous-runs/auto-run-1/events") as response:
+        assert response.status_code == 200
+        payload = "".join(response.iter_text())
+
+    assert '"id": "auto-run-1"' in payload
+    assert '"event_type": "run_completed"' in payload
 
 
 def test_create_secret_ref_writes_to_secret_manager_and_returns_metadata() -> None:

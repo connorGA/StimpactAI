@@ -223,6 +223,107 @@ export type IncidentSandboxRunDetail = {
   artifacts: Artifact[];
 };
 
+export type AutonomousRunStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type AutonomousRunPhase =
+  | "initializer"
+  | "coding"
+  | "verification"
+  | "recovery"
+  | "completed"
+  | "failed";
+
+export type AutonomousDecisionAction = "invoke_tool" | "complete" | "fail";
+
+export type AutonomousDecision = {
+  summary: string;
+  rationale: string | null;
+  action: AutonomousDecisionAction;
+  selected_tool: string | null;
+  arguments: Record<string, unknown>;
+  arguments_summary: string | null;
+  feature_id: string | null;
+  verification_kind: string | null;
+};
+
+export type AutonomousLoopState = {
+  step_index: number;
+  max_steps: number;
+  checkpoint_ref: string | null;
+  recovery_attempts: number;
+  consecutive_failures: number;
+  last_tool_name: string | null;
+  recent_tool_names: string[];
+  last_tool_ok: boolean | null;
+  last_tool_result: Record<string, unknown>;
+};
+
+export type AutonomousRun = {
+  id: string;
+  incident_id: string | null;
+  repository_root: string;
+  objective: string;
+  status: AutonomousRunStatus;
+  phase: AutonomousRunPhase;
+  initializer_session_id: string | null;
+  coding_session_id: string | null;
+  last_error: string | null;
+  loop_state: AutonomousLoopState;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutonomousRunEvent = {
+  id: string;
+  run_id: string;
+  event_type: string;
+  phase: AutonomousRunPhase;
+  summary: string;
+  decision: AutonomousDecision | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AutonomousRunOutcome = {
+  run_id: string;
+  incident_id: string | null;
+  status: AutonomousRunStatus;
+  phase: AutonomousRunPhase;
+  objective: string;
+  repository_root: string;
+  checkpoint_ref: string | null;
+  recovery_attempts: number;
+  total_steps: number;
+  total_decisions: number;
+  total_tool_calls: number;
+  total_events: number;
+  last_error: string | null;
+  created_at: string;
+  completed_at: string;
+};
+
+export type AutonomousArtifactPaths = {
+  snapshot_path: string;
+  events_path: string;
+  outcome_path: string | null;
+};
+
+export type IncidentAutonomousRunDetail = {
+  run: AutonomousRun;
+  events: AutonomousRunEvent[];
+  outcome: AutonomousRunOutcome | null;
+  artifact_paths: AutonomousArtifactPaths;
+};
+
+export type AutonomousRunQueuedResponse = {
+  run: AutonomousRun;
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;

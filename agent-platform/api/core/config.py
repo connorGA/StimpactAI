@@ -77,6 +77,16 @@ def get_openai_patch_model() -> str:
     )
 
 
+def get_openai_autonomous_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_AUTONOMOUS_MODEL",
+        "OPENAI_PATCH_MODEL",
+        "OPENAI_RCA_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
 def get_repository_root() -> Path:
     value = os.getenv("AGENT_PLATFORM_REPOSITORY_ROOT")
     if value is None or not value.strip():
