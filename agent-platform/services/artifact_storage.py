@@ -16,6 +16,21 @@ class ArtifactStorage(Protocol):
         content_type: str,
     ) -> tuple[str, int, str | None]: ...
 
+    def put_bytes(
+        self,
+        *,
+        object_key: str,
+        content: bytes,
+        content_type: str,
+    ) -> tuple[str, int, str | None]: ...
+
+    def generate_download_url(
+        self,
+        *,
+        object_key: str,
+        expires_in_seconds: int = 3600,
+    ) -> str: ...
+
 
 class S3ArtifactStorage:
     def __init__(self, *, bucket_name: str | None = None, region: str | None = None) -> None:
@@ -39,9 +54,46 @@ class S3ArtifactStorage:
         content: str,
         content_type: str,
     ) -> tuple[str, int, str | None]:
-        body = content.encode("utf-8")
-        checksum = hashlib.sha256(body).hexdigest()
+        return self.put_bytes(
+            object_key=object_key,
+            content=content.encode("utf-8"),
+            content_type=content_type,
+        )
 
+    def put_bytes(
+        self,
+        *,
+        object_key: str,
+        content: bytes,
+        content_type: str,
+    ) -> tuple[str, int, str | None]:
+        checksum = hashlib.sha256(content).hexdigest()
+        client = self._client()
+        client.put_object(
+            Bucket=self.bucket_name,
+            Key=object_key,
+            Body=content,
+            ContentType=content_type,
+        )
+        uri = f"s3://{self.bucket_name}/{object_key}"
+        return uri, len(content), checksum
+
+    def generate_download_url(
+        self,
+        *,
+        object_key: str,
+        expires_in_seconds: int = 3600,
+    ) -> str:
+        client = self._client()
+        return str(
+            client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.bucket_name, "Key": object_key},
+                ExpiresIn=expires_in_seconds,
+            )
+        )
+
+    def _client(self):
         try:
             import boto3  # type: ignore
         except ImportError as exc:  # pragma: no cover - depends on runtime environment
@@ -50,13 +102,4 @@ class S3ArtifactStorage:
                 status_code=503,
                 code="aws_sdk_unavailable",
             ) from exc
-
-        client = boto3.client("s3", region_name=self._region)
-        client.put_object(
-            Bucket=self.bucket_name,
-            Key=object_key,
-            Body=body,
-            ContentType=content_type,
-        )
-        uri = f"s3://{self.bucket_name}/{object_key}"
-        return uri, len(body), checksum
+        return boto3.client("s3", region_name=self._region)

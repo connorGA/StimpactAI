@@ -97,10 +97,46 @@ class AutonomousLoopState(BaseModel):
     checkpoint_ref: str | None = Field(default=None, max_length=256)
     recovery_attempts: int = Field(ge=0, default=0)
     consecutive_failures: int = Field(ge=0, default=0)
+    stagnation_count: int = Field(ge=0, default=0)
     last_tool_name: str | None = Field(default=None, max_length=128)
     recent_tool_names: list[str] = Field(default_factory=list, max_length=12)
     last_tool_ok: bool | None = None
     last_tool_result: dict[str, Any] = Field(default_factory=dict)
+    last_failure: AutonomousToolFailure | None = None
+    recent_failure_signatures: list[str] = Field(default_factory=list, max_length=8)
+
+
+class AutonomousToolFailureClass(StrEnum):
+    VALIDATION = "validation"
+    VERIFICATION = "verification"
+    TOOL_ERROR = "tool_error"
+    STAGNATION = "stagnation"
+    EXCEPTION = "exception"
+    UNKNOWN = "unknown"
+
+
+class AutonomousToolFailure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = Field(min_length=1, max_length=128)
+    failure_class: AutonomousToolFailureClass
+    message: str = Field(min_length=1, max_length=2_000)
+    hint: str | None = Field(default=None, max_length=1_000)
+    signature: str = Field(min_length=1, max_length=512)
+    repeated_count: int = Field(ge=1, default=1)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutonomousVerificationEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=64)
+    summary: str = Field(min_length=1, max_length=1_000)
+    passed: bool
+    command: str | None = Field(default=None, max_length=8_000)
+    recorded_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AutonomousPolicyDecision(BaseModel):
@@ -138,6 +174,9 @@ class AutonomousRepairRunRecord(BaseModel):
     initializer_session_id: str | None = Field(default=None, max_length=128)
     coding_session_id: str | None = Field(default=None, max_length=128)
     last_error: str | None = Field(default=None, max_length=4_000)
+    benchmark_scenario_id: str | None = Field(default=None, max_length=128)
+    benchmark_bug_class: str | None = Field(default=None, max_length=128)
+    latest_verification: AutonomousVerificationEvidence | None = None
     policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     loop_state: AutonomousLoopState = Field(default_factory=AutonomousLoopState)
     created_at: datetime
@@ -173,16 +212,23 @@ class AutonomousRunOutcome(BaseModel):
     phase: AutonomousRunPhase
     objective: str = Field(min_length=1, max_length=1_000)
     repository_root: str = Field(min_length=1, max_length=4096)
+    benchmark_scenario_id: str | None = Field(default=None, max_length=128)
+    benchmark_bug_class: str | None = Field(default=None, max_length=128)
     execution_mode: AutonomousExecutionMode = AutonomousExecutionMode.REPAIR_ONLY
     approval_status: AutonomousApprovalStatus = AutonomousApprovalStatus.NOT_REQUIRED
     promotion_status: AutonomousPromotionStatus = AutonomousPromotionStatus.NOT_REQUESTED
     checkpoint_ref: str | None = Field(default=None, max_length=256)
     recovery_attempts: int = Field(ge=0, default=0)
+    stagnation_count: int = Field(ge=0, default=0)
     total_steps: int = Field(ge=0, default=0)
     total_decisions: int = Field(ge=0, default=0)
     total_tool_calls: int = Field(ge=0, default=0)
     total_events: int = Field(ge=0, default=0)
     last_error: str | None = Field(default=None, max_length=4_000)
+    latest_verification: AutonomousVerificationEvidence | None = None
+    final_success: bool = False
+    fresh_verification_satisfied: bool = False
+    failure_class: AutonomousToolFailureClass | None = None
     policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     created_at: datetime
     completed_at: datetime

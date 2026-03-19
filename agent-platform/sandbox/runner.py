@@ -48,6 +48,7 @@ class LocalSandboxRunner:
         commands: SandboxCommandSet,
         incident_id: str,
         patch_run_id: str,
+        baseline_ref: str | None = None,
         secret_env: dict[str, str] | None = None,
         secret_files: dict[str, str] | None = None,
     ) -> SandboxExecutionResult:
@@ -64,6 +65,21 @@ class LocalSandboxRunner:
             workspace = Path(temp_dir) / "workspace"
             clone_log = self._prepare_workspace(repository_root=repository_root, workspace=workspace)
             logs = [clone_log]
+            if baseline_ref:
+                checkout_result = self._checkout_baseline(
+                    workspace=workspace,
+                    baseline_ref=baseline_ref,
+                    timeout_seconds=commands.timeout_seconds,
+                )
+                logs.append(checkout_result.log_text)
+                if checkout_result.returncode != 0:
+                    return SandboxExecutionResult(
+                        reproduction_succeeded=False,
+                        patch_applied=False,
+                        verification_succeeded=False,
+                        summary="Sandbox failed to restore the requested baseline before verification.",
+                        execution_log="\n\n".join(logs),
+                    )
             materialized_secret_files = self._materialize_secret_files(
                 workspace=workspace,
                 secret_files=secret_files or {},
@@ -101,7 +117,8 @@ class LocalSandboxRunner:
                 secret_env=secret_env,
             )
             logs.append(reproduce_result.log_text)
-            if reproduce_result.returncode != 0:
+            reproduction_observed = self._reproduction_step_succeeded(reproduce_result)
+            if not reproduction_observed:
                 return SandboxExecutionResult(
                     reproduction_succeeded=False,
                     patch_applied=False,
@@ -118,7 +135,7 @@ class LocalSandboxRunner:
             logs.append(apply_result.log_text)
             if apply_result.returncode != 0:
                 return SandboxExecutionResult(
-                    reproduction_succeeded=True,
+                    reproduction_succeeded=reproduction_observed,
                     patch_applied=False,
                     verification_succeeded=False,
                     summary="Sandbox reproduced the incident but failed to apply the generated patch.",
@@ -137,7 +154,7 @@ class LocalSandboxRunner:
             logs.append(verify_result.log_text)
             if verify_result.returncode != 0:
                 return SandboxExecutionResult(
-                    reproduction_succeeded=True,
+                    reproduction_succeeded=reproduction_observed,
                     patch_applied=True,
                     verification_succeeded=False,
                     summary="Sandbox reproduced the incident and applied the patch, but verification failed.",
@@ -145,12 +162,33 @@ class LocalSandboxRunner:
                 )
 
             return SandboxExecutionResult(
-                reproduction_succeeded=True,
+                reproduction_succeeded=reproduction_observed,
                 patch_applied=True,
                 verification_succeeded=True,
                 summary="Sandbox reproduced the incident, applied the patch, and verified the candidate fix.",
                 execution_log="\n\n".join(logs),
             )
+
+    def _reproduction_step_succeeded(self, result: "_CommandResult") -> bool:
+        if result.returncode == 0:
+            return True
+        # Treat normal non-zero test failures as successful reproduction,
+        # but keep shell/env failures and timeouts as hard sandbox errors.
+        return result.returncode not in {124, 126, 127}
+
+    def _checkout_baseline(
+        self,
+        *,
+        workspace: Path,
+        baseline_ref: str,
+        timeout_seconds: int,
+    ) -> "_CommandResult":
+        return self._run_subprocess(
+            ["/bin/sh", "-lc", f"git checkout --quiet {baseline_ref}"],
+            workspace=workspace,
+            timeout_seconds=timeout_seconds,
+            step_name="checkout-baseline",
+        )
 
     def _prepare_workspace(self, *, repository_root: Path, workspace: Path) -> str:
         if _is_git_repo(repository_root):

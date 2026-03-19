@@ -28,6 +28,9 @@ class KubernetesJobStatus:
     status: str
     summary: str
     execution_log: str = ""
+    reproduction_succeeded: bool = False
+    patch_applied: bool = False
+    verification_succeeded: bool = False
 
 
 class KubernetesClusterClient:
@@ -112,29 +115,43 @@ class KubernetesClusterClient:
         pod_items = list(getattr(pods, "items", []) or [])
         pod = _select_latest_pod(pod_items)
         execution_log = self._read_pod_log(core_api, pod)
+        phase_results = _extract_phase_results(execution_log)
+        default_success = succeeded > 0 or any(getattr(condition, "type", None) == "Complete" for condition in conditions)
 
-        if succeeded > 0 or any(getattr(condition, "type", None) == "Complete" for condition in conditions):
+        if default_success:
             return KubernetesJobStatus(
                 status="succeeded",
                 summary=f"Kubernetes job {job_name} completed successfully.",
                 execution_log=execution_log,
+                reproduction_succeeded=phase_results.get("reproduce", True),
+                patch_applied=phase_results.get("patch-apply", True),
+                verification_succeeded=phase_results.get("verify", True),
             )
         if failed > 0 or any(getattr(condition, "type", None) == "Failed" for condition in conditions):
             return KubernetesJobStatus(
                 status="failed",
                 summary=_build_failure_summary(job_name=job_name, pod=pod),
                 execution_log=execution_log,
+                reproduction_succeeded=phase_results.get("reproduce", False),
+                patch_applied=phase_results.get("patch-apply", False),
+                verification_succeeded=phase_results.get("verify", False),
             )
         if active > 0 or pod is not None:
             return KubernetesJobStatus(
                 status="running",
                 summary=f"Kubernetes job {job_name} is still running.",
                 execution_log=execution_log,
+                reproduction_succeeded=phase_results.get("reproduce", False),
+                patch_applied=phase_results.get("patch-apply", False),
+                verification_succeeded=phase_results.get("verify", False),
             )
         return KubernetesJobStatus(
             status="running",
             summary=f"Kubernetes job {job_name} is pending scheduling.",
             execution_log=execution_log,
+            reproduction_succeeded=phase_results.get("reproduce", False),
+            patch_applied=phase_results.get("patch-apply", False),
+            verification_succeeded=phase_results.get("verify", False),
         )
 
     def _read_pod_log(self, core_api, pod) -> str:
@@ -221,15 +238,11 @@ class KubernetesJobLauncher:
         secret_env: dict[str, str] | None,
         secret_files: dict[str, str] | None,
         authenticated_clone_url: str | None,
+        repository_archive_url: str | None,
         provider_access_secret_arn: str | None,
         provider_access_secret_format: str | None,
     ) -> dict[str, object]:
-        commands = [
-            repo_profile.install_command or "echo 'no install command configured'",
-            *repo_profile.startup_commands,
-            repo_profile.reproduce_command,
-            repo_profile.verify_command,
-        ]
+        container_commands = ["set -euo pipefail", "cd /workspace/repo"]
         volume_mounts = [
             {"name": "workspace", "mountPath": "/workspace"},
             {"name": "tmp", "mountPath": "/tmp"},
@@ -242,7 +255,7 @@ class KubernetesJobLauncher:
         ]
         secret_file_entries = sorted((secret_files or {}).items())
         secret_file_env: list[dict[str, str]] = []
-        init_commands = ["set -euo pipefail"]
+        container_setup_commands = ["set -euo pipefail"]
         mounted_parents: dict[str, str] = {}
         for index, (mount_as, value) in enumerate(secret_file_entries):
             target = PurePosixPath(mount_as)
@@ -257,11 +270,16 @@ class KubernetesJobLauncher:
                 volume_mounts.append({"name": volume_name, "mountPath": parent})
             env_name = f"STIMPACT_SECRET_FILE_{index}"
             secret_file_env.append({"name": env_name, "value": value})
-            init_commands.append(f"mkdir -p {shlex.quote(parent)}")
-            init_commands.append(
+            container_setup_commands.append(f"mkdir -p {shlex.quote(parent)}")
+            container_setup_commands.append(
                 f"printf '%s' \"${env_name}\" > {shlex.quote(str(target))} && chmod 600 {shlex.quote(str(target))}"
             )
-        init_commands.extend(command for command in commands if command)
+        container_commands.extend(container_setup_commands[1:])
+        if repo_profile.install_command:
+            container_commands.append(_phase_command("install", repo_profile.install_command))
+        container_commands.append(_phase_command("reproduce", repo_profile.reproduce_command))
+        container_commands.append(_phase_command("patch-apply", "git apply /workspace/.stimpact/patch.diff"))
+        container_commands.append(_phase_command("verify", repo_profile.verify_command))
         init_containers = [
             {
                 "name": "clone-and-apply",
@@ -276,12 +294,19 @@ class KubernetesJobLauncher:
                             "printf '%s\\n' \"$STIMPACT_PATCH_DIFF_CONTENT\" > /workspace/.stimpact/patch.diff",
                             "rm -rf /workspace/repo",
                             (
-                                "git clone --quiet --depth 1 "
+                                "if [ -n \"$STIMPACT_REPOSITORY_ARCHIVE_URL\" ]; then "
+                                "wget -q -O /workspace/.stimpact/repo.tar.gz \"$STIMPACT_REPOSITORY_ARCHIVE_URL\" && "
+                                "mkdir -p /workspace/repo && "
+                                "tar -xzf /workspace/.stimpact/repo.tar.gz -C /workspace/repo && "
+                                "git init --quiet /workspace/repo; "
+                                "else "
+                                "git clone --quiet "
                                 "--branch \"$STIMPACT_DEFAULT_BRANCH\" "
-                                "\"$STIMPACT_AUTHENTICATED_CLONE_URL\" /workspace/repo"
+                                "\"$STIMPACT_AUTHENTICATED_CLONE_URL\" /workspace/repo && "
+                                "cd /workspace/repo && "
+                                "if [ -n \"$STIMPACT_TARGET_COMMIT_SHA\" ]; then git checkout --quiet \"$STIMPACT_TARGET_COMMIT_SHA\"; fi; "
+                                "fi"
                             ),
-                            "cd /workspace/repo",
-                            "git apply /workspace/.stimpact/patch.diff",
                         ]
                     )
                 ],
@@ -294,7 +319,12 @@ class KubernetesJobLauncher:
                         "name": "STIMPACT_PATCH_DIFF_CONTENT",
                         "value": patch_diff_content or "",
                     },
+                    {
+                        "name": "STIMPACT_REPOSITORY_ARCHIVE_URL",
+                        "value": repository_archive_url or "",
+                    },
                     {"name": "STIMPACT_DEFAULT_BRANCH", "value": snapshot.default_branch},
+                    {"name": "STIMPACT_TARGET_COMMIT_SHA", "value": snapshot.target_commit_sha or ""},
                 ],
                 "volumeMounts": [{"name": "workspace", "mountPath": "/workspace"}],
                 "securityContext": {
@@ -369,7 +399,7 @@ class KubernetesJobLauncher:
                                 "image": repo_profile.base_image or self._base_image,
                                 "workingDir": "/workspace/repo",
                                 "command": ["/bin/sh", "-lc"],
-                                "args": ["\n".join(init_commands)],
+                                "args": ["\n".join(container_commands)],
                                 "env": [
                                     {"name": "STIMPACT_INCIDENT_ID", "value": incident_id},
                                     {"name": "STIMPACT_SANDBOX_RUN_ID", "value": sandbox_run_id},
@@ -504,6 +534,7 @@ class KubernetesSandboxRunner:
         secret_env: dict[str, str] | None,
         secret_files: dict[str, str] | None,
         authenticated_clone_url: str | None,
+        repository_archive_url: str | None,
         provider_access_secret_arn: str | None,
         provider_access_secret_format: str | None,
     ) -> KubernetesSandboxSubmission:
@@ -520,6 +551,7 @@ class KubernetesSandboxRunner:
             secret_env=secret_env,
             secret_files=secret_files,
             authenticated_clone_url=authenticated_clone_url,
+            repository_archive_url=repository_archive_url,
             provider_access_secret_arn=provider_access_secret_arn,
             provider_access_secret_format=provider_access_secret_format,
         )
@@ -565,6 +597,50 @@ def _parse_external_job_id(external_job_id: str) -> tuple[str, str | None]:
         return external_job_id, None
     job_name, uid = external_job_id.split(":", 1)
     return job_name, uid or None
+
+
+def _phase_command(phase: str, command: str) -> str:
+    escaped_phase = shlex.quote(phase)
+    if phase == "reproduce":
+        return (
+            f"printf 'STIMPACT_PHASE_START phase=%s\\n' {escaped_phase}; "
+            f"if {command}; then "
+            f"printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' {escaped_phase}; "
+            "else code=$?; "
+            "if [ \"$code\" -eq 124 ] || [ \"$code\" -eq 126 ] || [ \"$code\" -eq 127 ]; then "
+            f"printf 'STIMPACT_PHASE_RESULT phase=%s status=failed exit_code=%s\\n' {escaped_phase} \"$code\"; "
+            "exit \"$code\"; "
+            "fi; "
+            f"printf 'STIMPACT_PHASE_RESULT phase=%s status=observed exit_code=%s\\n' {escaped_phase} \"$code\"; "
+            "fi"
+        )
+    return (
+        f"printf 'STIMPACT_PHASE_START phase=%s\\n' {escaped_phase}; "
+        f"if {command}; then "
+        f"printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' {escaped_phase}; "
+        "else code=$?; "
+        f"printf 'STIMPACT_PHASE_RESULT phase=%s status=failed exit_code=%s\\n' {escaped_phase} \"$code\"; "
+        "exit \"$code\"; "
+        "fi"
+    )
+
+
+def _extract_phase_results(execution_log: str) -> dict[str, bool]:
+    phase_results: dict[str, bool] = {}
+    for raw_line in execution_log.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("STIMPACT_PHASE_RESULT "):
+            continue
+        fields = dict(
+            part.split("=", 1)
+            for part in line.removeprefix("STIMPACT_PHASE_RESULT ").split()
+            if "=" in part
+        )
+        phase = fields.get("phase")
+        status = fields.get("status")
+        if phase:
+            phase_results[phase] = status in {"passed", "observed"} if phase == "reproduce" else status == "passed"
+    return phase_results
 
 
 def _select_latest_pod(pods: list[object]):

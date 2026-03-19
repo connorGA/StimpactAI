@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenario_id": "header-key",
+  "bug_class": "retry-after-header",
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-header-key-20260319",
+  "run_id": "6f175273-3be3-4dcd-ac24-a474b65369d0",
+  "status": "running",
+  "phase": "verification",
+  "total_steps": 6,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "final_success": false
+}

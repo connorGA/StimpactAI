@@ -33,6 +33,7 @@ from harness.schemas.autonomous import (
     AutonomousRunPhase,
     AutonomousRunStatus,
     AutonomousRunSnapshot,
+    AutonomousVerificationEvidence,
 )
 from harness.schemas.initializer import FeatureSeed
 from harness.schemas.verification import VerificationKind
@@ -124,6 +125,8 @@ class AutonomousRunService:
                 "repo_profile_id": repo_profile.id if repo_profile is not None else None,
                 "execution_mode": request.execution_mode,
                 "approval_status": approval_status,
+                "benchmark_scenario_id": request.benchmark_scenario_id,
+                "benchmark_bug_class": request.benchmark_bug_class,
                 "policy": policy,
                 "loop_state": snapshot.run.loop_state.model_copy(update={"max_steps": request.max_steps}),
             }
@@ -375,8 +378,31 @@ class AutonomousRunService:
         records = await self._autonomous_repository.find_runs_by_patch_run(sandbox_run.patch_run_id)
         for record in records:
             detail = self.get_run_detail_sync(record.incident_id, record.id)
-            updated_run = detail.run.model_copy(update={"sandbox_run_id": sandbox_run.id})
-            if sandbox_run.status is SandboxRunStatus.SUCCEEDED and sandbox_run.verification_succeeded:
+            sandbox_verification = AutonomousVerificationEvidence(
+                source="sandbox",
+                kind="sandbox",
+                summary=sandbox_run.summary,
+                passed=bool(sandbox_run.verification_succeeded),
+                command=sandbox_run.verify_command,
+                recorded_at=sandbox_run.updated_at,
+                metadata={
+                    "sandbox_run_id": sandbox_run.id,
+                    "executor_backend": sandbox_run.executor_backend,
+                    "reproduction_succeeded": sandbox_run.reproduction_succeeded,
+                    "patch_applied": sandbox_run.patch_applied,
+                },
+            )
+            updated_run = detail.run.model_copy(
+                update={
+                    "sandbox_run_id": sandbox_run.id,
+                    "latest_verification": sandbox_verification,
+                }
+            )
+            if (
+                sandbox_run.status is SandboxRunStatus.SUCCEEDED
+                and sandbox_run.verification_succeeded
+                and sandbox_run.patch_applied
+            ):
                 updated_run = updated_run.model_copy(
                     update={
                         "status": AutonomousRunStatus.SUCCEEDED,
@@ -637,6 +663,12 @@ class AutonomousRunService:
             event_limit=50,
             refresh_patch=False,
             patch_run_id=patch_run.id,
+            repository_root=run.repository_root,
+            baseline_commit_sha=patch_run.based_on_commit_sha,
+            repository_branch=diff_result.branch_info.branch_name if diff_result.branch_info is not None else None,
+            repository_upstream_branch=(
+                diff_result.branch_info.upstream_branch if diff_result.branch_info is not None else None
+            ),
         )
         updated_run = run.model_copy(
             update={

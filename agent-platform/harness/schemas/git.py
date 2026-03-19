@@ -15,6 +15,22 @@ class GitAction(StrEnum):
     DIFF_SINCE_CHECKPOINT = "diff_since_checkpoint"
 
 
+class GitCurrentBranchInfoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GitCheckpointRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=128)
+
+
+class GitCheckpointRefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    checkpoint_ref: str | None = Field(default=None, max_length=256)
+
+
 class GitFileChangeStatus(StrEnum):
     ADDED = "added"
     MODIFIED = "modified"

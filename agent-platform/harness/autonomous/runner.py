@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from harness.autonomous.decision_engine import AutonomousDecisionEngine
@@ -14,9 +15,12 @@ from harness.schemas.autonomous import (
     AutonomousEventType,
     AutonomousRepairRunRecord,
     AutonomousRunEvent,
+    AutonomousToolFailure,
+    AutonomousToolFailureClass,
     AutonomousRunPhase,
     AutonomousRunSnapshot,
     AutonomousRunStatus,
+    AutonomousVerificationEvidence,
 )
 from harness.schemas.initializer import FeatureSeed
 from harness.schemas.orchestrator import (
@@ -33,6 +37,8 @@ class AutonomousRepairRunner:
     _RECENT_EVENT_LIMIT = 8
     _RECENT_TOOL_HISTORY_LIMIT = 12
     _MAX_EXCEPTION_RECOVERIES = 2
+    _MAX_CONSECUTIVE_FAILURES = 4
+    _MAX_STAGNATION_BEFORE_RECOVERY = 2
     _EVENT_SUMMARY_LIMIT = 1_000
     _RUN_ERROR_LIMIT = 4_000
 
@@ -352,6 +358,11 @@ class AutonomousRepairRunner:
                             run_id,
                             "Autonomous repair cannot complete without producing a code change relative to the baseline checkpoint.",
                         )
+                    if self._repair_mode_requires_code_change(run) and not self._has_fresh_verification_evidence(run):
+                        return self._fail_run(
+                            run_id,
+                            "Autonomous repair cannot complete without fresh verification evidence from an explicit post-fix verification step.",
+                        )
                     return self._complete_run(run_id)
                 return self._fail_run(
                     run_id,
@@ -383,16 +394,47 @@ class AutonomousRepairRunner:
 
             updated_snapshot = self.get_snapshot(run_id)
             updated_run = updated_snapshot.run
+            verification_evidence = self._build_verification_evidence(decision, invocation_result)
+            failure = None
+            recent_failure_signatures: list[str] = []
+            stagnation_count = 0
+            last_tool_result = self._build_tool_result_payload(invocation_result)
+            if invocation_result.ok:
+                last_tool_result.pop("failure", None)
+            else:
+                failure = self._classify_tool_failure(decision, invocation_result, updated_run.loop_state)
+                recent_failure_signatures = self._append_recent_failure_signature(
+                    updated_run.loop_state.recent_failure_signatures,
+                    failure.signature,
+                )
+                stagnation_count = self._trailing_duplicate_count(recent_failure_signatures)
+                if stagnation_count >= self._MAX_STAGNATION_BEFORE_RECOVERY:
+                    failure = failure.model_copy(
+                        update={
+                            "failure_class": AutonomousToolFailureClass.STAGNATION,
+                            "hint": (
+                                "The runner has repeated the same failed tool pattern. "
+                                "Inspect the failure, change strategy, or recover to the checkpoint before trying again."
+                            ),
+                            "repeated_count": stagnation_count,
+                        }
+                    )
+                else:
+                    failure = failure.model_copy(update={"repeated_count": stagnation_count or 1})
+                last_tool_result["failure"] = failure.model_dump(mode="json")
             loop_updates: dict[str, object] = {
                 "step_index": step_index,
                 "last_tool_name": decision.selected_tool,
                 "last_tool_ok": invocation_result.ok,
-                "last_tool_result": invocation_result.result,
+                "last_tool_result": last_tool_result,
                 "recent_tool_names": self._append_recent_tool_name(
                     updated_run.loop_state.recent_tool_names,
                     decision.selected_tool,
                 ),
                 "consecutive_failures": 0 if invocation_result.ok else updated_run.loop_state.consecutive_failures + 1,
+                "stagnation_count": 0 if invocation_result.ok else stagnation_count,
+                "last_failure": failure,
+                "recent_failure_signatures": recent_failure_signatures,
             }
             if decision.selected_tool == "checkpoint" and invocation_result.ok:
                 checkpoint_ref = str(invocation_result.result.get("checkpoint", {}).get("tag_name") or "")
@@ -401,7 +443,13 @@ class AutonomousRepairRunner:
             updated_loop_state = updated_run.loop_state.model_copy(
                 update=loop_updates,
             )
-            self._persist_run(updated_run.model_copy(update={"loop_state": updated_loop_state, "updated_at": datetime.now(UTC)}))
+            run_updates: dict[str, object] = {
+                "loop_state": updated_loop_state,
+                "updated_at": datetime.now(UTC),
+            }
+            if verification_evidence is not None:
+                run_updates["latest_verification"] = verification_evidence
+            self._persist_run(updated_run.model_copy(update=run_updates))
 
             if invocation_result.feature_state is not None:
                 self._emit_event(
@@ -413,8 +461,29 @@ class AutonomousRepairRunner:
                         "tool_name": invocation_result.tool_name,
                         "feature_status": invocation_result.feature_state.status.value,
                         "completion_blockers": invocation_result.feature_state.completion_blockers,
+                        "verification_evidence": verification_evidence.model_dump(mode="json")
+                        if verification_evidence is not None
+                        else None,
                     },
                 )
+
+            if not invocation_result.ok:
+                current_run = self.get_snapshot(run_id).run
+                recovered = self._recover_from_failed_tool_result(
+                    run_id=run_id,
+                    run=current_run,
+                    decision=decision,
+                    failure=current_run.loop_state.last_failure,
+                )
+                if recovered:
+                    continue
+                if current_run.loop_state.consecutive_failures >= self._max_consecutive_failures(current_run):
+                    failure_message = (
+                        current_run.loop_state.last_failure.message
+                        if current_run.loop_state.last_failure is not None
+                        else f"Repeated tool failures exhausted the retry budget for {decision.selected_tool}."
+                    )
+                    return self._fail_run(run_id, failure_message)
 
         return self._fail_run(run_id, f"Run exceeded the max step budget of {max_steps}.")
 
@@ -650,7 +719,7 @@ class AutonomousRepairRunner:
         if (
             run.coding_session_id is None
             or checkpoint_ref is None
-            or run.loop_state.recovery_attempts >= self._MAX_EXCEPTION_RECOVERIES
+            or run.loop_state.recovery_attempts >= self._max_recovery_attempts(run)
         ):
             return False
 
@@ -675,14 +744,39 @@ class AutonomousRepairRunner:
             update={
                 "recovery_attempts": run.loop_state.recovery_attempts + 1,
                 "consecutive_failures": run.loop_state.consecutive_failures + 1,
+                "stagnation_count": 0,
                 "last_tool_name": decision.selected_tool,
                 "last_tool_ok": False,
                 "last_tool_result": {
+                    "_tool_call": {
+                        "ok": False,
+                        "tool_name": decision.selected_tool,
+                    },
                     "error": error_message,
                     "recovered": recovery_result.ok,
                     "recovery_tool": "discard_failed_work",
                     "checkpoint_ref": checkpoint_ref,
                 },
+                "last_failure": AutonomousToolFailure(
+                    tool_name=decision.selected_tool or "unknown",
+                    failure_class=AutonomousToolFailureClass.EXCEPTION,
+                    message=error_message,
+                    hint="Inspect the exception and adapt the next tool call before retrying.",
+                    signature=self._failure_signature(
+                        decision.selected_tool or "unknown",
+                        AutonomousToolFailureClass.EXCEPTION,
+                        error_message,
+                    ),
+                    repeated_count=1,
+                ),
+                "recent_failure_signatures": self._append_recent_failure_signature(
+                    run.loop_state.recent_failure_signatures,
+                    self._failure_signature(
+                        decision.selected_tool or "unknown",
+                        AutonomousToolFailureClass.EXCEPTION,
+                        error_message,
+                    ),
+                ),
                 "recent_tool_names": self._append_recent_tool_name(
                     self._append_recent_tool_name(run.loop_state.recent_tool_names, decision.selected_tool),
                     "discard_failed_work",
@@ -700,6 +794,224 @@ class AutonomousRepairRunner:
 
     def _repair_mode_requires_code_change(self, run: AutonomousRepairRunRecord) -> bool:
         return run.execution_mode is not AutonomousExecutionMode.INVESTIGATE_ONLY
+
+    def _max_recovery_attempts(self, run: AutonomousRepairRunRecord) -> int:
+        if run.policy.max_retry_budget > 0:
+            return run.policy.max_retry_budget
+        return self._MAX_EXCEPTION_RECOVERIES
+
+    def _max_consecutive_failures(self, run: AutonomousRepairRunRecord) -> int:
+        if run.policy.max_retry_budget > 0:
+            return max(2, run.policy.max_retry_budget)
+        return self._MAX_CONSECUTIVE_FAILURES
+
+    def _recover_from_failed_tool_result(
+        self,
+        *,
+        run_id: str,
+        run: AutonomousRepairRunRecord,
+        decision: AutonomousDecision,
+        failure: AutonomousToolFailure | None,
+    ) -> bool:
+        if failure is None:
+            return False
+        if failure.failure_class not in {
+            AutonomousToolFailureClass.STAGNATION,
+            AutonomousToolFailureClass.TOOL_ERROR,
+        }:
+            return False
+        if run.loop_state.recovery_attempts >= self._max_recovery_attempts(run):
+            return False
+        if failure.failure_class is AutonomousToolFailureClass.TOOL_ERROR and run.loop_state.consecutive_failures < 2:
+            return False
+        checkpoint_ref = run.loop_state.checkpoint_ref
+        if checkpoint_ref is None or run.coding_session_id is None:
+            return False
+
+        recovery_decision = AutonomousDecision(
+            summary="Recover to the baseline checkpoint after repeated tool failure.",
+            rationale="The runner detected a repeated or environment-level tool failure and should restore a clean baseline before retrying.",
+            action=AutonomousDecisionAction.INVOKE_TOOL,
+            selected_tool="discard_failed_work",
+            arguments={"checkpoint_ref": checkpoint_ref},
+            arguments_summary=f"checkpoint_ref={checkpoint_ref}",
+        )
+        try:
+            recovery_result = self._execute_decision_tool(
+                run_id=run_id,
+                run=run,
+                decision=recovery_decision,
+            )
+        except Exception:
+            return False
+        updated_loop_state = run.loop_state.model_copy(
+            update={
+                "recovery_attempts": run.loop_state.recovery_attempts + 1,
+                "stagnation_count": 0,
+                "last_tool_result": {
+                    **(run.loop_state.last_tool_result or {}),
+                    "recovered": recovery_result.ok,
+                    "recovery_tool": "discard_failed_work",
+                    "checkpoint_ref": checkpoint_ref,
+                },
+            }
+        )
+        self._persist_run(run.model_copy(update={"loop_state": updated_loop_state, "updated_at": datetime.now(UTC)}))
+        return recovery_result.ok
+
+    def _build_tool_result_payload(self, invocation_result) -> dict[str, Any]:
+        payload = dict(invocation_result.result)
+        payload["_tool_call"] = {
+            "tool_name": invocation_result.tool_name,
+            "ok": invocation_result.ok,
+            "turn_id": invocation_result.turn_id,
+        }
+        return payload
+
+    def _build_verification_evidence(
+        self,
+        decision: AutonomousDecision,
+        invocation_result,
+    ) -> AutonomousVerificationEvidence | None:
+        if decision.verification_kind is None:
+            return None
+        if invocation_result.ok:
+            summary = (
+                self._extract_success_message(invocation_result.result)
+                or f"{decision.verification_kind} verification passed via {invocation_result.tool_name}."
+            )
+        else:
+            summary = self._extract_failure_message(invocation_result.result, invocation_result.tool_name)
+        return AutonomousVerificationEvidence(
+            source="tool",
+            kind=decision.verification_kind,
+            summary=self._truncate(summary, 1_000),
+            passed=invocation_result.ok,
+            command=str(decision.arguments.get("command")) if isinstance(decision.arguments.get("command"), str) else None,
+            recorded_at=datetime.now(UTC),
+            metadata={
+                "tool_name": invocation_result.tool_name,
+                "turn_id": invocation_result.turn_id,
+                "feature_id": decision.feature_id,
+            },
+        )
+
+    def _classify_tool_failure(
+        self,
+        decision: AutonomousDecision,
+        invocation_result,
+        loop_state,
+    ) -> AutonomousToolFailure:
+        message = self._extract_failure_message(invocation_result.result, invocation_result.tool_name)
+        if decision.verification_kind is not None:
+            failure_class = AutonomousToolFailureClass.VERIFICATION
+        elif self._looks_like_validation_failure(invocation_result.result, message):
+            failure_class = AutonomousToolFailureClass.VALIDATION
+        elif invocation_result.tool_name in {"run_command", "browser_open", "browser_assert_text", "browser_click"}:
+            failure_class = AutonomousToolFailureClass.TOOL_ERROR
+        else:
+            failure_class = AutonomousToolFailureClass.UNKNOWN
+        signature = self._failure_signature(invocation_result.tool_name, failure_class, message)
+        repeated_count = loop_state.recent_failure_signatures.count(signature) + 1
+        return AutonomousToolFailure(
+            tool_name=invocation_result.tool_name,
+            failure_class=failure_class,
+            message=self._truncate(message, 2_000),
+            hint=self._failure_hint_for_class(failure_class),
+            signature=signature,
+            repeated_count=repeated_count,
+            details={
+                "tool_result": invocation_result.result,
+                "verification_kind": decision.verification_kind,
+            },
+        )
+
+    def _looks_like_validation_failure(self, result: dict[str, Any], message: str) -> bool:
+        if "validation error" in message.lower():
+            return True
+        lowered = message.lower()
+        validation_markers = [
+            "field required",
+            "extra inputs",
+            "input should",
+            "missing",
+            "unexpected keyword",
+            "arguments_schema",
+        ]
+        if any(marker in lowered for marker in validation_markers):
+            return True
+        error_payload = result.get("error")
+        if isinstance(error_payload, dict):
+            code = str(error_payload.get("code") or "").lower()
+            if code in {"validation_error", "invalid_request", "no_matching_text"}:
+                return True
+        return False
+
+    def _failure_hint_for_class(self, failure_class: AutonomousToolFailureClass) -> str:
+        if failure_class is AutonomousToolFailureClass.VALIDATION:
+            return "Match the next tool call to the published arguments_schema and usage_notes instead of repeating the same shape."
+        if failure_class is AutonomousToolFailureClass.VERIFICATION:
+            return "Inspect the verification output, then change code or environment before rerunning the verification step."
+        if failure_class is AutonomousToolFailureClass.STAGNATION:
+            return "Change strategy or recover to the checkpoint before retrying the same action."
+        if failure_class is AutonomousToolFailureClass.TOOL_ERROR:
+            return "Inspect the tool output for environment or path issues and recover if the workspace may now be unreliable."
+        return "Inspect the tool output and adapt the next step."
+
+    def _extract_failure_message(self, result: dict[str, Any], tool_name: str) -> str:
+        for key in ("message", "output", "stderr"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        error_payload = result.get("error")
+        if isinstance(error_payload, dict):
+            for key in ("message", "code"):
+                value = error_payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        validation_payload = result.get("validation_failure")
+        if isinstance(validation_payload, dict):
+            message = validation_payload.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        return f"{tool_name} returned ok=false without a detailed error message."
+
+    def _extract_success_message(self, result: dict[str, Any]) -> str | None:
+        for key in ("message", "output", "stdout"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _failure_signature(
+        self,
+        tool_name: str,
+        failure_class: AutonomousToolFailureClass,
+        message: str,
+    ) -> str:
+        normalized = " ".join(message.lower().split())[:240]
+        return f"{tool_name}:{failure_class.value}:{normalized}"
+
+    def _append_recent_failure_signature(self, signatures: list[str], signature: str) -> list[str]:
+        updated = [*signatures, signature]
+        return updated[-8:]
+
+    def _trailing_duplicate_count(self, items: list[str]) -> int:
+        if not items:
+            return 0
+        target = items[-1]
+        count = 0
+        for item in reversed(items):
+            if item != target:
+                break
+            count += 1
+        return count
+
+    def _has_fresh_verification_evidence(self, run: AutonomousRepairRunRecord) -> bool:
+        evidence = run.latest_verification
+        if evidence is None or not evidence.passed:
+            return False
+        return evidence.recorded_at >= run.created_at
 
     def _has_changes_since_checkpoint(self, run: AutonomousRepairRunRecord) -> bool:
         checkpoint_ref = run.loop_state.checkpoint_ref

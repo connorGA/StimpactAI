@@ -21,6 +21,12 @@ class EditFileRequest(BaseModel):
             return data
         if {"start_line", "end_line", "replacement_text"} <= set(data):
             return data
+        if "old_text" in data and "old_string" not in data:
+            normalized = dict(data)
+            normalized["old_string"] = normalized.pop("old_text")
+            if "new_text" in normalized and "new_string" not in normalized:
+                normalized["new_string"] = normalized.pop("new_text")
+            return cls.normalize_legacy_string_replacement_shape(normalized)
         if "new_content" in data:
             file_path = data.get("file_path")
             new_content = data.get("new_content")

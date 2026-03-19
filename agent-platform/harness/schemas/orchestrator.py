@@ -35,6 +35,9 @@ class ToolDescriptor(BaseModel):
     requires_modify_files: bool = False
     requires_verification: bool = False
     requires_git_recovery: bool = False
+    arguments_schema: dict[str, Any] | None = None
+    argument_examples: list[dict[str, Any]] = Field(default_factory=list)
+    usage_notes: list[str] = Field(default_factory=list)
 
 
 class ToolRegistrySnapshot(BaseModel):

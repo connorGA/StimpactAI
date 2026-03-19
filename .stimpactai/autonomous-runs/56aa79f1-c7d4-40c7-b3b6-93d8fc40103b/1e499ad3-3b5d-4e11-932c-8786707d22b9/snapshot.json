@@ -1,0 +1,100 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "1f3aa038-66bb-4eb3-a160-71eb64a8e376",
+    "benchmark_bug_class": "retry-after-parse",
+    "benchmark_scenario_id": "parse-digit",
+    "coding_session_id": "b921f64c-f47a-4aba-ba0b-28f8477d63d6",
+    "created_at": "2026-03-19T19:17:21.243489Z",
+    "execution_mode": "repair_and_propose",
+    "id": "1e499ad3-3b5d-4e11-932c-8786707d22b9",
+    "incident_id": "56aa79f1-c7d4-40c7-b3b6-93d8fc40103b",
+    "initializer_session_id": "2d637122-082d-4ff9-b71d-5fcb808b615e",
+    "last_error": "Kubernetes job stimpact-sandbox-4fab8e2c failed with pod phase Failed.",
+    "latest_verification": {
+      "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+      "kind": "sandbox",
+      "metadata": {
+        "executor_backend": "kubernetes",
+        "patch_applied": false,
+        "reproduction_succeeded": false,
+        "sandbox_run_id": "4fab8e2c-67ea-4c53-9c49-36e4cf7c1cbc"
+      },
+      "passed": false,
+      "recorded_at": "2026-03-19T19:18:58.435686Z",
+      "source": "sandbox",
+      "summary": "Kubernetes job stimpact-sandbox-4fab8e2c failed with pod phase Failed."
+    },
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": "run_command",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "_tool_call": {
+          "ok": true,
+          "tool_name": "run_command",
+          "turn_id": 8
+        },
+        "command": "python3 -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "exit_code": 0,
+        "message": "Command completed successfully.",
+        "ok": true,
+        "output": "stdout:\n.                                                                        [100%]\n1 passed in 0.00s",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\n1 passed in 0.00s\n",
+        "timed_out": false,
+        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-parse-digit-20260319"
+      },
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [
+        "checkpoint",
+        "run_command",
+        "run_command",
+        "run_command",
+        "search_dir",
+        "open_file",
+        "edit_file",
+        "run_command"
+      ],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 7
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry-After parsing dropped the first digit 20260319191714' for service billing-api.",
+    "patch_run_id": "7c8fa405-573b-4231-a8a1-7db2da458132",
+    "phase": "failed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": true,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "blocked",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-parse-digit-20260319",
+    "sandbox_run_id": "4fab8e2c-67ea-4c53-9c49-36e4cf7c1cbc",
+    "status": "failed",
+    "updated_at": "2026-03-19T19:18:47.323035Z"
+  }
+}

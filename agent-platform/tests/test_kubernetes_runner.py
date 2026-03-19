@@ -8,6 +8,7 @@ from sandbox.kubernetes_runner import (
     KubernetesJobMonitor,
     KubernetesJobStatus,
     KubernetesSandboxRunner,
+    _extract_phase_results,
 )
 from services.repository_provider import RepositorySnapshot
 
@@ -81,6 +82,7 @@ def test_kubernetes_job_launcher_builds_manifest() -> None:
         secret_env={"OPENAI_API_KEY": "super-secret"},
         secret_files={"/var/run/secrets/runtime/openai.key": "file-secret"},
         authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        repository_archive_url=None,
         provider_access_secret_arn="arn:aws:secretsmanager:us-west-2:123456789012:secret:provider-access",
         provider_access_secret_format="json",
     )
@@ -131,7 +133,13 @@ def test_kubernetes_job_launcher_builds_manifest() -> None:
     assert init_container["env"][0]["name"] == "STIMPACT_AUTHENTICATED_CLONE_URL"
     assert "/workspace/.stimpact/patch.diff" in init_container["args"][0]
     assert "printf '%s\\n' \"$STIMPACT_PATCH_DIFF_CONTENT\"" in init_container["args"][0]
+    assert "STIMPACT_REPOSITORY_ARCHIVE_URL" in init_container["args"][0]
+    assert "git checkout --quiet \"$STIMPACT_TARGET_COMMIT_SHA\"" in init_container["args"][0]
+    assert "git apply /workspace/.stimpact/patch.diff" not in init_container["args"][0]
     assert "/var/run/secrets/runtime/openai.key" in container["args"][0]
+    assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=observed exit_code=%s\\n' reproduce \"$code\"" in container["args"][0]
+    assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' patch-apply" in container["args"][0]
+    assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' verify" in container["args"][0]
     assert network_policy["spec"]["policyTypes"] == ["Egress"]
     assert network_policy["spec"]["egress"][1]["to"][0]["ipBlock"]["cidr"] == "151.101.0.223/32"
 
@@ -152,6 +160,7 @@ def test_kubernetes_sandbox_runner_returns_submission() -> None:
         secret_env={"OPENAI_API_KEY": "super-secret"},
         secret_files={"/var/run/secrets/runtime/openai.key": "file-secret"},
         authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        repository_archive_url=None,
         provider_access_secret_arn="arn:aws:secretsmanager:us-west-2:123456789012:secret:provider-access",
         provider_access_secret_format="json",
     )
@@ -159,6 +168,46 @@ def test_kubernetes_sandbox_runner_returns_submission() -> None:
     assert submission.external_job_id == "stimpact-sandbox-sandbox-1:uid-123"
     assert submission.manifest["kind"] == "List"
     assert cluster_client.applied_manifest is submission.manifest
+
+
+def test_kubernetes_job_launcher_uses_repository_archive_when_provided() -> None:
+    launcher = KubernetesJobLauncher(
+        namespace="sandbox",
+        base_image="public.ecr.aws/acme/sandbox:latest",
+        service_account_name="sandbox-sa",
+        cluster_client=FakeKubernetesClusterClient(),
+    )
+    manifest = launcher.build_job_manifest(
+        incident_id="incident-1",
+        sandbox_run_id="sandbox-1",
+        snapshot=build_snapshot(),
+        repo_profile=build_repo_profile(),
+        patch_diff_s3_uri="s3://artifact-bucket/sandbox-runs/sandbox-1/patch.diff",
+        patch_diff_content="diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n",
+        network_allowlist=["pypi.org"],
+        network_allowlist_cidrs=["151.101.0.223/32"],
+        secret_env_refs=[],
+        secret_env=None,
+        secret_files=None,
+        authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        repository_archive_url="https://example.com/repo.tar.gz?signature=test",
+        provider_access_secret_arn=None,
+        provider_access_secret_format=None,
+    )
+
+    job = next(item for item in manifest["items"] if item["kind"] == "Job")
+    pod_spec = job["spec"]["template"]["spec"]
+    init_container = pod_spec["initContainers"][0]
+
+    assert "wget -q -O /workspace/.stimpact/repo.tar.gz \"$STIMPACT_REPOSITORY_ARCHIVE_URL\"" in init_container["args"][0]
+    assert "tar -xzf /workspace/.stimpact/repo.tar.gz -C /workspace/repo" in init_container["args"][0]
+    assert "git init --quiet /workspace/repo" in init_container["args"][0]
+    assert any(
+        entry["name"] == "STIMPACT_REPOSITORY_ARCHIVE_URL"
+        and entry["value"] == "https://example.com/repo.tar.gz?signature=test"
+        for entry in init_container["env"]
+        if isinstance(entry, dict)
+    )
 
 
 def test_kubernetes_job_monitor_returns_cluster_status() -> None:
@@ -170,3 +219,21 @@ def test_kubernetes_job_monitor_returns_cluster_status() -> None:
     assert status.status == "succeeded"
     assert status.execution_log == "pod logs"
     assert cluster_client.polled_job_ids == ["stimpact-sandbox-1:uid-123"]
+
+
+def test_extract_phase_results_parses_structured_phase_markers() -> None:
+    results = _extract_phase_results(
+        "\n".join(
+            [
+                "STIMPACT_PHASE_RESULT phase=reproduce status=observed exit_code=1",
+                "STIMPACT_PHASE_RESULT phase=patch-apply status=passed",
+                "STIMPACT_PHASE_RESULT phase=verify status=failed exit_code=1",
+            ]
+        )
+    )
+
+    assert results == {
+        "reproduce": True,
+        "patch-apply": True,
+        "verify": False,
+    }

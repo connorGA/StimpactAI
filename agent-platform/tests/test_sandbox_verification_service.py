@@ -208,6 +208,7 @@ class StubLocalRunner:
         commands,
         incident_id,
         patch_run_id,
+        baseline_ref=None,
         secret_env=None,
         secret_files=None,
     ):
@@ -218,6 +219,7 @@ class StubLocalRunner:
                 "commands": commands,
                 "incident_id": incident_id,
                 "patch_run_id": patch_run_id,
+                "baseline_ref": baseline_ref,
                 "secret_env": secret_env or {},
                 "secret_files": secret_files or {},
             }
@@ -232,11 +234,23 @@ class StubLocalRunner:
 
 
 class StubKubernetesMonitor:
-    def __init__(self, *, status: str, summary: str, execution_log: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        status: str,
+        summary: str,
+        execution_log: str = "",
+        reproduction_succeeded: bool = False,
+        patch_applied: bool = False,
+        verification_succeeded: bool = False,
+    ) -> None:
         self._result = KubernetesJobStatus(
             status=status,
             summary=summary,
             execution_log=execution_log,
+            reproduction_succeeded=reproduction_succeeded,
+            patch_applied=patch_applied,
+            verification_succeeded=verification_succeeded,
         )
         self.calls: list[str] = []
 
@@ -375,6 +389,7 @@ async def test_queue_sandbox_run_uses_explicit_patch_run_id(monkeypatch) -> None
 
     assert sandbox_run.patch_run_id == explicit_patch_run.id
     assert job.payload["patch_run_id"] == explicit_patch_run.id
+    assert job.payload["baseline_commit_sha"] == explicit_patch_run.based_on_commit_sha
     assert patch_generation.calls == []
 
 
@@ -407,6 +422,7 @@ async def test_process_async_job_uses_explicit_patch_run_from_job_payload(monkey
     assert processed_run.patch_run_id == explicit_patch_run.id
     assert processed_run.status is SandboxRunStatus.SUCCEEDED
     assert local_runner.calls[0]["patch_diff"] == explicit_patch_run.unified_diff
+    assert local_runner.calls[0]["baseline_ref"] == explicit_patch_run.based_on_commit_sha
     assert patch_generation.calls == []
 
 
@@ -423,7 +439,15 @@ async def test_poll_kubernetes_runs_updates_terminal_result() -> None:
     kubernetes_monitor = StubKubernetesMonitor(
         status="succeeded",
         summary="Kubernetes verification completed successfully.",
-        execution_log="pod logs",
+        execution_log=(
+            "STIMPACT_PHASE_RESULT phase=reproduce status=observed exit_code=1\n"
+            "STIMPACT_PHASE_RESULT phase=patch-apply status=passed\n"
+            "STIMPACT_PHASE_RESULT phase=verify status=passed\n"
+            "pod logs"
+        ),
+        reproduction_succeeded=True,
+        patch_applied=True,
+        verification_succeeded=True,
     )
     service, _async_jobs, _patch_generation, sandbox_repository = _build_service(
         explicit_patch_run=explicit_patch_run,
@@ -456,6 +480,8 @@ async def test_poll_kubernetes_runs_updates_terminal_result() -> None:
     assert len(updated_runs) == 1
     assert updated_runs[0].id == run.id
     assert updated_runs[0].status is SandboxRunStatus.SUCCEEDED
+    assert updated_runs[0].reproduction_succeeded is True
+    assert updated_runs[0].patch_applied is True
     assert updated_runs[0].verification_succeeded is True
 
 

@@ -109,6 +109,27 @@ def test_edit_request_accepts_legacy_string_replacement_arguments(tmp_path: Path
     assert target.read_text(encoding="utf-8") == "VALUE = 'new'\n"
 
 
+def test_edit_request_accepts_top_level_old_text_and_new_text_arguments(tmp_path: Path) -> None:
+    target = tmp_path / "example.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    editor = GuardedFileEditor()
+
+    response = editor.edit_file(
+        EditFileRequest.model_validate(
+            {
+                "file_path": str(target),
+                "old_text": "VALUE = 'old'\n",
+                "new_text": "VALUE = 'newer'\n",
+            }
+        )
+    )
+
+    assert response.ok is True
+    assert response.start_line == 1
+    assert response.end_line == 1
+    assert target.read_text(encoding="utf-8") == "VALUE = 'newer'\n"
+
+
 def test_edit_request_accepts_whole_file_replacement_arguments(tmp_path: Path) -> None:
     target = tmp_path / "example.py"
     target.write_text("VALUE = 'old'\n", encoding="utf-8")

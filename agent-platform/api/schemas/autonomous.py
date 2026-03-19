@@ -26,6 +26,8 @@ class AutonomousRunCreateRequest(BaseModel):
     require_human_approval: bool | None = None
     allow_writeback: bool | None = None
     max_steps: int = Field(default=12, ge=1, le=50)
+    benchmark_scenario_id: str | None = Field(default=None, max_length=128)
+    benchmark_bug_class: str | None = Field(default=None, max_length=128)
     feature_seeds: list[FeatureSeed] = Field(default_factory=list)
 
 

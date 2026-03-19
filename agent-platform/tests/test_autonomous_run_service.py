@@ -235,6 +235,8 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
         AutonomousRunCreateRequest(
             execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
             repository_root=str(tmp_path),
+            benchmark_scenario_id="status-429",
+            benchmark_bug_class="retry-policy-429",
         ),
     )
 
@@ -242,6 +244,8 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
     assert detail.run.approval_status is AutonomousApprovalStatus.PENDING
     assert detail.run.async_job_id is None
     assert detail.run.policy.requires_human_approval is True
+    assert detail.run.benchmark_scenario_id == "status-429"
+    assert detail.run.benchmark_bug_class == "retry-policy-429"
 
     approved = await service.approve_run(
         "incident-1",

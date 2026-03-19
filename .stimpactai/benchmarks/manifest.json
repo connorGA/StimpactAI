@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "generated_from": "staging_drill",
+  "scenarios": [
+    {
+      "scenario_id": "header-key",
+      "bug_class": "retry-after-header",
+      "error_summary": "Retry-After header handling raised KeyError retry_after_seconds",
+      "request_path": "/retry-after",
+      "response_status_code": 503
+    },
+    {
+      "scenario_id": "parse-digit",
+      "bug_class": "retry-after-parse",
+      "error_summary": "Retry-After parsing dropped the first digit",
+      "request_path": "/retry-after/parse",
+      "response_status_code": 503
+    },
+    {
+      "scenario_id": "status-429",
+      "bug_class": "retry-policy-429",
+      "error_summary": "Retry policy skipped HTTP 429",
+      "request_path": "/retry-policy",
+      "response_status_code": 429
+    }
+  ]
+}

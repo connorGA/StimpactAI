@@ -231,9 +231,7 @@ export default async function Home() {
                       autonomousRuns[incident.id]?.run.last_error ? (
                         <p className="mt-2 text-sm text-[#b4453d]">
                           Latest autonomous repair failed:{" "}
-                          {truncateAutonomousError(
-                            autonomousRuns[incident.id]!.run.last_error,
-                          )}
+                          {truncateAutonomousError(autonomousRuns[incident.id]?.run.last_error ?? "")}
                         </p>
                       ) : null}
                     </div>

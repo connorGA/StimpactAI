@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenario_id": "parse-digit",
+  "bug_class": "retry-after-parse",
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-parse-digit-20260319",
+  "run_id": "6ebeb9e8-fba7-47fc-adc1-da6d2b2252ca",
+  "status": "running",
+  "phase": "verification",
+  "total_steps": null,
+  "recovery_attempts": null,
+  "stagnation_count": null,
+  "fresh_verification_satisfied": null,
+  "failure_class": null,
+  "final_success": false
+}

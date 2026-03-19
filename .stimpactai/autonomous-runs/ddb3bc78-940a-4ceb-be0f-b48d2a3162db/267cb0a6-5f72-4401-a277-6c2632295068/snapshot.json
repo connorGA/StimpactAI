@@ -1,0 +1,100 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "95952be8-d2d8-4391-999a-cbfda97f37ed",
+    "benchmark_bug_class": "retry-policy-429",
+    "benchmark_scenario_id": "status-429",
+    "coding_session_id": "422312ea-d4fc-43b9-a7bb-f676d5f9416b",
+    "created_at": "2026-03-19T19:52:57.001137Z",
+    "execution_mode": "repair_and_propose",
+    "id": "267cb0a6-5f72-4401-a277-6c2632295068",
+    "incident_id": "ddb3bc78-940a-4ceb-be0f-b48d2a3162db",
+    "initializer_session_id": "ad83df16-72ed-41bd-a458-98d3de0ca203",
+    "last_error": null,
+    "latest_verification": {
+      "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+      "kind": "sandbox",
+      "metadata": {
+        "executor_backend": "kubernetes",
+        "patch_applied": true,
+        "reproduction_succeeded": true,
+        "sandbox_run_id": "3ca90696-4454-4463-bfff-3c1dfb1a4d34"
+      },
+      "passed": true,
+      "recorded_at": "2026-03-19T19:54:53.050342Z",
+      "source": "sandbox",
+      "summary": "Kubernetes job stimpact-sandbox-3ca90696 completed successfully."
+    },
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": "run_command",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "_tool_call": {
+          "ok": true,
+          "tool_name": "run_command",
+          "turn_id": 8
+        },
+        "command": "python3 -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "exit_code": 0,
+        "message": "Command completed successfully.",
+        "ok": true,
+        "output": "stdout:\n.                                                                        [100%]\n1 passed in 0.00s",
+        "stderr": "",
+        "stdout": ".                                                                        [100%]\n1 passed in 0.00s\n",
+        "timed_out": false,
+        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-status-429-20260319"
+      },
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [
+        "checkpoint",
+        "run_command",
+        "run_command",
+        "run_command",
+        "search_dir",
+        "open_file",
+        "edit_file",
+        "run_command"
+      ],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 7
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy skipped HTTP 429 20260319195249' for service billing-api.",
+    "patch_run_id": "51e85b00-cddf-42bf-b407-6405ecdcd9ce",
+    "phase": "completed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "ready",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-status-429-20260319",
+    "sandbox_run_id": "3ca90696-4454-4463-bfff-3c1dfb1a4d34",
+    "status": "succeeded",
+    "updated_at": "2026-03-19T19:54:38.205689Z"
+  }
+}

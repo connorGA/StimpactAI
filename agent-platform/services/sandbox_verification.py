@@ -4,6 +4,8 @@ import ipaddress
 import json
 from pathlib import Path
 import socket
+import subprocess
+from urllib.parse import urlparse
 
 from api.core.config import (
     get_repository_root,
@@ -114,6 +116,10 @@ class SandboxVerificationService:
         event_limit: int = 50,
         refresh_patch: bool = False,
         patch_run_id: str | None = None,
+        repository_root: str | None = None,
+        baseline_commit_sha: str | None = None,
+        repository_branch: str | None = None,
+        repository_upstream_branch: str | None = None,
     ) -> tuple[SandboxRunRecord, AsyncJobRecord]:
         incident = await self._incident_repository.get_incident(incident_id)
         if incident is None:
@@ -139,6 +145,10 @@ class SandboxVerificationService:
                 "repo_profile_id": repo_profile.id,
                 "event_limit": event_limit,
                 "refresh_patch": refresh_patch,
+                "repository_root": repository_root or str(self._repository_root),
+                "baseline_commit_sha": baseline_commit_sha or patch_run.based_on_commit_sha,
+                "repository_branch": repository_branch,
+                "repository_upstream_branch": repository_upstream_branch,
             },
             dedupe_key=f"sandbox:{incident.id}:{patch_run.id}",
         )
@@ -222,11 +232,24 @@ class SandboxVerificationService:
                 sandbox_run=sandbox_run,
                 patch_run=patch_run,
                 repo_profile=repo_profile,
+                repository_root=Path(str(job.payload.get("repository_root") or self._repository_root)),
+                repository_branch=(
+                    str(job.payload["repository_branch"]) if job.payload.get("repository_branch") is not None else None
+                ),
+                repository_upstream_branch=(
+                    str(job.payload["repository_upstream_branch"])
+                    if job.payload.get("repository_upstream_branch") is not None
+                    else None
+                ),
             )
         return await self._execute_local_run(
             sandbox_run=sandbox_run,
             patch_diff=patch_run.unified_diff,
             repo_profile=repo_profile,
+            repository_root=Path(str(job.payload.get("repository_root") or self._repository_root)),
+            baseline_commit_sha=str(job.payload["baseline_commit_sha"])
+            if job.payload.get("baseline_commit_sha") is not None
+            else None,
         )
 
     async def poll_kubernetes_runs(self, *, limit: int = 50) -> list[SandboxRunRecord]:
@@ -267,9 +290,9 @@ class SandboxVerificationService:
                 await self._sandbox_repository.update_sandbox_run(
                     run.id,
                     status=terminal_status,
-                    reproduction_succeeded=terminal_status is SandboxRunStatus.SUCCEEDED,
-                    patch_applied=terminal_status is SandboxRunStatus.SUCCEEDED,
-                    verification_succeeded=terminal_status is SandboxRunStatus.SUCCEEDED,
+                    reproduction_succeeded=status.reproduction_succeeded,
+                    patch_applied=status.patch_applied,
+                    verification_succeeded=status.verification_succeeded,
                     summary=status.summary,
                     execution_log=status.execution_log or run.execution_log,
                 )
@@ -282,6 +305,8 @@ class SandboxVerificationService:
         sandbox_run: SandboxRunRecord,
         patch_diff: str,
         repo_profile: RepoProfileRecord,
+        repository_root: Path,
+        baseline_commit_sha: str | None,
     ) -> SandboxRunRecord:
         commands = SandboxCommandSet(
             install_command=repo_profile.install_command,
@@ -291,11 +316,12 @@ class SandboxVerificationService:
         )
         secret_env, secret_files, _secret_refs = await self._resolve_secret_bindings(repo_profile.id)
         execution = self._local_runner.run(
-            repository_root=self._repository_root,
+            repository_root=repository_root,
             patch_diff=patch_diff,
             commands=commands,
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
+            baseline_ref=baseline_commit_sha,
             secret_env=secret_env,
             secret_files=secret_files,
         )
@@ -339,6 +365,9 @@ class SandboxVerificationService:
         sandbox_run: SandboxRunRecord,
         patch_run,
         repo_profile: RepoProfileRecord,
+        repository_root: Path,
+        repository_branch: str | None,
+        repository_upstream_branch: str | None,
     ) -> SandboxRunRecord:
         provider_repository = await self._control_plane_repository.get_provider_repository(
             repo_profile.provider_repository_id
@@ -361,6 +390,19 @@ class SandboxVerificationService:
             repository=provider_repository,
             target_commit_sha=patch_run.based_on_commit_sha,
         )
+        source_branch = self._resolve_repository_branch(
+            repository_branch=repository_branch,
+            repository_upstream_branch=repository_upstream_branch,
+            fallback_branch=snapshot.default_branch,
+        )
+        snapshot = snapshot.__class__(
+            provider=snapshot.provider,
+            clone_url=snapshot.clone_url,
+            owner=snapshot.owner,
+            repository_name=snapshot.repository_name,
+            default_branch=source_branch,
+            target_commit_sha=snapshot.target_commit_sha,
+        )
         provider_access_secret_arn, provider_access_secret_format = (
             await self._provider_integration_service.build_sandbox_access_secret(
                 project_id=repo_profile.project_id,
@@ -377,6 +419,11 @@ class SandboxVerificationService:
             provider_access_secret_format=provider_access_secret_format,
             fallback_clone_url=snapshot.clone_url,
         )
+        repository_archive_url = self._store_repository_archive(
+            repository_root=repository_root,
+            baseline_commit_sha=patch_run.based_on_commit_sha,
+            sandbox_run_id=sandbox_run.id,
+        )
         patch_diff_artifact_uri = await self._store_artifact_content(
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
@@ -387,6 +434,11 @@ class SandboxVerificationService:
             artifact_type=ArtifactType.PATCH_DIFF,
         )
         secret_env, secret_files, secret_refs = await self._resolve_secret_bindings(repo_profile.id)
+        network_allowlist = list(repo_profile.network_allowlist)
+        if repository_archive_url:
+            archive_host = urlparse(repository_archive_url).hostname
+            if archive_host:
+                network_allowlist.append(archive_host)
         submission = self._kubernetes_runner.submit(
             incident_id=sandbox_run.incident_id,
             sandbox_run_id=sandbox_run.id,
@@ -394,12 +446,13 @@ class SandboxVerificationService:
             repo_profile=repo_profile,
             patch_diff_s3_uri=patch_diff_artifact_uri,
             patch_diff_content=patch_run.unified_diff,
-            network_allowlist=repo_profile.network_allowlist,
-            network_allowlist_cidrs=self._resolve_network_allowlist_cidrs(repo_profile.network_allowlist),
+            network_allowlist=network_allowlist,
+            network_allowlist_cidrs=self._resolve_network_allowlist_cidrs(network_allowlist),
             secret_env_refs=[binding.secret_ref.label for binding in secret_refs],
             secret_env=secret_env,
             secret_files=secret_files,
             authenticated_clone_url=authenticated_clone_url,
+            repository_archive_url=repository_archive_url,
             provider_access_secret_arn=provider_access_secret_arn,
             provider_access_secret_format=provider_access_secret_format,
         )
@@ -440,6 +493,64 @@ class SandboxVerificationService:
             external_job_id=submission.external_job_id,
             summary="Sandbox run submitted to Kubernetes and is awaiting completion.",
         )
+
+    def _resolve_repository_branch(
+        self,
+        *,
+        repository_branch: str | None,
+        repository_upstream_branch: str | None,
+        fallback_branch: str,
+    ) -> str:
+        if repository_upstream_branch:
+            normalized = repository_upstream_branch.strip()
+            if normalized:
+                if "/" in normalized:
+                    _remote_name, branch_name = normalized.split("/", 1)
+                    if branch_name:
+                        return branch_name
+                return normalized
+        if repository_branch:
+            normalized = repository_branch.strip()
+            if normalized and normalized != "HEAD":
+                return normalized
+        return fallback_branch
+
+    def _store_repository_archive(
+        self,
+        *,
+        repository_root: Path,
+        baseline_commit_sha: str | None,
+        sandbox_run_id: str,
+    ) -> str | None:
+        if baseline_commit_sha is None:
+            return None
+        root = repository_root.resolve()
+        if not root.exists():
+            return None
+        git_dir = root / ".git"
+        if not git_dir.exists():
+            return None
+        try:
+            archive = subprocess.run(
+                ["git", "archive", "--format=tar.gz", baseline_commit_sha],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        if not archive.stdout:
+            return None
+        object_key = f"sandbox-runs/{sandbox_run_id}/repository-baseline.tar.gz"
+        try:
+            self._artifact_storage.put_bytes(
+                object_key=object_key,
+                content=archive.stdout,
+                content_type="application/gzip",
+            )
+            return self._artifact_storage.generate_download_url(object_key=object_key, expires_in_seconds=3600)
+        except APIError:
+            return None
 
     async def _get_repo_profile_for_project(self, project_id: str) -> RepoProfileRecord:
         repo_profile = await self._control_plane_repository.get_active_repo_profile(project_id)

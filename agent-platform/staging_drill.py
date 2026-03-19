@@ -14,6 +14,7 @@ from urllib import error, parse, request
 @dataclass(frozen=True)
 class DrillScenario:
     name: str
+    bug_class: str
     error_summary: str
     stacktrace: str
     request_path: str
@@ -28,6 +29,7 @@ _BASE_FIXTURE_FILES = {
 _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     "header-key": DrillScenario(
         name="header-key",
+        bug_class="retry-after-header",
         error_summary="Retry-After header handling raised KeyError retry_after_seconds",
         stacktrace=(
             "Traceback:\n"
@@ -52,6 +54,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     ),
     "parse-digit": DrillScenario(
         name="parse-digit",
+        bug_class="retry-after-parse",
         error_summary="Retry-After parsing dropped the first digit",
         stacktrace=(
             "Traceback:\n"
@@ -75,6 +78,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     ),
     "status-429": DrillScenario(
         name="status-429",
+        bug_class="retry-policy-429",
         error_summary="Retry policy skipped HTTP 429",
         stacktrace=(
             "Traceback:\n"
@@ -178,6 +182,51 @@ def _seed_drill_fixture(repository_root: str, *, scenario_name: str = "header-ke
     return scenario
 
 
+def _build_benchmark_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_from": "staging_drill",
+        "scenarios": [
+            {
+                "scenario_id": scenario.name,
+                "bug_class": scenario.bug_class,
+                "error_summary": scenario.error_summary,
+                "request_path": scenario.request_path,
+                "response_status_code": scenario.response_status_code,
+            }
+            for scenario in _DRILL_SCENARIOS.values()
+        ],
+    }
+
+
+def _build_benchmark_result(
+    *,
+    scenario: DrillScenario,
+    final_run_detail: dict[str, Any],
+    repository_root: str | None,
+) -> dict[str, Any]:
+    run = final_run_detail.get("run", {})
+    outcome = final_run_detail.get("outcome", {}) or {}
+    final_success = bool(outcome.get("final_success"))
+    if not outcome:
+        final_success = run.get("status") == "succeeded"
+    return {
+        "schema_version": 1,
+        "scenario_id": scenario.name,
+        "bug_class": scenario.bug_class,
+        "repository_root": repository_root,
+        "run_id": run.get("id"),
+        "status": run.get("status"),
+        "phase": run.get("phase"),
+        "total_steps": outcome.get("total_steps"),
+        "recovery_attempts": outcome.get("recovery_attempts"),
+        "stagnation_count": outcome.get("stagnation_count"),
+        "fresh_verification_satisfied": outcome.get("fresh_verification_satisfied"),
+        "failure_class": outcome.get("failure_class"),
+        "final_success": final_success,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a golden-path staging drill.")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000", help="Backend API base URL.")
@@ -193,6 +242,8 @@ def main() -> None:
     )
     parser.add_argument("--timeout-seconds", type=int, default=900, help="Overall drill timeout.")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="Polling interval in seconds.")
+    parser.add_argument("--write-manifest", default=None, help="Optional path to write the scenario benchmark manifest.")
+    parser.add_argument("--result-path", default=None, help="Optional path to write a machine-readable benchmark result.")
     parser.add_argument(
         "--promote",
         action="store_true",
@@ -201,6 +252,10 @@ def main() -> None:
     args = parser.parse_args()
 
     scenario = _DRILL_SCENARIOS[args.scenario]
+    if args.write_manifest:
+        manifest_path = Path(args.write_manifest)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(_build_benchmark_manifest(), indent=2), encoding="utf-8")
     if args.repository_root:
         _prepare_repository_root(args.repository_root)
         scenario = _seed_drill_fixture(args.repository_root, scenario_name=args.scenario)
@@ -258,6 +313,8 @@ def main() -> None:
     run_payload = {
         "execution_mode": "repair_and_propose",
         "allow_writeback": True,
+        "benchmark_scenario_id": scenario.name,
+        "benchmark_bug_class": scenario.bug_class,
     }
     if args.repository_root:
         run_payload["repository_root"] = args.repository_root
@@ -302,6 +359,15 @@ def main() -> None:
         raise RuntimeError("Timed out waiting for autonomous run completion.")
 
     print(json.dumps({"final_run_detail": latest_detail}, indent=2))
+    if args.result_path:
+        result_path = Path(args.result_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result = _build_benchmark_result(
+            scenario=scenario,
+            final_run_detail=latest_detail,
+            repository_root=args.repository_root,
+        )
+        result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

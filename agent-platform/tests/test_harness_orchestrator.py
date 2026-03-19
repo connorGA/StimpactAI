@@ -52,6 +52,27 @@ def test_orchestrator_initializes_sessions_lists_role_tools_and_restores_state(t
     assert restored.prompt_context.current_objective == "Updated repo objective"
 
 
+def test_orchestrator_exposes_argument_schema_examples_and_usage_notes_for_edit_file(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    orchestrator = HarnessSessionOrchestrator()
+
+    snapshot = orchestrator.initialize_session(
+        OrchestratorSessionStartRequest(
+            role=HarnessAgentRole.CODING,
+            repository_root=str(tmp_path),
+            objective="Inspect tool metadata",
+        )
+    )
+
+    edit_tool = next(tool for tool in snapshot.available_tools.tools if tool.name == "edit_file")
+
+    assert edit_tool.arguments_schema is not None
+    assert edit_tool.arguments_schema["type"] == "object"
+    assert "replacement_text" in edit_tool.arguments_schema["properties"]
+    assert edit_tool.argument_examples
+    assert any("old_text/new_text" in note for note in edit_tool.usage_notes)
+
+
 def test_orchestrator_generates_initializer_output_and_builds_coding_handoff(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
     orchestrator = HarnessSessionOrchestrator()
@@ -202,6 +223,34 @@ def test_orchestrator_normalizes_relative_path_for_edit_file_whole_file_replacem
 
     assert result.ok is True
     assert target.read_text(encoding="utf-8") == "VALUE = 'new'\n"
+
+
+def test_orchestrator_accepts_top_level_old_text_new_text_for_edit_file(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "buggy_retry.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    orchestrator = HarnessSessionOrchestrator()
+    session = orchestrator.initialize_session(
+        OrchestratorSessionStartRequest(
+            role=HarnessAgentRole.CODING,
+            repository_root=str(tmp_path),
+        )
+    )
+
+    result = orchestrator.invoke_tool(
+        session.session.id,
+        ToolInvocationRequest(
+            tool_name="edit_file",
+            arguments={
+                "path": "buggy_retry.py",
+                "old_text": "VALUE = 'old'\n",
+                "new_text": "VALUE = 'updated'\n",
+            },
+        ),
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "VALUE = 'updated'\n"
 
 
 def test_orchestrator_normalizes_relative_path_for_search_dir(tmp_path: Path) -> None:

@@ -259,6 +259,9 @@ async def test_autonomous_repair_runner_can_complete_after_command_verification(
     assert snapshot.run.loop_state.last_tool_name == "run_command"
     assert snapshot.run.loop_state.last_tool_ok is True
     assert snapshot.run.loop_state.step_index >= 2
+    assert snapshot.run.latest_verification is not None
+    assert snapshot.run.latest_verification.kind == VerificationKind.INTEGRATION.value
+    assert snapshot.run.latest_verification.passed is True
     assert "Retry-After" in target.read_text(encoding="utf-8")
     assert any(
         event.event_type is AutonomousEventType.VERIFICATION_STATE_UPDATED
@@ -358,6 +361,51 @@ async def test_autonomous_repair_runner_recovers_from_tool_execution_exception(t
     assert snapshot.run.loop_state.last_tool_result["recovered"] is True
     event_types = [event.event_type for event in snapshot.events]
     assert AutonomousEventType.GIT_CHECKPOINT_CREATED in event_types
+    assert AutonomousEventType.RECOVERY_INVOKED in event_types
+
+
+@pytest.mark.asyncio
+async def test_autonomous_repair_runner_recovers_from_repeated_non_exception_failures(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "buggy_retry.py"
+    target.write_text(
+        "def should_retry(status_code):\n    return status_code >= 500\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_buggy_retry.py"
+    test_file.write_text(
+        (
+            "from buggy_retry import should_retry\n\n"
+            "def test_should_retry_http_429():\n"
+            "    assert should_retry(429) is True\n"
+        ),
+        encoding="utf-8",
+    )
+    _init_git_repo(tmp_path)
+
+    runner = AutonomousRepairRunner()
+    snapshot = await runner.run_until_stop(
+        repository_root=str(tmp_path),
+        objective="Recover from repeated command failures and still fix the bug.",
+        initializer_summary="Prepare coding session.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="retry policy handles 429",
+                description="HTTP 429 should be retried after the repair.",
+                verification_method="Run pytest verification command",
+                required_verification=[VerificationKind.INTEGRATION],
+                browser_required=False,
+            )
+        ],
+        decision_engine=NonExceptionRecoveryDecisionEngine(),
+        max_steps=6,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.SUCCEEDED
+    assert snapshot.run.loop_state.recovery_attempts == 1
+    assert snapshot.run.latest_verification is not None
+    assert snapshot.run.latest_verification.passed is True
+    event_types = [event.event_type for event in snapshot.events]
     assert AutonomousEventType.RECOVERY_INVOKED in event_types
 
 
@@ -552,6 +600,59 @@ class RecoveryDecisionEngine:
             summary="Stop after recovery was exercised.",
             rationale="The test only needs to prove the runner recovered and continued.",
             action=AutonomousDecisionAction.FAIL,
+        )
+
+
+class NonExceptionRecoveryDecisionEngine:
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        step_index = run.loop_state.step_index
+        if step_index in {0, 1} and run.loop_state.recovery_attempts == 0:
+            return AutonomousDecision(
+                summary="Run a failing command to exercise non-exception recovery.",
+                rationale="The runner should treat repeated ok=false command failures as recoverable instead of blindly exhausting the step budget.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={"command": f"{sys.executable} -c \"import sys; sys.exit(1)\""},
+                arguments_summary="Run a failing python command.",
+            )
+        if step_index == 2:
+            return AutonomousDecision(
+                summary="Edit the retry policy to include HTTP 429.",
+                rationale="Once the runner has recovered, it should continue with the actual fix.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="edit_file",
+                arguments={
+                    "relative_path": "buggy_retry.py",
+                    "new_content": (
+                        "def should_retry(status_code):\n"
+                        "    return status_code == 429 or status_code >= 500\n"
+                    ),
+                },
+                arguments_summary="Replace the retry policy implementation.",
+            )
+        if step_index == 3:
+            return AutonomousDecision(
+                summary="Run the integration verification command.",
+                rationale="The fix should be validated explicitly before completion.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={"command": f"{sys.executable} -m pytest test_buggy_retry.py -q"},
+                arguments_summary="Run pytest verification for retry policy.",
+                feature_id="retry-policy-handles-429",
+                verification_kind=VerificationKind.INTEGRATION.value,
+            )
+        return AutonomousDecision(
+            summary="The retry policy verification passed.",
+            rationale="The repaired behavior has explicit fresh verification evidence.",
+            action=AutonomousDecisionAction.COMPLETE,
         )
 
 

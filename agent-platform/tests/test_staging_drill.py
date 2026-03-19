@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from staging_drill import _seed_drill_fixture
+from staging_drill import _build_benchmark_manifest, _build_benchmark_result, _seed_drill_fixture
 
 
 def test_seed_drill_fixture_writes_expected_buggy_retry_files(tmp_path: Path) -> None:
@@ -43,3 +44,38 @@ def test_seed_drill_fixture_supports_alternate_parse_digit_scenario(tmp_path: Pa
         "def test_parse_retry_after_keeps_the_full_number() -> None:\n"
         "    assert parse_retry_after(\"15\") == 15\n"
     )
+
+
+def test_build_benchmark_manifest_includes_status_429_scenario() -> None:
+    manifest = _build_benchmark_manifest()
+
+    scenario_ids = {item["scenario_id"] for item in manifest["scenarios"]}
+    assert manifest["schema_version"] == 1
+    assert "status-429" in scenario_ids
+
+
+def test_build_benchmark_result_uses_outcome_success_flags(tmp_path: Path) -> None:
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="status-429")
+    result = _build_benchmark_result(
+        scenario=scenario,
+        final_run_detail={
+            "run": {
+                "id": "run-1",
+                "status": "succeeded",
+                "phase": "completed",
+            },
+            "outcome": {
+                "total_steps": 4,
+                "recovery_attempts": 1,
+                "stagnation_count": 0,
+                "fresh_verification_satisfied": True,
+                "failure_class": None,
+                "final_success": True,
+            },
+        },
+        repository_root="/tmp/repo",
+    )
+
+    assert json.loads(json.dumps(result))["scenario_id"] == "status-429"
+    assert result["bug_class"] == "retry-policy-429"
+    assert result["final_success"] is True

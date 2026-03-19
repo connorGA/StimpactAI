@@ -14,7 +14,13 @@ from harness.runtime.session import HarnessRuntime, RuntimePrimitives
 from harness.schemas.browser import BrowserAction
 from harness.schemas.context import ContextEvent, ContextEventKind
 from harness.schemas.editing import EditFileRequest, EditFileResponse
-from harness.schemas.git import GitAction, GitActionResult
+from harness.schemas.git import (
+    GitAction,
+    GitActionResult,
+    GitCheckpointRefRequest,
+    GitCheckpointRequest,
+    GitCurrentBranchInfoRequest,
+)
 from harness.schemas.initializer import FeatureCatalog, FeatureRecord
 from harness.schemas.orchestrator import (
     CodingHandoffResult,
@@ -39,6 +45,12 @@ from harness.tools import search_tools
 class _RegisteredTool:
     descriptor: ToolDescriptor
     handler: Callable[[RuntimeSessionRecord, RuntimePrimitives, dict[str, Any]], BaseModel]
+
+
+def _model_arguments_schema(model: type[BaseModel]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    schema.pop("title", None)
+    return schema
 
 
 class HarnessSessionOrchestrator:
@@ -597,6 +609,10 @@ class HarnessSessionOrchestrator:
             requires_modify_files: bool = False,
             requires_verification: bool = False,
             requires_git_recovery: bool = False,
+            request_model: type[BaseModel] | None = None,
+            arguments_schema: dict[str, Any] | None = None,
+            argument_examples: list[dict[str, Any]] | None = None,
+            usage_notes: list[str] | None = None,
         ) -> None:
             registry[name] = _RegisteredTool(
                 descriptor=ToolDescriptor(
@@ -606,6 +622,11 @@ class HarnessSessionOrchestrator:
                     requires_modify_files=requires_modify_files,
                     requires_verification=requires_verification,
                     requires_git_recovery=requires_git_recovery,
+                    arguments_schema=arguments_schema or (
+                        _model_arguments_schema(request_model) if request_model is not None else None
+                    ),
+                    argument_examples=argument_examples or [],
+                    usage_notes=usage_notes or [],
                 ),
                 handler=handler,
             )
@@ -615,36 +636,63 @@ class HarnessSessionOrchestrator:
             "Find files in repository",
             ToolCategory.SEARCH,
             lambda session, primitives, args: search_tools.find_file(FindFileRequest.model_validate(args)),
+            request_model=FindFileRequest,
+            argument_examples=[
+                {"query": "retry", "root_path": "src"},
+            ],
+            usage_notes=[
+                "Use root_path to scope the search. Relative paths are resolved against the repository root.",
+            ],
         )
         register(
             "search_dir",
             "Search text across directory",
             ToolCategory.SEARCH,
             lambda session, primitives, args: search_tools.search_dir(SearchDirRequest.model_validate(args)),
+            request_model=SearchDirRequest,
+            argument_examples=[
+                {"query": "Retry-After", "root_path": "src"},
+            ],
+            usage_notes=[
+                "Use root_path to scope the search. relative_path, directory, path, and scope_path are accepted aliases.",
+            ],
         )
         register(
             "search_file",
             "Search text within file",
             ToolCategory.SEARCH,
             lambda session, primitives, args: search_tools.search_file(SearchFileRequest.model_validate(args)),
+            request_model=SearchFileRequest,
+            argument_examples=[
+                {"query": "Retry-After", "file_path": "src/buggy_retry.py"},
+            ],
         )
         register(
             "open_file",
             "Open file page",
             ToolCategory.VIEW,
             lambda session, primitives, args: primitives.file_viewer.open_file(FileViewRequest.model_validate(args)),
+            request_model=FileViewRequest,
+            argument_examples=[
+                {"file_path": "src/buggy_retry.py"},
+            ],
+            usage_notes=[
+                "relative_path and path are accepted aliases for file_path.",
+            ],
         )
         register(
             "view_next",
             "View next page",
             ToolCategory.VIEW,
             lambda session, primitives, args: primitives.file_viewer.view_next(FileViewRequest.model_validate(args)),
+            request_model=FileViewRequest,
         )
         register(
             "view_prev",
             "View previous page",
             ToolCategory.VIEW,
             lambda session, primitives, args: primitives.file_viewer.view_prev(FileViewRequest.model_validate(args)),
+            request_model=FileViewRequest,
         )
         register(
             "view_at_line",
@@ -653,6 +701,7 @@ class HarnessSessionOrchestrator:
             lambda session, primitives, args: primitives.file_viewer.view_at_line(
                 FileViewAtLineRequest.model_validate(args)
             ),
+            request_model=FileViewAtLineRequest,
         )
         register(
             "view_centered",
@@ -661,6 +710,7 @@ class HarnessSessionOrchestrator:
             lambda session, primitives, args: primitives.file_viewer.view_centered(
                 FileViewAtLineRequest.model_validate(args)
             ),
+            request_model=FileViewAtLineRequest,
         )
         register(
             "edit_file",
@@ -668,6 +718,25 @@ class HarnessSessionOrchestrator:
             ToolCategory.EDIT,
             lambda session, primitives, args: primitives.file_editor.edit_file(EditFileRequest.model_validate(args)),
             requires_modify_files=True,
+            request_model=EditFileRequest,
+            argument_examples=[
+                {
+                    "file_path": "src/buggy_retry.py",
+                    "start_line": 10,
+                    "end_line": 12,
+                    "replacement_text": "def parse_retry_after(value: str) -> int:\n    return int(value)\n",
+                },
+                {
+                    "file_path": "src/buggy_retry.py",
+                    "old_string": "return int(value[1:])\n",
+                    "new_string": "return int(value)\n",
+                },
+            ],
+            usage_notes=[
+                "Prefer exact line-range edits with start_line, end_line, and replacement_text.",
+                "Accepted legacy replacement shapes also include old_string/new_string, old_text/new_text, and whole-file new_content.",
+                "relative_path and path are accepted aliases for file_path.",
+            ],
         )
         register(
             "run_command",
@@ -675,6 +744,14 @@ class HarnessSessionOrchestrator:
             ToolCategory.COMMAND,
             lambda session, primitives, args: primitives.command_runner.run(RunCommandRequest.model_validate(args)),
             requires_verification=True,
+            request_model=RunCommandRequest,
+            argument_examples=[
+                {"command": "python -m pytest tests/test_buggy_retry.py -q"},
+            ],
+            usage_notes=[
+                "working_directory defaults to the repository root when omitted.",
+                "Use verification_kind only for the command that actually verifies the feature.",
+            ],
         )
         register(
             "browser_open",
@@ -682,6 +759,22 @@ class HarnessSessionOrchestrator:
             ToolCategory.BROWSER,
             lambda session, primitives, args: primitives.browser_tools.browser_open(**args),
             requires_verification=True,
+            arguments_schema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "session_id": {"type": ["string", "null"]},
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 120000},
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            argument_examples=[
+                {"url": "http://127.0.0.1:3000"},
+            ],
+            usage_notes=[
+                "Use browser_open before browser assertions. If you omit session_id, the browser tool creates or reuses a session.",
+            ],
         )
         register(
             "browser_click",
@@ -703,6 +796,19 @@ class HarnessSessionOrchestrator:
             ToolCategory.BROWSER,
             lambda session, primitives, args: primitives.browser_tools.browser_wait_for(**args),
             requires_verification=True,
+            arguments_schema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "selector": {"type": ["string", "null"]},
+                    "text": {"type": ["string", "null"]},
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 120000},
+                },
+                "additionalProperties": False,
+            },
+            usage_notes=[
+                "Provide selector or text. session_id can be omitted after a recent browser_open because the orchestrator tracks the latest browser session.",
+            ],
         )
         register(
             "browser_assert_text",
@@ -710,6 +816,24 @@ class HarnessSessionOrchestrator:
             ToolCategory.BROWSER,
             lambda session, primitives, args: primitives.browser_tools.browser_assert_text(**args),
             requires_verification=True,
+            arguments_schema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "selector": {"type": ["string", "null"]},
+                    "exact": {"type": "boolean"},
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 120000},
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            argument_examples=[
+                {"text": "After Fix", "selector": "#result"},
+            ],
+            usage_notes=[
+                "Use this as a browser verification step after browser_open. session_id can be omitted after a recent browser_open.",
+            ],
         )
         register(
             "browser_snapshot_dom",
@@ -773,6 +897,17 @@ class HarnessSessionOrchestrator:
             ToolCategory.BROWSER,
             lambda session, primitives, args: primitives.browser_tools.browser_close(**args),
             requires_verification=True,
+            arguments_schema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 120000},
+                },
+                "additionalProperties": False,
+            },
+            usage_notes=[
+                "session_id can be omitted after a recent browser_open because the orchestrator tracks the latest browser session.",
+            ],
         )
         register(
             GitAction.CURRENT_BRANCH_INFO.value,
@@ -782,6 +917,10 @@ class HarnessSessionOrchestrator:
                 repository_root=session.repository_root
             ),
             requires_git_recovery=True,
+            request_model=GitCurrentBranchInfoRequest,
+            usage_notes=[
+                "This tool takes no arguments.",
+            ],
         )
         register(
             GitAction.CHECKPOINT.value,
@@ -792,6 +931,10 @@ class HarnessSessionOrchestrator:
                 label=str(args["label"]),
             ),
             requires_git_recovery=True,
+            request_model=GitCheckpointRequest,
+            argument_examples=[
+                {"label": "autonomous-baseline"},
+            ],
         )
         register(
             GitAction.REVERT_TO_CHECKPOINT.value,
@@ -802,6 +945,7 @@ class HarnessSessionOrchestrator:
                 checkpoint_ref=args.get("checkpoint_ref"),
             ),
             requires_git_recovery=True,
+            request_model=GitCheckpointRefRequest,
         )
         register(
             GitAction.RESET_FAILED_ATTEMPT.value,
@@ -812,6 +956,7 @@ class HarnessSessionOrchestrator:
                 checkpoint_ref=args.get("checkpoint_ref"),
             ),
             requires_git_recovery=True,
+            request_model=GitCheckpointRefRequest,
         )
         register(
             GitAction.DISCARD_FAILED_WORK.value,
@@ -822,6 +967,10 @@ class HarnessSessionOrchestrator:
                 checkpoint_ref=args.get("checkpoint_ref"),
             ),
             requires_git_recovery=True,
+            request_model=GitCheckpointRefRequest,
+            argument_examples=[
+                {"checkpoint_ref": "stimpact-checkpoint/autonomous-baseline"},
+            ],
         )
         register(
             GitAction.DIFF_SINCE_CHECKPOINT.value,
@@ -832,5 +981,6 @@ class HarnessSessionOrchestrator:
                 checkpoint_ref=args.get("checkpoint_ref"),
             ),
             requires_git_recovery=True,
+            request_model=GitCheckpointRefRequest,
         )
         return registry

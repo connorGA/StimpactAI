@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenario_id": "status-429",
+  "bug_class": "retry-policy-429",
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-status-429-20260319",
+  "run_id": "5925631a-11a6-456c-a3a2-4ec2acebdc2d",
+  "status": "running",
+  "phase": "verification",
+  "total_steps": 8,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "final_success": false
+}
