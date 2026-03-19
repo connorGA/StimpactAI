@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scenario_id": "cascading-retry",
+  "bug_class": "cascading-retry-bugs",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "multi-file",
+    "iterative-repair",
+    "multiple-failures"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-cascading-retry-20260319",
+  "run_id": "d93a02e2-22f8-46f2-aec7-7665854b1803",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 9,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "final_success": true
+}

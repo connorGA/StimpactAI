@@ -15,10 +15,12 @@ from urllib import error, parse, request
 class DrillScenario:
     name: str
     bug_class: str
+    difficulty: str
     error_summary: str
     stacktrace: str
     request_path: str
     response_status_code: int
+    challenge_tags: tuple[str, ...]
     fixture_files: dict[str, str]
 
 
@@ -30,6 +32,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     "header-key": DrillScenario(
         name="header-key",
         bug_class="retry-after-header",
+        difficulty="easy",
         error_summary="Retry-After header handling raised KeyError retry_after_seconds",
         stacktrace=(
             "Traceback:\n"
@@ -38,6 +41,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
         ),
         request_path="/retry-after",
         response_status_code=503,
+        challenge_tags=("single-file", "direct-stacktrace"),
         fixture_files={
             "staging_drill_fixture/buggy_retry.py": (
                 "def read_retry_after(headers: dict[str, str]) -> int:\n"
@@ -55,6 +59,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     "parse-digit": DrillScenario(
         name="parse-digit",
         bug_class="retry-after-parse",
+        difficulty="easy",
         error_summary="Retry-After parsing dropped the first digit",
         stacktrace=(
             "Traceback:\n"
@@ -64,6 +69,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
         ),
         request_path="/retry-after/parse",
         response_status_code=503,
+        challenge_tags=("single-file", "deterministic-test"),
         fixture_files={
             "staging_drill_fixture/buggy_retry.py": (
                 "def parse_retry_after(value: str) -> int:\n"
@@ -79,6 +85,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     "status-429": DrillScenario(
         name="status-429",
         bug_class="retry-policy-429",
+        difficulty="easy",
         error_summary="Retry policy skipped HTTP 429",
         stacktrace=(
             "Traceback:\n"
@@ -88,6 +95,7 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
         ),
         request_path="/retry-policy",
         response_status_code=429,
+        challenge_tags=("single-file", "policy-logic"),
         fixture_files={
             "staging_drill_fixture/buggy_retry.py": (
                 "def should_retry(status_code: int) -> bool:\n"
@@ -97,6 +105,186 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
                 "from staging_drill_fixture.buggy_retry import should_retry\n\n\n"
                 "def test_should_retry_http_429() -> None:\n"
                 "    assert should_retry(429) is True\n"
+            ),
+        },
+    ),
+    "imported-header-constant": DrillScenario(
+        name="imported-header-constant",
+        bug_class="imported-header-constant",
+        difficulty="medium",
+        error_summary="Retry-After lookup used a stale imported constant",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/buggy_retry.py", line 5, in read_retry_after\n'
+            "KeyError: 'retry_after_seconds'"
+        ),
+        request_path="/retry-after/imported-constant",
+        response_status_code=503,
+        challenge_tags=("multi-file", "imported-helper", "indirect-root-cause"),
+        fixture_files={
+            "staging_drill_fixture/constants.py": 'RETRY_AFTER_HEADER = "retry_after_seconds"\n',
+            "staging_drill_fixture/buggy_retry.py": (
+                "from staging_drill_fixture.constants import RETRY_AFTER_HEADER\n\n\n"
+                "def read_retry_after(headers: dict[str, str]) -> int:\n"
+                "    return int(headers[RETRY_AFTER_HEADER])\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.buggy_retry import read_retry_after\n\n\n"
+                "def test_read_retry_after_uses_standard_header() -> None:\n"
+                '    headers = {"Retry-After": "7"}\n'
+                "    assert read_retry_after(headers) == 7\n"
+            ),
+        },
+    ),
+    "cascading-retry": DrillScenario(
+        name="cascading-retry",
+        bug_class="cascading-retry-bugs",
+        difficulty="hard",
+        error_summary="Retry pipeline still failed after the first apparent fix",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/buggy_retry.py", line 5, in read_retry_after\n'
+            "KeyError: 'retry_after_seconds'"
+        ),
+        request_path="/retry-pipeline/cascading",
+        response_status_code=503,
+        challenge_tags=("multi-file", "iterative-repair", "multiple-failures"),
+        fixture_files={
+            "staging_drill_fixture/constants.py": 'RETRY_AFTER_HEADER = "retry_after_seconds"\n',
+            "staging_drill_fixture/policy.py": (
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code >= 500\n"
+            ),
+            "staging_drill_fixture/buggy_retry.py": (
+                "from staging_drill_fixture.constants import RETRY_AFTER_HEADER\n"
+                "from staging_drill_fixture.policy import should_retry\n\n\n"
+                "def read_retry_after(headers: dict[str, str]) -> int:\n"
+                "    return int(headers[RETRY_AFTER_HEADER])\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.buggy_retry import read_retry_after, should_retry\n\n\n"
+                "def test_read_retry_after_uses_standard_header() -> None:\n"
+                '    headers = {"Retry-After": "7"}\n'
+                "    assert read_retry_after(headers) == 7\n\n\n"
+                "def test_should_retry_http_429() -> None:\n"
+                "    assert should_retry(429) is True\n\n\n"
+                "def test_should_retry_http_500_still_retries() -> None:\n"
+                "    assert should_retry(500) is True\n"
+            ),
+        },
+    ),
+    "misleading-stacktrace": DrillScenario(
+        name="misleading-stacktrace",
+        bug_class="misleading-stacktrace-helper",
+        difficulty="hard",
+        error_summary="Retry handler failed in the request wrapper",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/api.py", line 5, in handle_retry_after\n'
+            "KeyError: 'retry_after_seconds'"
+        ),
+        request_path="/retry-after/misleading",
+        response_status_code=503,
+        challenge_tags=("misleading-stacktrace", "multi-file", "wrapper-indirection"),
+        fixture_files={
+            "staging_drill_fixture/constants.py": 'RETRY_AFTER_HEADER = "Retry-After"\n',
+            "staging_drill_fixture/headers.py": (
+                "from staging_drill_fixture.constants import RETRY_AFTER_HEADER\n\n\n"
+                "def read_retry_after(headers: dict[str, str]) -> int:\n"
+                '    return int(headers["retry_after_seconds"])\n'
+            ),
+            "staging_drill_fixture/api.py": (
+                "from staging_drill_fixture.headers import read_retry_after\n\n\n"
+                "def handle_retry_after(headers: dict[str, str]) -> int:\n"
+                "    return read_retry_after(headers)\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.api import handle_retry_after\n\n\n"
+                "def test_handle_retry_after_uses_standard_header() -> None:\n"
+                '    headers = {"Retry-After": "9"}\n'
+                "    assert handle_retry_after(headers) == 9\n"
+            ),
+        },
+    ),
+    "wide-search-space": DrillScenario(
+        name="wide-search-space",
+        bug_class="wide-search-space-policy",
+        difficulty="hard",
+        error_summary="Retry policy lookup skipped HTTP 429 in the service layer",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/service.py", line 5, in should_retry_request\n'
+            "AssertionError: expected HTTP 429 to be retried"
+        ),
+        request_path="/retry-policy/wide-search",
+        response_status_code=429,
+        challenge_tags=("wide-search-space", "multi-file", "decoy-modules"),
+        fixture_files={
+            "staging_drill_fixture/legacy_policy.py": (
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code in {500, 502, 503, 504}\n"
+            ),
+            "staging_drill_fixture/retry_matrix.py": (
+                "TRANSIENT_STATUSES = {429, 500, 502, 503, 504}\n"
+            ),
+            "staging_drill_fixture/selectors.py": (
+                "from staging_drill_fixture.retry_matrix import TRANSIENT_STATUSES\n\n\n"
+                "def retryable_statuses() -> set[int]:\n"
+                "    return {status for status in TRANSIENT_STATUSES if status != 429}\n"
+            ),
+            "staging_drill_fixture/policy.py": (
+                "from staging_drill_fixture.selectors import retryable_statuses\n\n\n"
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code in retryable_statuses()\n"
+            ),
+            "staging_drill_fixture/service.py": (
+                "from staging_drill_fixture.policy import should_retry\n\n\n"
+                "def should_retry_request(status_code: int) -> bool:\n"
+                "    return should_retry(status_code)\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.service import should_retry_request\n\n\n"
+                "def test_should_retry_http_429() -> None:\n"
+                "    assert should_retry_request(429) is True\n\n\n"
+                "def test_should_retry_http_500() -> None:\n"
+                "    assert should_retry_request(500) is True\n"
+            ),
+        },
+    ),
+    "misleading-cascade": DrillScenario(
+        name="misleading-cascade",
+        bug_class="misleading-cascade-bugs",
+        difficulty="very-hard",
+        error_summary="Retry API still failed after the first apparent fix",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/api.py", line 6, in build_retry_response\n'
+            "KeyError: 'retry_after_seconds'"
+        ),
+        request_path="/retry-pipeline/misleading-cascade",
+        response_status_code=503,
+        challenge_tags=("misleading-stacktrace", "iterative-repair", "multi-file", "multiple-failures"),
+        fixture_files={
+            "staging_drill_fixture/constants.py": 'RETRY_AFTER_HEADER = "retry_after_seconds"\n',
+            "staging_drill_fixture/policy.py": (
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code >= 500\n"
+            ),
+            "staging_drill_fixture/api.py": (
+                "from staging_drill_fixture.constants import RETRY_AFTER_HEADER\n"
+                "from staging_drill_fixture.policy import should_retry\n\n\n"
+                "def build_retry_response(headers: dict[str, str], status_code: int) -> tuple[int, bool]:\n"
+                "    retry_after = int(headers[RETRY_AFTER_HEADER])\n"
+                "    return retry_after, should_retry(status_code)\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.api import build_retry_response\n\n\n"
+                "def test_build_retry_response_uses_standard_header() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "11"}, 500)[0] == 11\n\n\n'
+                "def test_build_retry_response_retries_http_429() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "11"}, 429)[1] is True\n\n\n'
+                "def test_build_retry_response_still_retries_http_500() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "11"}, 500)[1] is True\n'
             ),
         },
     ),
@@ -190,9 +378,11 @@ def _build_benchmark_manifest() -> dict[str, Any]:
             {
                 "scenario_id": scenario.name,
                 "bug_class": scenario.bug_class,
+                "difficulty": scenario.difficulty,
                 "error_summary": scenario.error_summary,
                 "request_path": scenario.request_path,
                 "response_status_code": scenario.response_status_code,
+                "challenge_tags": list(scenario.challenge_tags),
             }
             for scenario in _DRILL_SCENARIOS.values()
         ],
@@ -214,6 +404,8 @@ def _build_benchmark_result(
         "schema_version": 1,
         "scenario_id": scenario.name,
         "bug_class": scenario.bug_class,
+        "difficulty": scenario.difficulty,
+        "challenge_tags": list(scenario.challenge_tags),
         "repository_root": repository_root,
         "run_id": run.get("id"),
         "status": run.get("status"),
@@ -227,13 +419,98 @@ def _build_benchmark_result(
     }
 
 
+def _load_latest_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
+    directory = Path(results_dir).expanduser().resolve()
+    if not directory.exists():
+        raise RuntimeError(f"Benchmark results directory does not exist: {directory}")
+    latest_by_scenario: dict[str, tuple[float, dict[str, Any], Path]] = {}
+    for path in directory.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        scenario_id = payload.get("scenario_id")
+        if not isinstance(scenario_id, str) or not scenario_id:
+            continue
+        stat = path.stat()
+        current = latest_by_scenario.get(scenario_id)
+        if current is None or stat.st_mtime > current[0]:
+            latest_by_scenario[scenario_id] = (stat.st_mtime, payload, path)
+
+    results: list[dict[str, Any]] = []
+    for _mtime, payload, path in sorted(latest_by_scenario.values(), key=lambda item: item[2].name):
+        normalized = dict(payload)
+        scenario_id = str(normalized["scenario_id"])
+        scenario = _DRILL_SCENARIOS.get(scenario_id)
+        if scenario is not None:
+            normalized.setdefault("bug_class", scenario.bug_class)
+            normalized.setdefault("difficulty", scenario.difficulty)
+            normalized.setdefault("challenge_tags", list(scenario.challenge_tags))
+        normalized["source_file"] = str(path)
+        results.append(normalized)
+    return results
+
+
+def _build_benchmark_summary(results_dir: str) -> dict[str, Any]:
+    latest_results = _load_latest_benchmark_results(results_dir)
+    succeeded = [result for result in latest_results if bool(result.get("final_success"))]
+    by_difficulty: dict[str, dict[str, Any]] = {}
+    by_tag: dict[str, dict[str, Any]] = {}
+
+    for result in latest_results:
+        difficulty = str(result.get("difficulty") or "unknown")
+        bucket = by_difficulty.setdefault(
+            difficulty,
+            {"difficulty": difficulty, "total": 0, "successful": 0, "average_steps": 0.0},
+        )
+        bucket["total"] += 1
+        bucket["successful"] += int(bool(result.get("final_success")))
+        total_steps = result.get("total_steps")
+        if isinstance(total_steps, int):
+            bucket["average_steps"] += float(total_steps)
+
+        for tag in result.get("challenge_tags", []):
+            label = str(tag)
+            tag_bucket = by_tag.setdefault(label, {"tag": label, "total": 0, "successful": 0})
+            tag_bucket["total"] += 1
+            tag_bucket["successful"] += int(bool(result.get("final_success")))
+
+    for bucket in by_difficulty.values():
+        total = int(bucket["total"])
+        bucket["success_rate"] = (bucket["successful"] / total) if total else 0.0
+        bucket["average_steps"] = (bucket["average_steps"] / total) if total else 0.0
+
+    for bucket in by_tag.values():
+        total = int(bucket["total"])
+        bucket["success_rate"] = (bucket["successful"] / total) if total else 0.0
+
+    return {
+        "schema_version": 1,
+        "generated_from": "staging_drill_summary",
+        "results_directory": str(Path(results_dir).expanduser().resolve()),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "scenario_count": len(latest_results),
+        "successful_scenarios": len(succeeded),
+        "success_rate": (len(succeeded) / len(latest_results)) if latest_results else 0.0,
+        "by_difficulty": sorted(by_difficulty.values(), key=lambda item: str(item["difficulty"])),
+        "by_challenge_tag": sorted(by_tag.values(), key=lambda item: str(item["tag"])),
+        "scenarios": latest_results,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a golden-path staging drill.")
     parser.add_argument("--api-url", default="http://127.0.0.1:8000", help="Backend API base URL.")
-    parser.add_argument("--project-id", required=True, help="Project id used for telemetry and incident lookup.")
+    parser.add_argument("--project-id", required=False, help="Project id used for telemetry and incident lookup.")
     parser.add_argument("--service", default="billing-api", help="Service name for the synthetic telemetry.")
     parser.add_argument("--environment", default="staging", help="Telemetry environment.")
     parser.add_argument("--repository-root", default=None, help="Repository root path for the autonomous run.")
+    parser.add_argument(
+        "--summarize-results-dir",
+        default=None,
+        help="Optional benchmark results directory to summarize instead of running a live drill.",
+    )
+    parser.add_argument("--summary-path", default=None, help="Optional path to write a benchmark summary JSON report.")
     parser.add_argument(
         "--scenario",
         choices=sorted(_DRILL_SCENARIOS),
@@ -250,6 +527,18 @@ def main() -> None:
         help="Promote the run after sandbox verification succeeds.",
     )
     args = parser.parse_args()
+
+    if args.summarize_results_dir:
+        summary = _build_benchmark_summary(args.summarize_results_dir)
+        print(json.dumps(summary, indent=2))
+        if args.summary_path:
+            summary_path = Path(args.summary_path)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return
+
+    if not args.project_id:
+        raise RuntimeError("--project-id is required unless --summarize-results-dir is provided.")
 
     scenario = _DRILL_SCENARIOS[args.scenario]
     if args.write_manifest:

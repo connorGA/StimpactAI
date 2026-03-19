@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "generated_from": "staging_drill_summary",
+  "results_directory": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks",
+  "generated_at": "2026-03-19T20:23:10.867745+00:00",
+  "scenario_count": 8,
+  "successful_scenarios": 8,
+  "success_rate": 1.0,
+  "by_difficulty": [
+    {
+      "difficulty": "easy",
+      "total": 3,
+      "successful": 3,
+      "average_steps": 6.0,
+      "success_rate": 1.0
+    },
+    {
+      "difficulty": "hard",
+      "total": 3,
+      "successful": 3,
+      "average_steps": 8.0,
+      "success_rate": 1.0
+    },
+    {
+      "difficulty": "medium",
+      "total": 1,
+      "successful": 1,
+      "average_steps": 6.0,
+      "success_rate": 1.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total": 1,
+      "successful": 1,
+      "average_steps": 9.0,
+      "success_rate": 1.0
+    }
+  ],
+  "by_challenge_tag": [
+    {
+      "tag": "decoy-modules",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "deterministic-test",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "direct-stacktrace",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "imported-helper",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "indirect-root-cause",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multi-file",
+      "total": 5,
+      "successful": 5,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "policy-logic",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "single-file",
+      "total": 3,
+      "successful": 3,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wide-search-space",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wrapper-indirection",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    }
+  ],
+  "scenarios": [
+    {
+      "schema_version": 1,
+      "scenario_id": "cascading-retry",
+      "bug_class": "cascading-retry-bugs",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "multi-file",
+        "iterative-repair",
+        "multiple-failures"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-cascading-retry-20260319",
+      "run_id": "d93a02e2-22f8-46f2-aec7-7665854b1803",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 9,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/cascading-retry.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "header-key",
+      "bug_class": "retry-after-header",
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-header-key-20260319",
+      "run_id": "64d1b3c2-30fa-40c6-9b30-a680d6f269e2",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 6,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "difficulty": "easy",
+      "challenge_tags": [
+        "single-file",
+        "direct-stacktrace"
+      ],
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/header-key-reproduce-fix.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "imported-header-constant",
+      "bug_class": "imported-header-constant",
+      "difficulty": "medium",
+      "challenge_tags": [
+        "multi-file",
+        "imported-helper",
+        "indirect-root-cause"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-imported-header-constant-20260319",
+      "run_id": "9f07df20-4f3c-4bfa-a932-2e1801f3a561",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 6,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/imported-header-constant.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "misleading-cascade",
+      "bug_class": "misleading-cascade-bugs",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "misleading-stacktrace",
+        "iterative-repair",
+        "multi-file",
+        "multiple-failures"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-misleading-cascade-20260319",
+      "run_id": "a0ec7c3d-0a89-4278-a511-c1b4950cb2d0",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 9,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/misleading-cascade.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "misleading-stacktrace",
+      "bug_class": "misleading-stacktrace-helper",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "misleading-stacktrace",
+        "multi-file",
+        "wrapper-indirection"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-misleading-stacktrace-20260319",
+      "run_id": "fa22429d-2f8b-417d-88b9-70fbb980c61a",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 6,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/misleading-stacktrace.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "parse-digit",
+      "bug_class": "retry-after-parse",
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-parse-digit-20260319",
+      "run_id": "e24b87a2-04f2-492f-95e4-6e8d76b4e8eb",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 5,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "difficulty": "easy",
+      "challenge_tags": [
+        "single-file",
+        "deterministic-test"
+      ],
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/parse-digit-reproduce-fix.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "status-429",
+      "bug_class": "retry-policy-429",
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-status-429-20260319",
+      "run_id": "267cb0a6-5f72-4401-a277-6c2632295068",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 7,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "difficulty": "easy",
+      "challenge_tags": [
+        "single-file",
+        "policy-logic"
+      ],
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/status-429-reproduce-fix.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "wide-search-space",
+      "bug_class": "wide-search-space-policy",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "wide-search-space",
+        "multi-file",
+        "decoy-modules"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-wide-search-space-20260319",
+      "run_id": "b14944db-c7fa-4ecf-9f13-0817d3557232",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 9,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/wide-search-space.json"
+    }
+  ]
+}

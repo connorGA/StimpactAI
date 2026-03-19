@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wide-search-space",
+  "bug_class": "wide-search-space-policy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "wide-search-space",
+    "multi-file",
+    "decoy-modules"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-wide-search-space-20260319",
+  "run_id": "b14944db-c7fa-4ecf-9f13-0817d3557232",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 9,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "final_success": true
+}

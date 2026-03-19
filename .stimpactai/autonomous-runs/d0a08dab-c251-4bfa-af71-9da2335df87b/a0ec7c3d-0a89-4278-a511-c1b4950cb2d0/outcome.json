@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "misleading-cascade-bugs",
+  "benchmark_scenario_id": "misleading-cascade",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-19T20:22:48.291181Z",
+  "created_at": "2026-03-19T20:21:01.484472Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "d0a08dab-c251-4bfa-af71-9da2335df87b",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "8ee47d77-edb9-4f0d-90e6-2e0af4a78d2a"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-19T20:23:01.623387Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-8ee47d77 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry API still failed after the first apparent fix 20260319202054' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-misleading-cascade-20260319",
+  "run_id": "a0ec7c3d-0a89-4278-a511-c1b4950cb2d0",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

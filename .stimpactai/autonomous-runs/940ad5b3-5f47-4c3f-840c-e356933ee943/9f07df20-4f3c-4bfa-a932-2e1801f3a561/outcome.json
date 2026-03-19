@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "imported-header-constant",
+  "benchmark_scenario_id": "imported-header-constant",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-19T20:06:20.510846Z",
+  "created_at": "2026-03-19T20:05:55.681681Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "940ad5b3-5f47-4c3f-840c-e356933ee943",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "7c5a35c1-663d-4076-9f49-c79b4bca015d"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-19T20:06:38.250019Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-7c5a35c1 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry-After lookup used a stale imported constant 20260319200548' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-imported-header-constant-20260319",
+  "run_id": "9f07df20-4f3c-4bfa-a932-2e1801f3a561",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 6,
+  "total_tool_calls": 0
+}
