@@ -1,0 +1,193 @@
+{
+  "events": [
+    {
+      "created_at": "2026-03-20T05:41:44.243633Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": null,
+        "feature_id": null,
+        "rationale": "The runner must load the repo profile, generate initializer artifacts, and hand off a coding-ready context.",
+        "selected_tool": null,
+        "summary": "Bootstrap initializer and coding sessions before autonomous tool selection begins.",
+        "verification_kind": null
+      },
+      "event_type": "run_started",
+      "id": "d3ec1949-5d2f-44a3-95b3-d26bd67b79a9",
+      "payload": {
+        "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320054138' for service billing-api.",
+        "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320a-wide-search-space-20260319223134"
+      },
+      "phase": "initializer",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Autonomous repair run started."
+    },
+    {
+      "created_at": "2026-03-20T05:41:44.245768Z",
+      "decision": null,
+      "event_type": "session_initialized",
+      "id": "bcfe778d-0048-42c9-9325-dd1aef8f80d6",
+      "payload": {
+        "role": "initializer",
+        "session_id": "e11755b2-f746-4fa3-b4a2-a72f5ed0b939"
+      },
+      "phase": "initializer",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Initializer session created."
+    },
+    {
+      "created_at": "2026-03-20T05:41:44.246806Z",
+      "decision": null,
+      "event_type": "initializer_output_generated",
+      "id": "5070470c-a522-429f-a048-f863203e747e",
+      "payload": {
+        "feature_count": 1,
+        "recommended_commands": [
+          "npm run build",
+          "npm test",
+          "npm run dev"
+        ]
+      },
+      "phase": "initializer",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Initializer output generated."
+    },
+    {
+      "created_at": "2026-03-20T05:41:44.248189Z",
+      "decision": null,
+      "event_type": "initializer_output_persisted",
+      "id": "54341480-5afc-442d-a023-8e0cc7a3dd1c",
+      "payload": {
+        "feature_catalog_path": ".stimpactai/features.json",
+        "feature_ids": [
+          "billing-api-retry-policy-lookup-skipped-http-429-in-the-service-layer-20260320054138"
+        ],
+        "init_script_path": "init.sh"
+      },
+      "phase": "initializer",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Initializer artifacts persisted to disk."
+    },
+    {
+      "created_at": "2026-03-20T05:41:44.249710Z",
+      "decision": null,
+      "event_type": "phase_changed",
+      "id": "5ebbced2-1df3-4d6b-a279-a99cef0bf310",
+      "payload": {
+        "phase": "coding"
+      },
+      "phase": "coding",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Run moved into coding phase."
+    },
+    {
+      "created_at": "2026-03-20T05:41:44.251833Z",
+      "decision": null,
+      "event_type": "coding_session_ready",
+      "id": "005686d4-2876-48b8-967e-5b9e81772c63",
+      "payload": {
+        "available_tools": [
+          "browser_assert_text",
+          "browser_click",
+          "browser_close",
+          "browser_get_url",
+          "browser_open",
+          "browser_screenshot",
+          "browser_snapshot_dom",
+          "browser_type",
+          "browser_wait_for",
+          "capture_console_logs",
+          "capture_network_summary",
+          "current_page_state",
+          "dom_snapshot",
+          "take_screenshot",
+          "run_command",
+          "edit_file",
+          "checkpoint",
+          "current_branch_info",
+          "diff_since_checkpoint",
+          "discard_failed_work",
+          "reset_failed_attempt",
+          "revert_to_checkpoint",
+          "find_file",
+          "search_dir",
+          "search_file",
+          "open_file",
+          "view_at_line",
+          "view_centered",
+          "view_next",
+          "view_prev"
+        ],
+        "feature_ids": [
+          "billing-api-retry-policy-lookup-skipped-http-429-in-the-service-layer-20260320054138"
+        ],
+        "session_id": "1be33517-ce7f-4bca-992a-7c07c2bea59e"
+      },
+      "phase": "coding",
+      "run_id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+      "summary": "Coding session is ready for autonomous decisions."
+    }
+  ],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": null,
+    "benchmark_bug_class": "wide-search-space-policy",
+    "benchmark_scenario_id": "wide-search-space",
+    "coding_session_id": "1be33517-ce7f-4bca-992a-7c07c2bea59e",
+    "created_at": "2026-03-20T05:41:44.242001Z",
+    "execution_mode": "repair_and_propose",
+    "id": "c2d26a8c-3cdc-4d90-b29d-37d00ba01cf8",
+    "incident_id": "a5197522-c029-4fe1-9791-4d976cd3810f",
+    "initializer_session_id": "e11755b2-f746-4fa3-b4a2-a72f5ed0b939",
+    "last_error": null,
+    "latest_verification": null,
+    "loop_state": {
+      "checkpoint_ref": null,
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": null,
+      "last_tool_ok": null,
+      "last_tool_result": {},
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 0
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320054138' for service billing-api.",
+    "patch_run_id": null,
+    "phase": "coding",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": false,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [
+        "No active repo profile is configured; sandbox-backed verification is unavailable."
+      ],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "not_requested",
+    "promotion_url": null,
+    "repo_profile_id": null,
+    "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320a-wide-search-space-20260319223134",
+    "sandbox_run_id": null,
+    "status": "queued",
+    "updated_at": "2026-03-20T05:41:44.251094Z"
+  }
+}

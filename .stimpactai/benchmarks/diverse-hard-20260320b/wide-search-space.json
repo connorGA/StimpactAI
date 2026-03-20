@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wide-search-space",
+  "bug_class": "wide-search-space-policy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "wide-search-space",
+    "multi-file",
+    "decoy-modules"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-wide-search-space-20260319223836",
+  "run_id": "2fd2a0c8-9779-4647-89fb-d802e1da8234",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 8,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

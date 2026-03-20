@@ -1,0 +1,298 @@
+{
+  "schema_version": 1,
+  "generated_from": "staging_drill_summary",
+  "results_directory": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b",
+  "generated_at": "2026-03-20T05:42:56.739753+00:00",
+  "scenario_count": 5,
+  "successful_scenarios": 5,
+  "success_rate": 1.0,
+  "attempt_count": 5,
+  "successful_attempts": 5,
+  "attempt_success_rate": 1.0,
+  "by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total": 3,
+      "successful": 3,
+      "average_steps": 6.333333333333333,
+      "success_rate": 1.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total": 2,
+      "successful": 2,
+      "average_steps": 8.0,
+      "success_rate": 1.0
+    }
+  ],
+  "by_challenge_tag": [
+    {
+      "tag": "decoy-config",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "decoy-modules",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "env-config",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total": 3,
+      "successful": 3,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multi-file",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wide-search-space",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wrapper-indirection",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    }
+  ],
+  "attempts_by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total_attempts": 3,
+      "successful_attempts": 3,
+      "average_steps": 6.333333333333333,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "average_steps": 8.0,
+      "attempt_success_rate": 1.0
+    }
+  ],
+  "attempts_by_challenge_tag": [
+    {
+      "tag": "decoy-config",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "decoy-modules",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "env-config",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total_attempts": 3,
+      "successful_attempts": 3,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "multi-file",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "wide-search-space",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "wrapper-indirection",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    }
+  ],
+  "flaky_scenarios": [],
+  "scenarios": [
+    {
+      "schema_version": 1,
+      "scenario_id": "decoy-config-fallback",
+      "bug_class": "decoy-config-fallback",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "env-config",
+        "wide-search-space",
+        "decoy-config"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-decoy-config-fallback-20260319223836",
+      "run_id": "df3afec8-22a9-4c75-98dc-dcd0fa725da1",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 7,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b/decoy-config-fallback.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "env-misleading-cascade",
+      "bug_class": "env-misleading-cascade",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "env-config",
+        "misleading-stacktrace",
+        "iterative-repair",
+        "multiple-failures"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-env-misleading-cascade-20260319223836",
+      "run_id": "c275ab83-bfbf-4f45-8f01-ea3c2e8c09b1",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 7,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b/env-misleading-cascade.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "misleading-stacktrace",
+      "bug_class": "misleading-stacktrace-helper",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "misleading-stacktrace",
+        "multi-file",
+        "wrapper-indirection"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-misleading-stacktrace-20260319223836",
+      "run_id": "f56ae204-bd0f-4dc1-968f-cca27d97f766",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 4,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b/misleading-stacktrace.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "wide-search-space",
+      "bug_class": "wide-search-space-policy",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "wide-search-space",
+        "multi-file",
+        "decoy-modules"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-wide-search-space-20260319223836",
+      "run_id": "2fd2a0c8-9779-4647-89fb-d802e1da8234",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 8,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b/wide-search-space.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "wrong-first-fix-pressure",
+      "bug_class": "wrong-first-fix-pressure",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "wrong-first-fix",
+        "iterative-repair",
+        "misleading-stacktrace",
+        "multiple-failures"
+      ],
+      "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-wrong-first-fix-pressure-20260319223836",
+      "run_id": "64e58b12-3f73-4730-b005-f4c6645f0937",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 9,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/diverse-hard-20260320b/wrong-first-fix-pressure.json"
+    }
+  ]
+}

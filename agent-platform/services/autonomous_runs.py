@@ -28,6 +28,7 @@ from harness.autonomous.storage import AutonomousRunArtifactStore
 from harness.schemas.autonomous import (
     AutonomousApprovalStatus,
     AutonomousExecutionMode,
+    AutonomousToolFailureClass,
     AutonomousPromotionStatus,
     AutonomousRepairRunRecord,
     AutonomousRunPhase,
@@ -88,20 +89,23 @@ class AutonomousRunService:
     ) -> AutonomousRunDetailResponse:
         incident = await self._require_incident(incident_id)
         repo_profile = await self._get_active_repo_profile(incident.project_id)
+        repository_root = request.repository_root or str(self._repository_root)
+        repository_profile_override = self._profile_adapter.build_profile(
+            repository_root=repository_root,
+            repo_profile=repo_profile,
+        )
+        browser_verification_supported = self._supports_browser_verification(repository_profile_override)
         feature_seeds = request.feature_seeds or self._derive_feature_seeds(
             incident=incident,
             repo_profile=repo_profile,
             requested_mode=request.execution_mode,
+            browser_verification_supported=browser_verification_supported,
         )
         policy, approval_status = self._policy_service.evaluate(
             incident=incident,
             repo_profile=repo_profile,
             request=request,
-        )
-        repository_root = request.repository_root or str(self._repository_root)
-        repository_profile_override = self._profile_adapter.build_profile(
-            repository_root=repository_root,
-            repo_profile=repo_profile,
+            browser_verification_supported=browser_verification_supported,
         )
         snapshot = self._runner.bootstrap_run(
             incident_id=incident_id,
@@ -317,59 +321,84 @@ class AutonomousRunService:
             if repo_profile is not None
             else None
         )
-        ensured_snapshot = self._runner.ensure_sessions(
-            run_id=run_id,
-            repository_root=detail.run.repository_root,
-            objective=detail.run.objective,
-            initializer_summary=(
-                persisted_record.initializer_summary
-                if persisted_record is not None
-                else "Prepare the repository, verification state, and repair context for autonomous incident resolution."
-            ),
-            repository_profile_override=repository_profile_override,
-            feature_seeds=persisted_record.feature_seeds if persisted_record is not None else [],
+        initializer_summary = (
+            persisted_record.initializer_summary
+            if persisted_record is not None
+            else "Prepare the repository, verification state, and repair context for autonomous incident resolution."
         )
-        active_run = ensured_snapshot.run
-        if self._autonomous_repository is not None:
-            await self._autonomous_repository.create_attempt(
-                autonomous_run_id=run_id,
-                async_job_id=job.id,
-                attempt_number=job.attempts,
-                status=AsyncJobStatus.RUNNING.value,
-                error_message=None,
-                finished=False,
+        feature_seeds = persisted_record.feature_seeds if persisted_record is not None else []
+        attempt_budget = max(1, detail.run.policy.max_repair_attempts)
+
+        for attempt_number in range(1, attempt_budget + 1):
+            ensured_snapshot = self._runner.ensure_sessions(
+                run_id=run_id,
+                repository_root=detail.run.repository_root,
+                objective=detail.run.objective,
+                initializer_summary=initializer_summary,
+                repository_profile_override=repository_profile_override,
+                feature_seeds=feature_seeds,
             )
-        running_run = active_run.model_copy(
-            update={
-                "status": AutonomousRunStatus.RUNNING,
-                "async_job_id": job.id,
-            }
-        )
-        self._event_stream.upsert_run(running_run)
-        decision_engine = self._decision_engine_factory()
-        snapshot = await self._runner.continue_run(
-            run_id=run_id,
-            decision_engine=decision_engine,
-            max_steps=active_run.loop_state.max_steps,
-        )
-        snapshot = await self._postprocess_completed_run(snapshot)
-        outcome = self._artifact_store.get_outcome(incident_id, run_id)
-        if self._autonomous_repository is not None:
-            await self._autonomous_repository.update_run(
-                run_id,
-                async_job_id=job.id,
-                repo_profile_id=snapshot.run.repo_profile_id,
-                run=snapshot.run.model_copy(update={"async_job_id": job.id}),
-                outcome=outcome,
+            active_run = ensured_snapshot.run
+            if self._autonomous_repository is not None:
+                await self._autonomous_repository.create_attempt(
+                    autonomous_run_id=run_id,
+                    async_job_id=job.id,
+                    attempt_number=attempt_number,
+                    status=AsyncJobStatus.RUNNING.value,
+                    error_message=None,
+                    finished=False,
+                )
+            running_run = active_run.model_copy(
+                update={
+                    "status": AutonomousRunStatus.RUNNING,
+                    "async_job_id": job.id,
+                }
             )
-            await self._autonomous_repository.create_attempt(
-                autonomous_run_id=run_id,
-                async_job_id=job.id,
-                attempt_number=job.attempts,
-                status=job.status.value if snapshot.run.status is AutonomousRunStatus.RUNNING else snapshot.run.status.value,
-                error_message=snapshot.run.last_error,
-                finished=True,
+            self._event_stream.upsert_run(running_run)
+            decision_engine = self._decision_engine_factory()
+            snapshot = await self._runner.continue_run(
+                run_id=run_id,
+                decision_engine=decision_engine,
+                max_steps=active_run.loop_state.max_steps,
             )
+            snapshot = await self._postprocess_completed_run(snapshot)
+            outcome = self._artifact_store.get_outcome(incident_id, run_id)
+            if self._autonomous_repository is not None:
+                await self._autonomous_repository.update_run(
+                    run_id,
+                    async_job_id=job.id,
+                    repo_profile_id=snapshot.run.repo_profile_id,
+                    run=snapshot.run.model_copy(update={"async_job_id": job.id}),
+                    outcome=outcome,
+                )
+                await self._autonomous_repository.create_attempt(
+                    autonomous_run_id=run_id,
+                    async_job_id=job.id,
+                    attempt_number=attempt_number,
+                    status=(
+                        job.status.value
+                        if snapshot.run.status is AutonomousRunStatus.RUNNING
+                        else snapshot.run.status.value
+                    ),
+                    error_message=snapshot.run.last_error,
+                    finished=True,
+                )
+            if not self._should_retry_run(snapshot.run, attempt_number=attempt_number, attempt_budget=attempt_budget):
+                return self.get_run_detail_sync(incident_id, run_id)
+
+            retry_context = self._build_retry_context(snapshot.run, next_attempt_number=attempt_number + 1)
+            reset_snapshot = self._runner.prepare_for_retry(
+                run_id=run_id,
+                retry_context=retry_context,
+            )
+            if self._autonomous_repository is not None:
+                await self._autonomous_repository.update_run(
+                    run_id,
+                    async_job_id=job.id,
+                    repo_profile_id=reset_snapshot.run.repo_profile_id,
+                    run=reset_snapshot.run.model_copy(update={"async_job_id": job.id}),
+                    outcome=None,
+                )
         return self.get_run_detail_sync(incident_id, run_id)
 
     async def record_sandbox_result(self, sandbox_run: SandboxRunRecord) -> None:
@@ -574,11 +603,12 @@ class AutonomousRunService:
         incident,
         repo_profile,
         requested_mode: AutonomousExecutionMode,
+        browser_verification_supported: bool,
     ) -> list[FeatureSeed]:
         required_verification = [VerificationKind.INTEGRATION]
         browser_required = False
         verification_method = "Run the configured verification command."
-        if repo_profile is not None and repo_profile.startup_commands:
+        if browser_verification_supported:
             required_verification = [VerificationKind.BROWSER]
             browser_required = True
             verification_method = "Start the application and verify the repaired flow in a browser."
@@ -606,6 +636,9 @@ class AutonomousRunService:
                 notes=notes,
             )
         ]
+
+    def _supports_browser_verification(self, repository_profile) -> bool:
+        return bool(repository_profile.browser_verification_entrypoints)
 
     def _hydrate_event_stream(self, detail: AutonomousRunDetailResponse) -> None:
         if self._event_stream.has_run(detail.run.id):
@@ -690,6 +723,57 @@ class AutonomousRunService:
                 outcome=outcome,
             )
         return self._event_stream.get_snapshot(run.id)
+
+    def _should_retry_run(
+        self,
+        run: AutonomousRepairRunRecord,
+        *,
+        attempt_number: int,
+        attempt_budget: int,
+    ) -> bool:
+        if run.status is not AutonomousRunStatus.FAILED:
+            return False
+        if attempt_number >= attempt_budget:
+            return False
+        failure_class = self._failure_class_for_run(run)
+        return failure_class in {
+            AutonomousToolFailureClass.VALIDATION,
+            AutonomousToolFailureClass.TOOL_ERROR,
+            AutonomousToolFailureClass.EXCEPTION,
+            AutonomousToolFailureClass.STAGNATION,
+        }
+
+    def _failure_class_for_run(self, run: AutonomousRepairRunRecord) -> AutonomousToolFailureClass | None:
+        if run.loop_state.last_failure is not None:
+            return run.loop_state.last_failure.failure_class
+        message = (run.last_error or "").strip().lower()
+        if not message:
+            return None
+        if any(marker in message for marker in ("validation error", "input should", "field required", "less than or equal")):
+            return AutonomousToolFailureClass.VALIDATION
+        if "decision engine failed" in message or "automatic baseline checkpoint failed" in message:
+            return AutonomousToolFailureClass.EXCEPTION
+        if "tool execution failed" in message:
+            return AutonomousToolFailureClass.TOOL_ERROR
+        if "exceeded the max step budget" in message:
+            return AutonomousToolFailureClass.STAGNATION
+        if "verification" in message:
+            return AutonomousToolFailureClass.VERIFICATION
+        return None
+
+    def _build_retry_context(
+        self,
+        run: AutonomousRepairRunRecord,
+        *,
+        next_attempt_number: int,
+    ) -> dict[str, object]:
+        failure_class = self._failure_class_for_run(run)
+        return {
+            "next_attempt_number": next_attempt_number,
+            "previous_error": run.last_error,
+            "previous_failure_class": failure_class.value if failure_class is not None else None,
+            "previous_tool_name": run.loop_state.last_tool_name,
+        }
 
     def _build_decision_engine(self) -> OpenAIAutonomousDecisionEngine:
         api_key = get_openai_api_key()

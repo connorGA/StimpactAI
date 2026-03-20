@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wrong-first-fix-pressure",
+  "bug_class": "wrong-first-fix-pressure",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "wrong-first-fix",
+    "iterative-repair",
+    "misleading-stacktrace",
+    "multiple-failures"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-wrong-first-fix-pressure-postfix3-attempt-2-20260319160121",
+  "run_id": "35935e64-6c04-42d3-b5da-9004ca132c8e",
+  "status": "running",
+  "phase": "coding",
+  "total_steps": null,
+  "recovery_attempts": null,
+  "stagnation_count": null,
+  "fresh_verification_satisfied": null,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": null,
+  "final_success": false
+}

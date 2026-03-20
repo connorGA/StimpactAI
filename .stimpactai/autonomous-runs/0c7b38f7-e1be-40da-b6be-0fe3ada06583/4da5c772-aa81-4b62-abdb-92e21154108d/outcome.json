@@ -1,0 +1,60 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "frontend-live-status-copy",
+  "benchmark_scenario_id": "frontend-live-status-copy",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T06:05:32.398440Z",
+  "created_at": "2026-03-20T06:01:56.987158Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "0c7b38f7-e1be-40da-b6be-0fe3ada06583",
+  "last_error": "Run exceeded the max step budget of 20.",
+  "latest_verification": {
+    "command": "python3 frontend_drill_verify.py",
+    "kind": "browser",
+    "metadata": {
+      "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320060150",
+      "tool_name": "run_command",
+      "turn_id": 13
+    },
+    "passed": false,
+    "recorded_at": "2026-03-20T06:04:46.894455Z",
+    "source": "tool",
+    "summary": "Command exited with status 1."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Frontend live status summary reported healthy state while an open incident was visible 20260320060150' for service billing-api.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 1,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320b",
+  "run_id": "4da5c772-aa81-4b62-abdb-92e21154108d",
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 20,
+  "total_events": 95,
+  "total_steps": 20,
+  "total_tool_calls": 22
+}

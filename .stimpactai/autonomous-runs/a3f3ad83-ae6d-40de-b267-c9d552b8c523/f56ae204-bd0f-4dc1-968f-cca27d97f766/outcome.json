@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "misleading-stacktrace-helper",
+  "benchmark_scenario_id": "misleading-stacktrace",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T05:39:00.066331Z",
+  "created_at": "2026-03-20T05:38:43.882082Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "a3f3ad83-ae6d-40de-b267-c9d552b8c523",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "4faca978-ac14-4124-843b-9a62756f7919"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T05:39:15.057186Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-4faca978 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry handler failed in the request wrapper 20260320053837' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-misleading-stacktrace-20260319223836",
+  "run_id": "f56ae204-bd0f-4dc1-968f-cca27d97f766",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 4,
+  "total_tool_calls": 0
+}

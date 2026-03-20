@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "misleading-cascade",
+  "bug_class": "misleading-cascade-bugs",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "misleading-stacktrace",
+    "iterative-repair",
+    "multi-file",
+    "multiple-failures"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-misleading-cascade-20260319",
+  "run_id": "50ed4bea-1cbe-4111-b127-5b72510ed964",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 10,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": true,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

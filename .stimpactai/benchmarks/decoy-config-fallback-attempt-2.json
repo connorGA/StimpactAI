@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "decoy-config-fallback",
+  "bug_class": "decoy-config-fallback",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "env-config",
+    "wide-search-space",
+    "decoy-config"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-decoy-config-fallback-20260319",
+  "run_id": "bc5f5075-d5b0-42c0-b34a-c9d5e50542ba",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 9,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "misleading-cascade-bugs",
+  "benchmark_scenario_id": "misleading-cascade",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:42:36.155329Z",
+  "created_at": "2026-03-20T04:42:09.412707Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "004d7fbd-1fe8-4af9-9314-b44a184114e7",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "62db8ad2-1bb2-4a81-b243-45704ec3c40c"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T04:42:51.495808Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-62db8ad2 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry API still failed after the first apparent fix 20260320044202' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-misleading-cascade-202603200002",
+  "run_id": "d6ab256e-f1ba-43ef-a77b-5e437f45d61c",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 7,
+  "total_tool_calls": 0
+}

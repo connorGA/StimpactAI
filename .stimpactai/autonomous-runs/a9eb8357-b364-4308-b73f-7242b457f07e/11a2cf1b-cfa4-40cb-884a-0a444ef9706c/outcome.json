@@ -1,0 +1,48 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "wide-search-space-policy",
+  "benchmark_scenario_id": "wide-search-space",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:07:28.094887Z",
+  "created_at": "2026-03-20T04:07:11.367695Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "a9eb8357-b364-4308-b73f-7242b457f07e",
+  "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "latest_verification": null,
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320040705' for service billing-api.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 0,
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-20260319210655",
+  "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 12,
+  "total_steps": 0,
+  "total_tool_calls": 1
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wide-search-space",
+  "bug_class": "wide-search-space-policy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "wide-search-space",
+    "multi-file",
+    "decoy-modules"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-20260319210655",
+  "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+  "status": "failed",
+  "phase": "failed",
+  "total_steps": 0,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "require_browser_verification": false,
+  "latest_verification_kind": null,
+  "final_success": false
+}

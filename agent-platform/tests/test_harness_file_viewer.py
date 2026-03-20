@@ -83,6 +83,21 @@ def test_viewer_clamps_to_file_boundaries(tmp_path: Path) -> None:
     assert response.lines[-1] == "120|line 120"
 
 
+def test_view_request_clamps_oversized_page_size(tmp_path: Path) -> None:
+    target = tmp_path / "sample.txt"
+    _write_numbered_file(target, line_count=250)
+    manager = FileViewerSessionManager()
+
+    response = manager.view_at_line(
+        FileViewAtLineRequest(file_path=str(target), line=125, page_size=200)
+    )
+
+    assert response.ok is True
+    assert response.page_size == 100
+    assert response.current_start_line == 125
+    assert response.current_end_line == 224
+
+
 def test_invalid_file_returns_structured_error() -> None:
     manager = FileViewerSessionManager()
 

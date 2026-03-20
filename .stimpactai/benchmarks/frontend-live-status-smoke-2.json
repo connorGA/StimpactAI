@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "frontend-live-status-copy",
+  "bug_class": "frontend-live-status-copy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "client-ui",
+    "copy-logic",
+    "helper-indirection"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320b",
+  "run_id": "4da5c772-aa81-4b62-abdb-92e21154108d",
+  "status": "failed",
+  "phase": "failed",
+  "total_steps": 20,
+  "recovery_attempts": 1,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "last_error": "Run exceeded the max step budget of 20.",
+  "require_browser_verification": true,
+  "latest_verification_kind": "browser",
+  "final_success": false
+}

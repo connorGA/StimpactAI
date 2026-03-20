@@ -1,0 +1,373 @@
+{
+  "events": [
+    {
+      "created_at": "2026-03-20T04:07:11.368417Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": null,
+        "feature_id": null,
+        "rationale": "The runner must load the repo profile, generate initializer artifacts, and hand off a coding-ready context.",
+        "selected_tool": null,
+        "summary": "Bootstrap initializer and coding sessions before autonomous tool selection begins.",
+        "verification_kind": null
+      },
+      "event_type": "run_started",
+      "id": "934cd118-ad2f-4ac6-850d-00e2dff00e8e",
+      "payload": {
+        "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320040705' for service billing-api.",
+        "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-20260319210655"
+      },
+      "phase": "initializer",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Autonomous repair run started."
+    },
+    {
+      "created_at": "2026-03-20T04:07:11.369905Z",
+      "decision": null,
+      "event_type": "session_initialized",
+      "id": "a2ea3d06-089a-4cc4-93fb-483e8671c54f",
+      "payload": {
+        "role": "initializer",
+        "session_id": "f614c19b-bca5-4aac-834d-12b5b47e6058"
+      },
+      "phase": "initializer",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Initializer session created."
+    },
+    {
+      "created_at": "2026-03-20T04:07:11.370463Z",
+      "decision": null,
+      "event_type": "initializer_output_generated",
+      "id": "396965f6-3267-4d1d-b5d6-e931081b72d9",
+      "payload": {
+        "feature_count": 1,
+        "recommended_commands": [
+          "npm run build",
+          "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+          "npm run dev"
+        ]
+      },
+      "phase": "initializer",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Initializer output generated."
+    },
+    {
+      "created_at": "2026-03-20T04:07:11.371371Z",
+      "decision": null,
+      "event_type": "initializer_output_persisted",
+      "id": "106433ab-e178-4058-9627-83aa4d39f0a0",
+      "payload": {
+        "feature_catalog_path": ".stimpactai/features.json",
+        "feature_ids": [
+          "billing-api-retry-policy-lookup-skipped-http-429-in-the-service-layer-20260320040705"
+        ],
+        "init_script_path": "init.sh"
+      },
+      "phase": "initializer",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Initializer artifacts persisted to disk."
+    },
+    {
+      "created_at": "2026-03-20T04:07:11.372342Z",
+      "decision": null,
+      "event_type": "phase_changed",
+      "id": "21f566bd-1d09-48e6-9f8c-c54464f061c3",
+      "payload": {
+        "phase": "coding"
+      },
+      "phase": "coding",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Run moved into coding phase."
+    },
+    {
+      "created_at": "2026-03-20T04:07:11.374077Z",
+      "decision": null,
+      "event_type": "coding_session_ready",
+      "id": "60857514-8e7c-40d4-819b-2fc532e8cc43",
+      "payload": {
+        "available_tools": [
+          "browser_assert_text",
+          "browser_click",
+          "browser_close",
+          "browser_get_url",
+          "browser_open",
+          "browser_screenshot",
+          "browser_snapshot_dom",
+          "browser_type",
+          "browser_wait_for",
+          "capture_console_logs",
+          "capture_network_summary",
+          "current_page_state",
+          "dom_snapshot",
+          "take_screenshot",
+          "run_command",
+          "edit_file",
+          "checkpoint",
+          "current_branch_info",
+          "diff_since_checkpoint",
+          "discard_failed_work",
+          "reset_failed_attempt",
+          "revert_to_checkpoint",
+          "find_file",
+          "search_dir",
+          "search_file",
+          "open_file",
+          "view_at_line",
+          "view_centered",
+          "view_next",
+          "view_prev"
+        ],
+        "feature_ids": [
+          "billing-api-retry-policy-lookup-skipped-http-429-in-the-service-layer-20260320040705"
+        ],
+        "session_id": "edd1190e-eae3-4de9-a687-c56e02f475ad"
+      },
+      "phase": "coding",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Coding session is ready for autonomous decisions."
+    },
+    {
+      "created_at": "2026-03-20T04:07:13.133231Z",
+      "decision": null,
+      "event_type": "session_initialized",
+      "id": "5314659b-c8d3-4115-a666-fe016e7cd4b5",
+      "payload": {
+        "role": "initializer",
+        "session_id": "0a6ecfda-0e34-4976-ae2c-b021a8b44766"
+      },
+      "phase": "coding",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Initializer session restored for async execution."
+    },
+    {
+      "created_at": "2026-03-20T04:07:13.135518Z",
+      "decision": null,
+      "event_type": "coding_session_ready",
+      "id": "e22aa43f-7fe4-4607-8a2a-b7bb8e51d228",
+      "payload": {
+        "available_tools": [
+          "browser_assert_text",
+          "browser_click",
+          "browser_close",
+          "browser_get_url",
+          "browser_open",
+          "browser_screenshot",
+          "browser_snapshot_dom",
+          "browser_type",
+          "browser_wait_for",
+          "capture_console_logs",
+          "capture_network_summary",
+          "current_page_state",
+          "dom_snapshot",
+          "take_screenshot",
+          "run_command",
+          "edit_file",
+          "checkpoint",
+          "current_branch_info",
+          "diff_since_checkpoint",
+          "discard_failed_work",
+          "reset_failed_attempt",
+          "revert_to_checkpoint",
+          "find_file",
+          "search_dir",
+          "search_file",
+          "open_file",
+          "view_at_line",
+          "view_centered",
+          "view_next",
+          "view_prev"
+        ],
+        "feature_ids": [
+          "billing-api-retry-policy-lookup-skipped-http-429-in-the-service-layer-20260320040705"
+        ],
+        "session_id": "f36c1594-93b3-4772-bde8-e541036c8346"
+      },
+      "phase": "coding",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Coding session restored for async execution."
+    },
+    {
+      "created_at": "2026-03-20T04:07:13.290633Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {
+          "label": "autonomous-baseline"
+        },
+        "arguments_summary": "label=autonomous-baseline",
+        "feature_id": null,
+        "rationale": "The runner should always keep a last-known-good rollback point even if the model forgets to create one.",
+        "selected_tool": "checkpoint",
+        "summary": "Create an automatic baseline checkpoint before autonomous edits begin.",
+        "verification_kind": null
+      },
+      "event_type": "tool_call_started",
+      "id": "6046685c-83b6-4c05-bae3-6926a7061560",
+      "payload": {
+        "arguments": {
+          "label": "autonomous-baseline"
+        },
+        "tool_name": "checkpoint"
+      },
+      "phase": "recovery",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Starting tool call checkpoint."
+    },
+    {
+      "created_at": "2026-03-20T04:07:13.435476Z",
+      "decision": null,
+      "event_type": "tool_call_completed",
+      "id": "4bf1dba8-7bb4-45e6-8e5b-0257858e086a",
+      "payload": {
+        "ok": true,
+        "result": {
+          "action": "checkpoint",
+          "branch_info": {
+            "branch_name": "main",
+            "has_staged_changes": false,
+            "has_unstaged_changes": false,
+            "has_untracked_files": false,
+            "head_sha": "d99c73594af14dcc4bbc309900e1573eb505d288",
+            "is_dirty": false,
+            "staged_files": [],
+            "unstaged_files": [],
+            "untracked_files": [],
+            "upstream_branch": "origin/main"
+          },
+          "branch_name": "main",
+          "checkpoint": {
+            "branch_name": "main",
+            "commit_sha": "d99c73594af14dcc4bbc309900e1573eb505d288",
+            "created_at": "2026-03-20T04:07:13.388593Z",
+            "tag_name": "stimpact-checkpoint/autonomous-baseline"
+          },
+          "diff": null,
+          "ok": true,
+          "output": "stimpact checkpoint: autonomous-baseline",
+          "target_ref": "d99c73594af14dcc4bbc309900e1573eb505d288"
+        },
+        "tool_name": "checkpoint"
+      },
+      "phase": "recovery",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Completed tool call checkpoint."
+    },
+    {
+      "created_at": "2026-03-20T04:07:13.436491Z",
+      "decision": null,
+      "event_type": "git_checkpoint_created",
+      "id": "12df46d2-cea6-4adb-a4c3-38b5ed3ae26b",
+      "payload": {
+        "checkpoint": {
+          "branch_name": "main",
+          "commit_sha": "d99c73594af14dcc4bbc309900e1573eb505d288",
+          "created_at": "2026-03-20T04:07:13.388593Z",
+          "tag_name": "stimpact-checkpoint/autonomous-baseline"
+        }
+      },
+      "phase": "recovery",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Created a git checkpoint."
+    },
+    {
+      "created_at": "2026-03-20T04:07:28.096587Z",
+      "decision": null,
+      "event_type": "run_failed",
+      "id": "7b61556c-69d1-4fe4-85b6-69c6c2802cc2",
+      "payload": {
+        "error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+        "status": "failed"
+      },
+      "phase": "failed",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "summary": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}"
+    }
+  ],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "db5372b6-8b4f-4771-b0a4-d72a58c752c9",
+    "benchmark_bug_class": "wide-search-space-policy",
+    "benchmark_scenario_id": "wide-search-space",
+    "coding_session_id": "f36c1594-93b3-4772-bde8-e541036c8346",
+    "created_at": "2026-03-20T04:07:11.367695Z",
+    "execution_mode": "repair_and_propose",
+    "id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+    "incident_id": "a9eb8357-b364-4308-b73f-7242b457f07e",
+    "initializer_session_id": "0a6ecfda-0e34-4976-ae2c-b021a8b44766",
+    "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+    "latest_verification": null,
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": "checkpoint",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "action": "checkpoint",
+        "branch_info": {
+          "branch_name": "main",
+          "has_staged_changes": false,
+          "has_unstaged_changes": false,
+          "has_untracked_files": false,
+          "head_sha": "d99c73594af14dcc4bbc309900e1573eb505d288",
+          "is_dirty": false,
+          "staged_files": [],
+          "unstaged_files": [],
+          "untracked_files": [],
+          "upstream_branch": "origin/main"
+        },
+        "branch_name": "main",
+        "checkpoint": {
+          "branch_name": "main",
+          "commit_sha": "d99c73594af14dcc4bbc309900e1573eb505d288",
+          "created_at": "2026-03-20T04:07:13.388593Z",
+          "tag_name": "stimpact-checkpoint/autonomous-baseline"
+        },
+        "diff": null,
+        "ok": true,
+        "output": "stimpact checkpoint: autonomous-baseline",
+        "target_ref": "d99c73594af14dcc4bbc309900e1573eb505d288"
+      },
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [
+        "checkpoint"
+      ],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 0
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320040705' for service billing-api.",
+    "patch_run_id": null,
+    "phase": "failed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "not_requested",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-20260319210655",
+    "sandbox_run_id": null,
+    "status": "failed",
+    "updated_at": "2026-03-20T04:07:28.094887Z"
+  }
+}

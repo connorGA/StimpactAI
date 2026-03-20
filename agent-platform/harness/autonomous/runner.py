@@ -330,18 +330,23 @@ class AutonomousRepairRunner:
         for step_index in range(1, max_steps + 1):
             current_snapshot = self.get_snapshot(run_id)
             run = current_snapshot.run
+            if self._ready_for_automatic_completion(run):
+                return self._complete_run(run_id)
             coding_session_id = run.coding_session_id
             if coding_session_id is None:
                 return self._fail_run(run_id, "Coding session was not initialized.")
 
             coding_snapshot = self._orchestrator.restore_session(coding_session_id)
-            decision = await decision_engine.decide(
-                run=run,
-                coding_session=coding_snapshot,
-                available_tools=[tool.model_dump(mode="json") for tool in coding_snapshot.available_tools.tools],
-                last_tool_result=run.loop_state.last_tool_result or None,
-                recent_events=current_snapshot.events[-self._RECENT_EVENT_LIMIT :],
-            )
+            try:
+                decision = await decision_engine.decide(
+                    run=run,
+                    coding_session=coding_snapshot,
+                    available_tools=[tool.model_dump(mode="json") for tool in coding_snapshot.available_tools.tools],
+                    last_tool_result=run.loop_state.last_tool_result or None,
+                    recent_events=current_snapshot.events[-self._RECENT_EVENT_LIMIT :],
+                )
+            except Exception as exc:  # noqa: BLE001
+                return self._fail_run(run_id, f"Decision engine failed: {exc}")
             self._emit_event(
                 run_id=run_id,
                 event_type=AutonomousEventType.DECISION_MADE,
@@ -467,6 +472,10 @@ class AutonomousRepairRunner:
                     },
                 )
 
+            current_run = self.get_snapshot(run_id).run
+            if invocation_result.ok and self._ready_for_automatic_completion(current_run):
+                return self._complete_run(run_id)
+
             if not invocation_result.ok:
                 current_run = self.get_snapshot(run_id).run
                 recovered = self._recover_from_failed_tool_result(
@@ -485,6 +494,9 @@ class AutonomousRepairRunner:
                     )
                     return self._fail_run(run_id, failure_message)
 
+        current_run = self.get_snapshot(run_id).run
+        if self._ready_for_automatic_completion(current_run):
+            return self._complete_run(run_id)
         return self._fail_run(run_id, f"Run exceeded the max step budget of {max_steps}.")
 
     def _persist_run(self, run: AutonomousRepairRunRecord) -> None:
@@ -612,14 +624,106 @@ class AutonomousRepairRunner:
         )
         return self.get_snapshot(run_id)
 
+    def prepare_for_retry(
+        self,
+        *,
+        run_id: str,
+        retry_context: dict[str, Any] | None = None,
+    ) -> AutonomousRunSnapshot:
+        run = self.get_snapshot(run_id).run
+        checkpoint_ref = run.loop_state.checkpoint_ref
+        if checkpoint_ref is None:
+            return self._fail_run(run_id, "Autonomous retry requires a baseline checkpoint.")
+        try:
+            GitCheckpointManager().discard_failed_work(
+                repository_root=run.repository_root,
+                checkpoint_ref=checkpoint_ref,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._fail_run(run_id, f"Autonomous retry reset failed: {exc}")
+
+        updated_loop_state = run.loop_state.model_copy(
+            update={
+                "step_index": 0,
+                "checkpoint_ref": checkpoint_ref,
+                "recovery_attempts": 0,
+                "consecutive_failures": 0,
+                "stagnation_count": 0,
+                "last_tool_name": "discard_failed_work",
+                "recent_tool_names": [],
+                "last_tool_ok": True,
+                "last_tool_result": {
+                    "recovery_tool": "discard_failed_work",
+                    "checkpoint_ref": checkpoint_ref,
+                    "retry_context": retry_context or {},
+                },
+                "last_failure": None,
+                "recent_failure_signatures": [],
+            }
+        )
+        retried_run = run.model_copy(
+            update={
+                "status": AutonomousRunStatus.QUEUED,
+                "phase": AutonomousRunPhase.CODING,
+                "initializer_session_id": None,
+                "coding_session_id": None,
+                "patch_run_id": None,
+                "sandbox_run_id": None,
+                "promotion_branch_name": None,
+                "promotion_url": None,
+                "promotion_status": AutonomousPromotionStatus.NOT_REQUESTED,
+                "last_error": None,
+                "latest_verification": None,
+                "loop_state": updated_loop_state,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._persist_run(retried_run)
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.RECOVERY_INVOKED,
+            phase=AutonomousRunPhase.RECOVERY,
+            summary="Reset the autonomous run to the baseline checkpoint for a fresh retry attempt.",
+            payload={
+                "checkpoint_ref": checkpoint_ref,
+                "retry_context": retry_context or {},
+            },
+        )
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.PHASE_CHANGED,
+            phase=AutonomousRunPhase.CODING,
+            summary="Run returned to coding phase for a fresh retry attempt.",
+            payload={"phase": AutonomousRunPhase.CODING.value},
+        )
+        return self.get_snapshot(run_id)
+
     def _fail_run(self, run_id: str, error_message: str) -> AutonomousRunSnapshot:
         run = self.get_snapshot(run_id).run
         truncated_error = self._truncate(error_message, self._RUN_ERROR_LIMIT)
+        loop_state = run.loop_state
+        if loop_state.last_failure is None:
+            failure_class = self._classify_run_failure(truncated_error)
+            if failure_class is not None:
+                tool_name = loop_state.last_tool_name or "runner"
+                loop_state = loop_state.model_copy(
+                    update={
+                        "last_failure": AutonomousToolFailure(
+                            tool_name=tool_name,
+                            failure_class=failure_class,
+                            message=truncated_error,
+                            hint=self._failure_hint_for_class(failure_class),
+                            signature=self._failure_signature(tool_name, failure_class, truncated_error),
+                            repeated_count=1,
+                        ),
+                    }
+                )
         failed = run.model_copy(
             update={
                 "status": AutonomousRunStatus.FAILED,
                 "phase": AutonomousRunPhase.FAILED,
                 "last_error": truncated_error,
+                "loop_state": loop_state,
                 "updated_at": datetime.now(UTC),
             }
         )
@@ -646,6 +750,18 @@ class AutonomousRepairRunner:
             feature.verification_state.status is VerificationStatus.FULLY_VERIFIED
             for feature in catalog.features
         )
+
+    def _ready_for_automatic_completion(self, run: AutonomousRepairRunRecord) -> bool:
+        if not self._repair_mode_requires_code_change(run):
+            return False
+        if run.coding_session_id is None:
+            return False
+        coding_snapshot = self._orchestrator.restore_session(run.coding_session_id)
+        if not self._all_features_verified(coding_snapshot):
+            return False
+        if not self._has_changes_since_checkpoint(run):
+            return False
+        return self._has_fresh_verification_evidence(run)
 
     def _phase_for_decision(self, decision: AutonomousDecision) -> AutonomousRunPhase:
         if decision.selected_tool in {"checkpoint", "revert_to_checkpoint", "reset_failed_attempt", "discard_failed_work"}:
@@ -981,6 +1097,20 @@ class AutonomousRepairRunner:
             value = result.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+        return None
+
+    def _classify_run_failure(self, error_message: str) -> AutonomousToolFailureClass | None:
+        lowered = error_message.lower()
+        if self._looks_like_validation_failure({}, error_message):
+            return AutonomousToolFailureClass.VALIDATION
+        if "decision engine failed" in lowered or "automatic baseline checkpoint failed" in lowered:
+            return AutonomousToolFailureClass.EXCEPTION
+        if "tool execution failed" in lowered:
+            return AutonomousToolFailureClass.TOOL_ERROR
+        if "exceeded the max step budget" in lowered:
+            return AutonomousToolFailureClass.STAGNATION
+        if "verification" in lowered:
+            return AutonomousToolFailureClass.VERIFICATION
         return None
 
     def _failure_signature(

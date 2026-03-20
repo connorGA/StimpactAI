@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "frontend-live-status-copy",
+  "bug_class": "frontend-live-status-copy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "client-ui",
+    "copy-logic",
+    "helper-indirection"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320d",
+  "run_id": "8a25e597-7cc6-48b3-80fd-20ddf178bde5",
+  "status": "queued",
+  "phase": "coding",
+  "total_steps": null,
+  "recovery_attempts": null,
+  "stagnation_count": null,
+  "fresh_verification_satisfied": null,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": true,
+  "latest_verification_kind": null,
+  "final_success": false
+}

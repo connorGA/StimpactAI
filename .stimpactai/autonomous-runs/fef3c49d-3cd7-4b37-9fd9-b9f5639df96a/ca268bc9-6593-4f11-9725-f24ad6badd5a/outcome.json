@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "env-config-mismatch",
+  "benchmark_scenario_id": "env-config-mismatch",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:52:08.124393Z",
+  "created_at": "2026-03-20T04:51:31.307755Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "fef3c49d-3cd7-4b37-9fd9-b9f5639df96a",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "d59f960a-1789-4739-bde9-1b29b6fd566b"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T04:52:23.551264Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-d59f960a completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy default config skipped HTTP 429 20260320045124' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 2,
+  "repository_root": ".tmp-e2e/staging-drill-messy-env-config-mismatch-202603200003",
+  "run_id": "ca268bc9-6593-4f11-9725-f24ad6badd5a",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

@@ -12,6 +12,15 @@ class FileViewRequest(BaseModel):
     file_path: str = Field(min_length=1, max_length=4096)
     page_size: int = Field(default=VIEW_PAGE_SIZE, ge=1, le=VIEW_PAGE_SIZE)
 
+    @field_validator("page_size", mode="before")
+    @classmethod
+    def normalize_page_size(cls, value: object) -> object:
+        if value is None:
+            return VIEW_PAGE_SIZE
+        if isinstance(value, int):
+            return min(value, VIEW_PAGE_SIZE)
+        return value
+
     @field_validator("file_path")
     @classmethod
     def validate_file_path(cls, value: str) -> str:

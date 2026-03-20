@@ -7,6 +7,7 @@ from staging_drill import (
     _build_benchmark_manifest,
     _build_benchmark_result,
     _build_benchmark_summary,
+    _run_poll_reached_terminal_state,
     _seed_drill_fixture,
 )
 
@@ -128,6 +129,86 @@ def test_seed_drill_fixture_supports_misleading_cascade_scenario(tmp_path: Path)
     ).read_text(encoding="utf-8")
 
 
+def test_seed_drill_fixture_supports_env_config_mismatch_scenario(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "staging_drill_fixture"
+    fixture_dir.mkdir()
+
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="env-config-mismatch")
+
+    assert scenario.name == "env-config-mismatch"
+    assert scenario.difficulty == "hard"
+    assert 'os.getenv("RETRY_STATUSES", "500,502,503,504")' in (
+        fixture_dir / "config.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_seed_drill_fixture_supports_env_misleading_cascade_scenario(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "staging_drill_fixture"
+    fixture_dir.mkdir()
+
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="env-misleading-cascade")
+
+    assert scenario.name == "env-misleading-cascade"
+    assert scenario.difficulty == "very-hard"
+    assert "retry_after_header" in (fixture_dir / "config.py").read_text(encoding="utf-8")
+    assert "build_retry_response" in (fixture_dir / "service.py").read_text(encoding="utf-8")
+
+
+def test_seed_drill_fixture_supports_wrong_first_fix_pressure_scenario(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "staging_drill_fixture"
+    fixture_dir.mkdir()
+
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="wrong-first-fix-pressure")
+
+    assert scenario.name == "wrong-first-fix-pressure"
+    assert scenario.difficulty == "very-hard"
+    assert "parse_retry_after" in (fixture_dir / "parser.py").read_text(encoding="utf-8")
+    assert "test_build_retry_response_retries_http_429" in (
+        fixture_dir / "test_buggy_retry.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_seed_drill_fixture_supports_decoy_config_fallback_scenario(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "staging_drill_fixture"
+    fixture_dir.mkdir()
+
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="decoy-config-fallback")
+
+    assert scenario.name == "decoy-config-fallback"
+    assert scenario.difficulty == "hard"
+    assert "LEGACY_RETRY_STATUSES" in (fixture_dir / "defaults.py").read_text(encoding="utf-8")
+    assert "configured_retry_statuses" in (fixture_dir / "config.py").read_text(encoding="utf-8")
+
+
+def test_seed_drill_fixture_supports_frontend_live_status_scenario(tmp_path: Path) -> None:
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="frontend-live-status-copy")
+
+    assert scenario.name == "frontend-live-status-copy"
+    assert scenario.difficulty == "hard"
+    assert "browser_verification_entrypoints" in (
+        tmp_path / ".stimpactai" / "profile.yml"
+    ).read_text(encoding="utf-8")
+    assert "buildLiveStatusTitle" in (
+        tmp_path / "client-ui" / "src" / "lib" / "frontend-drill" / "live-status.ts"
+    ).read_text(encoding="utf-8")
+    expectations = json.loads((tmp_path / ".stimpactai" / "frontend_drill_expectations.json").read_text(encoding="utf-8"))
+    assert expectations["contains_text"] == ["1 active incident needs attention"]
+
+
+def test_seed_drill_fixture_supports_frontend_misleading_cascade_scenario(tmp_path: Path) -> None:
+    scenario = _seed_drill_fixture(str(tmp_path), scenario_name="frontend-misleading-cascade")
+
+    assert scenario.name == "frontend-misleading-cascade"
+    assert scenario.difficulty == "very-hard"
+    page_contents = (tmp_path / "client-ui" / "src" / "app" / "frontend-drill" / "page.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "formatRetryDelay" in page_contents
+    assert "buildFollowUpSummary" in page_contents
+    verify_script = (tmp_path / "frontend_drill_verify.mjs").read_text(encoding="utf-8")
+    assert "DEV_SERVER_COMMAND" in verify_script
+
+
 def test_build_benchmark_manifest_includes_status_429_scenario() -> None:
     manifest = _build_benchmark_manifest()
 
@@ -139,6 +220,15 @@ def test_build_benchmark_manifest_includes_status_429_scenario() -> None:
     assert "misleading-stacktrace" in scenario_ids
     assert "wide-search-space" in scenario_ids
     assert "misleading-cascade" in scenario_ids
+    assert "env-config-mismatch" in scenario_ids
+    assert "env-misleading-cascade" in scenario_ids
+    assert "wrong-first-fix-pressure" in scenario_ids
+    assert "decoy-config-fallback" in scenario_ids
+    assert "frontend-live-status-copy" in scenario_ids
+    assert "frontend-empty-state-filter" in scenario_ids
+    assert "frontend-failure-banner" in scenario_ids
+    assert "frontend-env-mode-default" in scenario_ids
+    assert "frontend-misleading-cascade" in scenario_ids
 
 
 def test_build_benchmark_result_uses_outcome_success_flags(tmp_path: Path) -> None:
@@ -150,6 +240,9 @@ def test_build_benchmark_result_uses_outcome_success_flags(tmp_path: Path) -> No
                 "id": "run-1",
                 "status": "succeeded",
                 "phase": "completed",
+                "last_error": None,
+                "policy": {"require_browser_verification": False},
+                "latest_verification": {"kind": "integration"},
             },
             "outcome": {
                 "total_steps": 4,
@@ -168,6 +261,16 @@ def test_build_benchmark_result_uses_outcome_success_flags(tmp_path: Path) -> No
     assert result["difficulty"] == "easy"
     assert result["challenge_tags"] == ["single-file", "policy-logic"]
     assert result["final_success"] is True
+    assert result["require_browser_verification"] is False
+    assert result["latest_verification_kind"] == "integration"
+
+
+def test_run_poll_reached_terminal_state_requires_terminal_promotion_state() -> None:
+    assert _run_poll_reached_terminal_state(status="failed", promotion_status="not_requested", promote=False) is True
+    assert _run_poll_reached_terminal_state(status="running", promotion_status="ready", promote=False) is True
+    assert _run_poll_reached_terminal_state(status="running", promotion_status="proposed", promote=True) is True
+    assert _run_poll_reached_terminal_state(status="running", promotion_status="not_requested", promote=False) is False
+    assert _run_poll_reached_terminal_state(status="running", promotion_status="ready", promote=True) is False
 
 
 def test_build_benchmark_summary_uses_latest_result_per_scenario(tmp_path: Path) -> None:
@@ -222,9 +325,20 @@ def test_build_benchmark_summary_uses_latest_result_per_scenario(tmp_path: Path)
     assert summary["scenario_count"] == 2
     assert summary["successful_scenarios"] == 2
     assert summary["success_rate"] == 1.0
+    assert summary["attempt_count"] == 3
+    assert summary["successful_attempts"] == 2
+    assert summary["attempt_success_rate"] == 2 / 3
     by_difficulty = {entry["difficulty"]: entry for entry in summary["by_difficulty"]}
     assert by_difficulty["easy"]["total"] == 1
     assert by_difficulty["easy"]["average_steps"] == 6.0
     assert by_difficulty["hard"]["total"] == 1
+    attempts_by_difficulty = {entry["difficulty"]: entry for entry in summary["attempts_by_difficulty"]}
+    assert attempts_by_difficulty["easy"]["total_attempts"] == 2
+    assert attempts_by_difficulty["easy"]["successful_attempts"] == 1
+    assert attempts_by_difficulty["easy"]["attempt_success_rate"] == 0.5
+    assert attempts_by_difficulty["hard"]["total_attempts"] == 1
+    flaky_scenarios = {entry["scenario_id"]: entry for entry in summary["flaky_scenarios"]}
+    assert flaky_scenarios["header-key"]["total_attempts"] == 2
+    assert flaky_scenarios["header-key"]["successful_attempts"] == 1
     scenarios = {entry["scenario_id"]: entry for entry in summary["scenarios"]}
     assert scenarios["header-key"]["status"] == "succeeded"

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scenario_id": "env-config-mismatch",
+  "bug_class": "env-config-mismatch",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "env-config",
+    "multi-file",
+    "default-behavior"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-env-config-mismatch-20260319",
+  "run_id": "cc264b32-deda-4127-b2cc-de525d8d84bc",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 10,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "final_success": true
+}

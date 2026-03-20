@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "env-misleading-cascade",
+  "bug_class": "env-misleading-cascade",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "env-config",
+    "misleading-stacktrace",
+    "iterative-repair",
+    "multiple-failures"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-env-misleading-cascade-20260319",
+  "run_id": "d04ecd06-a8c9-4f00-9ed2-47e1e1a91154",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 9,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": true,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

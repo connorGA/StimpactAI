@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "env-misleading-cascade",
+  "benchmark_scenario_id": "env-misleading-cascade",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:53:07.862030Z",
+  "created_at": "2026-03-20T04:52:41.045236Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "ab4a9bc6-789b-423e-96fe-0a818d0ba50d",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "5eb40b27-b0c3-4b78-9cc2-3addc70e633d"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T04:53:22.510260Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-5eb40b27 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the config-backed fix 20260320045234' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": ".tmp-e2e/staging-drill-messy-env-misleading-cascade-202603200003",
+  "run_id": "a086a6dd-25c9-4f68-83de-4c2122b701b4",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 7,
+  "total_tool_calls": 0
+}

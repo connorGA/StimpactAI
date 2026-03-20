@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "decoy-config-fallback",
+  "benchmark_scenario_id": "decoy-config-fallback",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:41:37.280880Z",
+  "created_at": "2026-03-20T04:41:00.632492Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "fc6d9a55-a5eb-40d5-a973-22c8accec553",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "a7a5dc76-dec1-47bf-b517-5cf7b51871b5"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T04:41:53.354643Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-a7a5dc76 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry selector used legacy defaults when no env override was present 20260320044054' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 2,
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-decoy-config-fallback-202603200002",
+  "run_id": "fa5f77e9-48a7-4612-b041-deb637890e44",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

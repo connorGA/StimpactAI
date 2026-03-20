@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wide-search-space",
+  "bug_class": "wide-search-space-policy",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "wide-search-space",
+    "multi-file",
+    "decoy-modules"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-202603200001",
+  "run_id": "859b2026-6506-43a1-95c6-39ad85717985",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 7,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

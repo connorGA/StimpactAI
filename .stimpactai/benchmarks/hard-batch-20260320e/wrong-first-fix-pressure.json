@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wrong-first-fix-pressure",
+  "bug_class": "wrong-first-fix-pressure",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "wrong-first-fix",
+    "iterative-repair",
+    "misleading-stacktrace",
+    "multiple-failures"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-wrong-first-fix-pressure-20260319210832",
+  "run_id": "cad873b2-83c6-420a-8d19-5e96a1a0898d",
+  "status": "failed",
+  "phase": "failed",
+  "total_steps": 0,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+  "require_browser_verification": false,
+  "latest_verification_kind": null,
+  "final_success": false
+}

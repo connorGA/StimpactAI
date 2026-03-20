@@ -1,0 +1,100 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "e6fb1ba2-4208-4971-9170-44e1e625c6d9",
+    "benchmark_bug_class": "wide-search-space-policy",
+    "benchmark_scenario_id": "wide-search-space",
+    "coding_session_id": "95c08c21-6d66-4807-8909-41947142619f",
+    "created_at": "2026-03-20T04:37:20.325608Z",
+    "execution_mode": "repair_and_propose",
+    "id": "859b2026-6506-43a1-95c6-39ad85717985",
+    "incident_id": "32583531-3ae3-46d3-8192-b26b505cd151",
+    "initializer_session_id": "3f201c0a-9cdb-484c-a7b5-44702168aacf",
+    "last_error": null,
+    "latest_verification": {
+      "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+      "kind": "sandbox",
+      "metadata": {
+        "executor_backend": "kubernetes",
+        "patch_applied": true,
+        "reproduction_succeeded": true,
+        "sandbox_run_id": "bd038349-e0a8-491b-bf3c-5fac826941f5"
+      },
+      "passed": true,
+      "recorded_at": "2026-03-20T04:40:33.752868Z",
+      "source": "sandbox",
+      "summary": "Kubernetes job stimpact-sandbox-bd038349 completed successfully."
+    },
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": "run_command",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "_tool_call": {
+          "ok": true,
+          "tool_name": "run_command",
+          "turn_id": 8
+        },
+        "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "exit_code": 0,
+        "message": "Command completed successfully.",
+        "ok": true,
+        "output": "Retried command with python3 after `python` was not available on PATH.\n\nstdout:\n..                                                                       [100%]\n2 passed in 0.00s",
+        "stderr": "",
+        "stdout": "..                                                                       [100%]\n2 passed in 0.00s\n",
+        "timed_out": false,
+        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-hardbench-wide-search-space-202603200001"
+      },
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [
+        "checkpoint",
+        "run_command",
+        "search_dir",
+        "open_file",
+        "open_file",
+        "open_file",
+        "edit_file",
+        "run_command"
+      ],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 7
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry policy lookup skipped HTTP 429 in the service layer 20260320043626' for service billing-api.",
+    "patch_run_id": "62e47e38-f9c7-4f5d-ba1b-d4b19a7a7db4",
+    "phase": "completed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "ready",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-202603200001",
+    "sandbox_run_id": "bd038349-e0a8-491b-bf3c-5fac826941f5",
+    "status": "succeeded",
+    "updated_at": "2026-03-20T04:38:20.782521Z"
+  }
+}

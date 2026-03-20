@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "generated_from": "staging_drill_summary",
+  "results_directory": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/messy-batch-20260320a",
+  "generated_at": "2026-03-20T04:55:20.822063+00:00",
+  "scenario_count": 3,
+  "successful_scenarios": 3,
+  "success_rate": 1.0,
+  "attempt_count": 4,
+  "successful_attempts": 3,
+  "attempt_success_rate": 0.75,
+  "by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total": 1,
+      "successful": 1,
+      "average_steps": 9.0,
+      "success_rate": 1.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total": 2,
+      "successful": 2,
+      "average_steps": 9.0,
+      "success_rate": 1.0
+    }
+  ],
+  "by_challenge_tag": [
+    {
+      "tag": "default-behavior",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "env-config",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multi-file",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total": 2,
+      "successful": 2,
+      "success_rate": 1.0
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total": 1,
+      "successful": 1,
+      "success_rate": 1.0
+    }
+  ],
+  "attempts_by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "average_steps": 9.0,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total_attempts": 3,
+      "successful_attempts": 2,
+      "average_steps": 7.0,
+      "attempt_success_rate": 0.6666666666666666
+    }
+  ],
+  "attempts_by_challenge_tag": [
+    {
+      "tag": "default-behavior",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "env-config",
+      "total_attempts": 2,
+      "successful_attempts": 2,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total_attempts": 3,
+      "successful_attempts": 2,
+      "attempt_success_rate": 0.6666666666666666
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total_attempts": 3,
+      "successful_attempts": 2,
+      "attempt_success_rate": 0.6666666666666666
+    },
+    {
+      "tag": "multi-file",
+      "total_attempts": 1,
+      "successful_attempts": 1,
+      "attempt_success_rate": 1.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total_attempts": 3,
+      "successful_attempts": 2,
+      "attempt_success_rate": 0.6666666666666666
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total_attempts": 2,
+      "successful_attempts": 1,
+      "attempt_success_rate": 0.5
+    }
+  ],
+  "flaky_scenarios": [
+    {
+      "scenario_id": "wrong-first-fix-pressure",
+      "total_attempts": 2,
+      "successful_attempts": 1,
+      "attempt_success_rate": 0.5
+    }
+  ],
+  "scenarios": [
+    {
+      "schema_version": 1,
+      "scenario_id": "env-config-mismatch",
+      "bug_class": "env-config-mismatch",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "env-config",
+        "multi-file",
+        "default-behavior"
+      ],
+      "repository_root": ".tmp-e2e/staging-drill-messy-env-config-mismatch-202603200003",
+      "run_id": "ca268bc9-6593-4f11-9725-f24ad6badd5a",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 9,
+      "recovery_attempts": 2,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/messy-batch-20260320a/env-config-mismatch.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "env-misleading-cascade",
+      "bug_class": "env-misleading-cascade",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "env-config",
+        "misleading-stacktrace",
+        "iterative-repair",
+        "multiple-failures"
+      ],
+      "repository_root": ".tmp-e2e/staging-drill-messy-env-misleading-cascade-202603200003",
+      "run_id": "a086a6dd-25c9-4f68-83de-4c2122b701b4",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 7,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/messy-batch-20260320a/env-misleading-cascade.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "wrong-first-fix-pressure",
+      "bug_class": "wrong-first-fix-pressure",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "wrong-first-fix",
+        "iterative-repair",
+        "misleading-stacktrace",
+        "multiple-failures"
+      ],
+      "repository_root": ".tmp-e2e/staging-drill-messy-wrong-first-fix-pressure-a2-202603200003",
+      "run_id": "1bb83233-f267-41aa-9f5a-2305523fbac0",
+      "status": "succeeded",
+      "phase": "completed",
+      "total_steps": 11,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": true,
+      "failure_class": null,
+      "last_error": null,
+      "require_browser_verification": false,
+      "latest_verification_kind": "sandbox",
+      "final_success": true,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/messy-batch-20260320a/wrong-first-fix-pressure-attempt-2.json"
+    }
+  ]
+}

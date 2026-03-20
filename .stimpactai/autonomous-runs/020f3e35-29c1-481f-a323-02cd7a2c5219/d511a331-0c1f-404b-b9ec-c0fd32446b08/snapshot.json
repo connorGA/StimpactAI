@@ -1,0 +1,102 @@
+{
+  "events": [],
+  "run": {
+    "approval_status": "not_required",
+    "async_job_id": "af0b8d17-abf0-41b0-9cbf-904458dfb44a",
+    "benchmark_bug_class": "wrong-first-fix-pressure",
+    "benchmark_scenario_id": "wrong-first-fix-pressure",
+    "coding_session_id": "86ecae46-9e30-4396-804b-6d928ff7b306",
+    "created_at": "2026-03-20T04:43:09.143975Z",
+    "execution_mode": "repair_and_propose",
+    "id": "d511a331-0c1f-404b-b9ec-c0fd32446b08",
+    "incident_id": "020f3e35-29c1-481f-a323-02cd7a2c5219",
+    "initializer_session_id": "31aed5fd-08b9-48ab-b6a3-3254fce5d5c3",
+    "last_error": null,
+    "latest_verification": {
+      "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+      "kind": "sandbox",
+      "metadata": {
+        "executor_backend": "kubernetes",
+        "patch_applied": true,
+        "reproduction_succeeded": true,
+        "sandbox_run_id": "f534f62f-c7eb-4674-bfc6-677e73d9acfc"
+      },
+      "passed": true,
+      "recorded_at": "2026-03-20T04:44:04.646229Z",
+      "source": "sandbox",
+      "summary": "Kubernetes job stimpact-sandbox-f534f62f completed successfully."
+    },
+    "loop_state": {
+      "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+      "consecutive_failures": 0,
+      "last_failure": null,
+      "last_tool_name": "run_command",
+      "last_tool_ok": true,
+      "last_tool_result": {
+        "_tool_call": {
+          "ok": true,
+          "tool_name": "run_command",
+          "turn_id": 10
+        },
+        "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+        "exit_code": 0,
+        "message": "Command completed successfully.",
+        "ok": true,
+        "output": "Retried command with python3 after `python` was not available on PATH.\n\nstdout:\n...                                                                      [100%]\n3 passed in 0.01s",
+        "stderr": "",
+        "stdout": "...                                                                      [100%]\n3 passed in 0.01s\n",
+        "timed_out": false,
+        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-hardbench-wrong-first-fix-pressure-202603200002"
+      },
+      "max_steps": 12,
+      "recent_failure_signatures": [],
+      "recent_tool_names": [
+        "checkpoint",
+        "run_command",
+        "search_dir",
+        "open_file",
+        "open_file",
+        "edit_file",
+        "run_command",
+        "open_file",
+        "edit_file",
+        "run_command"
+      ],
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "step_index": 9
+    },
+    "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the first plausible parser fix 20260320044302' for service billing-api.",
+    "patch_run_id": "e4fe199b-1f32-4392-958f-059307249763",
+    "phase": "completed",
+    "policy": {
+      "allow_writeback": true,
+      "allowed_execution_backends": [
+        "kubernetes",
+        "local"
+      ],
+      "allowed_tool_categories": [
+        "search",
+        "view",
+        "edit",
+        "command",
+        "browser",
+        "git"
+      ],
+      "auto_run_allowed": true,
+      "max_repair_attempts": 2,
+      "max_retry_budget": 2,
+      "reasons": [],
+      "require_browser_verification": false,
+      "requires_human_approval": false
+    },
+    "promotion_branch_name": null,
+    "promotion_status": "ready",
+    "promotion_url": null,
+    "repo_profile_id": "c4206429-b84a-4708-ae6b-930e534f5456",
+    "repository_root": ".tmp-e2e/staging-drill-hardbench-wrong-first-fix-pressure-202603200002",
+    "sandbox_run_id": "f534f62f-c7eb-4674-bfc6-677e73d9acfc",
+    "status": "succeeded",
+    "updated_at": "2026-03-20T04:43:50.197486Z"
+  }
+}

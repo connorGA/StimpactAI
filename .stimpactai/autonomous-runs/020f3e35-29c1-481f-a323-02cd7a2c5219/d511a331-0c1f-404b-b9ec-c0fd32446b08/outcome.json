@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "wrong-first-fix-pressure",
+  "benchmark_scenario_id": "wrong-first-fix-pressure",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T04:43:50.197486Z",
+  "created_at": "2026-03-20T04:43:09.143975Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "020f3e35-29c1-481f-a323-02cd7a2c5219",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "f534f62f-c7eb-4674-bfc6-677e73d9acfc"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T04:44:04.646229Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-f534f62f completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the first plausible parser fix 20260320044302' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-wrong-first-fix-pressure-202603200002",
+  "run_id": "d511a331-0c1f-404b-b9ec-c0fd32446b08",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

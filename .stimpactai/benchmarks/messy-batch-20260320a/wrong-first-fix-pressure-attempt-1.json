@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "wrong-first-fix-pressure",
+  "bug_class": "wrong-first-fix-pressure",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "wrong-first-fix",
+    "iterative-repair",
+    "misleading-stacktrace",
+    "multiple-failures"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-messy-wrong-first-fix-pressure-a1-202603200003",
+  "run_id": "a2d2f491-3a17-48ef-9539-414fdfb82a01",
+  "status": "failed",
+  "phase": "failed",
+  "total_steps": 3,
+  "recovery_attempts": 2,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": false,
+  "failure_class": null,
+  "last_error": "Tool execution failed: 1 validation error for FileViewRequest\npage_size\n  Input should be less than or equal to 100 [type=less_than_equal, input_value=200, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.12/v/less_than_equal",
+  "require_browser_verification": false,
+  "latest_verification_kind": null,
+  "final_success": false
+}

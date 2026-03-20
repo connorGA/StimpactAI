@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "wrong-first-fix-pressure",
+  "benchmark_scenario_id": "wrong-first-fix-pressure",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-20T05:26:32.377113Z",
+  "created_at": "2026-03-20T05:25:50.286652Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "1a71244c-3a09-4ac0-a65d-1d6038493445",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "f4aad7db-4a3d-4f0a-93ac-1d29c1346d13"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-20T05:26:48.708209Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-f4aad7db completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the first plausible parser fix 20260320052543' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-wrong-first-fix-pressure-retry-20260320",
+  "run_id": "f941a6d9-26d8-4b74-9307-3badfdd943e6",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 10,
+  "total_tool_calls": 0
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "scenario_id": "misleading-cascade",
+  "bug_class": "misleading-cascade-bugs",
+  "difficulty": "very-hard",
+  "challenge_tags": [
+    "misleading-stacktrace",
+    "iterative-repair",
+    "multi-file",
+    "multiple-failures"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-hardbench-misleading-cascade-202603200002",
+  "run_id": "d6ab256e-f1ba-43ef-a77b-5e437f45d61c",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 7,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

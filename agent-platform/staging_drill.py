@@ -28,6 +28,144 @@ _BASE_FIXTURE_FILES = {
     "staging_drill_fixture/__init__.py": "",
 }
 
+
+def _frontend_drill_profile(*, url: str = "http://127.0.0.1:3000/frontend-drill") -> str:
+    return (
+        "start_command: npm --prefix client-ui run dev -- --hostname 127.0.0.1 --port 3000\n"
+        "browser_verification_entrypoints:\n"
+        "  - name: frontend-drill\n"
+        f"    url: {url}\n"
+        "    description: Frontend drill scenario page.\n"
+        "    ready_selector: '[data-drill-root=\"frontend-drill\"]'\n"
+        "environment_assumptions:\n"
+        "  - Node.js and npm are available locally.\n"
+        "  - The frontend drill route renders without depending on the backend API.\n"
+        "ignored_directories:\n"
+        "  - .git\n"
+        "  - node_modules\n"
+        "  - .next\n"
+        "language_hints:\n"
+        "  \".ts\": typescript\n"
+        "  \".tsx\": typescript\n"
+    )
+
+
+_FRONTEND_DRILL_VERIFY_SCRIPT = """import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+
+const EXPECTATIONS_PATH = ".stimpactai/frontend_drill_expectations.json";
+const DEV_SERVER_COMMAND =
+  "npm --prefix client-ui run dev -- --hostname 127.0.0.1 --port 3000";
+
+async function fetchText(url) {
+  const response = await fetch(url);
+  return {
+    statusCode: response.status,
+    html: await response.text(),
+  };
+}
+
+async function main() {
+  const expectations = JSON.parse(await readFile(EXPECTATIONS_PATH, "utf-8"));
+  if (!existsSync("client-ui/node_modules/next")) {
+    throw new Error("Frontend dependencies are missing. Run npm install in the repository root and client-ui before verifying.");
+  }
+  const process = spawn(DEV_SERVER_COMMAND, {
+    shell: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let logs = "";
+  let childError = null;
+  process.stdout.on("data", (chunk) => {
+    logs += String(chunk);
+  });
+  process.stderr.on("data", (chunk) => {
+    logs += String(chunk);
+  });
+  process.on("error", (error) => {
+    childError = error;
+  });
+
+  try {
+    const deadline = Date.now() + 120_000;
+    let html = "";
+    let statusCode = null;
+
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetchText(expectations.url);
+        statusCode = response.statusCode;
+        html = response.html;
+      } catch {
+        statusCode = null;
+        html = "";
+      }
+
+      if (childError) {
+        throw childError;
+      }
+      if (process.exitCode !== null) {
+        throw new Error(
+          logs.trim() || `Frontend dev server exited before the drill page became ready (exit ${process.exitCode}).`,
+        );
+      }
+
+      if (statusCode === 200 && html.includes(expectations.ready_marker)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+
+    if (!(statusCode === 200 && html.includes(expectations.ready_marker))) {
+      throw new Error("Frontend drill page did not become ready before timeout.");
+    }
+
+    const missing = expectations.contains_text.filter((snippet) => !html.includes(snippet));
+    const forbidden = expectations.not_contains_text.filter((snippet) => html.includes(snippet));
+    if (missing.length > 0 || forbidden.length > 0) {
+      throw new Error(
+        JSON.stringify(
+          {
+            missing,
+            forbidden,
+            status_code: statusCode,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  } finally {
+    process.kill("SIGTERM");
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+"""
+
+
+def _frontend_drill_support_files(
+    *,
+    contains_text: list[str],
+    not_contains_text: list[str] | None = None,
+) -> dict[str, str]:
+    expectations = {
+        "url": "http://127.0.0.1:3000/frontend-drill",
+        "ready_marker": 'data-drill-root="frontend-drill"',
+        "contains_text": contains_text,
+        "not_contains_text": not_contains_text or [],
+    }
+    return {
+        ".stimpactai/profile.yml": _frontend_drill_profile(),
+        ".stimpactai/frontend_drill_expectations.json": json.dumps(expectations, indent=2),
+        "frontend_drill_verify.mjs": _FRONTEND_DRILL_VERIFY_SCRIPT,
+    }
+
+
 _DRILL_SCENARIOS: dict[str, DrillScenario] = {
     "header-key": DrillScenario(
         name="header-key",
@@ -288,6 +426,400 @@ _DRILL_SCENARIOS: dict[str, DrillScenario] = {
             ),
         },
     ),
+    "env-config-mismatch": DrillScenario(
+        name="env-config-mismatch",
+        bug_class="env-config-mismatch",
+        difficulty="hard",
+        error_summary="Retry policy default config skipped HTTP 429",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/service.py", line 5, in should_retry_request\n'
+            "AssertionError: expected HTTP 429 to be retried from default config"
+        ),
+        request_path="/retry-policy/env-config",
+        response_status_code=429,
+        challenge_tags=("env-config", "multi-file", "default-behavior"),
+        fixture_files={
+            "staging_drill_fixture/config.py": (
+                "import os\n\n\n"
+                "def retry_statuses_from_env() -> set[int]:\n"
+                '    raw = os.getenv("RETRY_STATUSES", "500,502,503,504")\n'
+                "    return {int(value.strip()) for value in raw.split(\",\") if value.strip()}\n"
+            ),
+            "staging_drill_fixture/policy.py": (
+                "from staging_drill_fixture.config import retry_statuses_from_env\n\n\n"
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code in retry_statuses_from_env()\n"
+            ),
+            "staging_drill_fixture/service.py": (
+                "from staging_drill_fixture.policy import should_retry\n\n\n"
+                "def should_retry_request(status_code: int) -> bool:\n"
+                "    return should_retry(status_code)\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.service import should_retry_request\n\n\n"
+                "def test_should_retry_http_429_from_default_config() -> None:\n"
+                "    assert should_retry_request(429) is True\n\n\n"
+                "def test_should_retry_http_500_from_default_config() -> None:\n"
+                "    assert should_retry_request(500) is True\n"
+            ),
+        },
+    ),
+    "env-misleading-cascade": DrillScenario(
+        name="env-misleading-cascade",
+        bug_class="env-misleading-cascade",
+        difficulty="very-hard",
+        error_summary="Retry response still failed after the config-backed fix",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/service.py", line 6, in build_retry_response\n'
+            "KeyError: 'retry_after_seconds'"
+        ),
+        request_path="/retry-response/env-misleading-cascade",
+        response_status_code=503,
+        challenge_tags=("env-config", "misleading-stacktrace", "iterative-repair", "multiple-failures"),
+        fixture_files={
+            "staging_drill_fixture/config.py": (
+                "import os\n\n\n"
+                "def retry_statuses_from_env() -> set[int]:\n"
+                '    raw = os.getenv("RETRY_STATUSES", "500,502,503,504")\n'
+                "    return {int(value.strip()) for value in raw.split(\",\") if value.strip()}\n\n\n"
+                "def retry_after_header() -> str:\n"
+                '    return os.getenv("RETRY_AFTER_HEADER", "retry_after_seconds")\n'
+            ),
+            "staging_drill_fixture/service.py": (
+                "from staging_drill_fixture.config import retry_after_header, retry_statuses_from_env\n\n\n"
+                "def build_retry_response(headers: dict[str, str], status_code: int) -> tuple[int, bool]:\n"
+                "    retry_after = int(headers[retry_after_header()])\n"
+                "    return retry_after, status_code in retry_statuses_from_env()\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.service import build_retry_response\n\n\n"
+                "def test_build_retry_response_uses_standard_header() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "12"}, 500)[0] == 12\n\n\n'
+                "def test_build_retry_response_retries_http_429() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "12"}, 429)[1] is True\n\n\n'
+                "def test_build_retry_response_still_retries_http_500() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "12"}, 500)[1] is True\n'
+            ),
+        },
+    ),
+    "wrong-first-fix-pressure": DrillScenario(
+        name="wrong-first-fix-pressure",
+        bug_class="wrong-first-fix-pressure",
+        difficulty="very-hard",
+        error_summary="Retry response still failed after the first plausible parser fix",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/api.py", line 6, in build_retry_response\n'
+            "AssertionError: expected Retry-After 15 but got 5"
+        ),
+        request_path="/retry-response/wrong-first-fix",
+        response_status_code=503,
+        challenge_tags=("wrong-first-fix", "iterative-repair", "misleading-stacktrace", "multiple-failures"),
+        fixture_files={
+            "staging_drill_fixture/parser.py": (
+                "def parse_retry_after(value: str) -> int:\n"
+                "    return int(value[1:])\n"
+            ),
+            "staging_drill_fixture/policy.py": (
+                "def should_retry(status_code: int) -> bool:\n"
+                "    return status_code >= 500\n"
+            ),
+            "staging_drill_fixture/api.py": (
+                "from staging_drill_fixture.parser import parse_retry_after\n"
+                "from staging_drill_fixture.policy import should_retry\n\n\n"
+                "def build_retry_response(headers: dict[str, str], status_code: int) -> tuple[int, bool]:\n"
+                '    retry_after = parse_retry_after(headers["Retry-After"])\n'
+                "    return retry_after, should_retry(status_code)\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.api import build_retry_response\n\n\n"
+                "def test_build_retry_response_keeps_full_retry_delay() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "15"}, 500)[0] == 15\n\n\n'
+                "def test_build_retry_response_retries_http_429() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "15"}, 429)[1] is True\n\n\n'
+                "def test_build_retry_response_still_retries_http_500() -> None:\n"
+                '    assert build_retry_response({"Retry-After": "15"}, 500)[1] is True\n'
+            ),
+        },
+    ),
+    "decoy-config-fallback": DrillScenario(
+        name="decoy-config-fallback",
+        bug_class="decoy-config-fallback",
+        difficulty="hard",
+        error_summary="Retry selector used legacy defaults when no env override was present",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/staging_drill_fixture/service.py", line 5, in should_retry_request\n'
+            "AssertionError: expected HTTP 429 to be retried from configured defaults"
+        ),
+        request_path="/retry-policy/decoy-config",
+        response_status_code=429,
+        challenge_tags=("env-config", "wide-search-space", "decoy-config"),
+        fixture_files={
+            "staging_drill_fixture/defaults.py": (
+                "DEFAULT_RETRY_STATUSES = {429, 500, 502, 503, 504}\n"
+                "LEGACY_RETRY_STATUSES = {500, 502, 503, 504}\n"
+            ),
+            "staging_drill_fixture/config.py": (
+                "import os\n\n"
+                "from staging_drill_fixture.defaults import DEFAULT_RETRY_STATUSES, LEGACY_RETRY_STATUSES\n\n\n"
+                "def configured_retry_statuses() -> set[int]:\n"
+                '    raw = os.getenv("RETRY_STATUSES")\n'
+                "    if raw:\n"
+                "        return {int(value.strip()) for value in raw.split(\",\") if value.strip()}\n"
+                "    return LEGACY_RETRY_STATUSES\n"
+            ),
+            "staging_drill_fixture/selectors.py": (
+                "from staging_drill_fixture.config import configured_retry_statuses\n\n\n"
+                "def retryable_statuses() -> set[int]:\n"
+                "    return configured_retry_statuses()\n"
+            ),
+            "staging_drill_fixture/service.py": (
+                "from staging_drill_fixture.selectors import retryable_statuses\n\n\n"
+                "def should_retry_request(status_code: int) -> bool:\n"
+                "    return status_code in retryable_statuses()\n"
+            ),
+            "staging_drill_fixture/test_buggy_retry.py": (
+                "from staging_drill_fixture.service import should_retry_request\n\n\n"
+                "def test_should_retry_http_429_from_defaults() -> None:\n"
+                "    assert should_retry_request(429) is True\n\n\n"
+                "def test_should_retry_http_500_from_defaults() -> None:\n"
+                "    assert should_retry_request(500) is True\n"
+            ),
+        },
+    ),
+    "frontend-live-status-copy": DrillScenario(
+        name="frontend-live-status-copy",
+        bug_class="frontend-live-status-copy",
+        difficulty="hard",
+        error_summary="Frontend live status summary reported healthy state while an open incident was visible",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/client-ui/src/app/frontend-drill/page.tsx", line 13, in FrontendDrillPage\n'
+            "AssertionError: expected the page headline to show an active incident warning"
+        ),
+        request_path="/frontend-drill/live-status",
+        response_status_code=503,
+        challenge_tags=("client-ui", "copy-logic", "helper-indirection"),
+        fixture_files={
+            **_frontend_drill_support_files(
+                contains_text=["1 active incident needs attention"],
+                not_contains_text=["All monitored services look healthy"],
+            ),
+            "client-ui/src/lib/frontend-drill/live-status.ts": (
+                "export function buildLiveStatusTitle(openIncidentCount: number): string {\n"
+                "  if (openIncidentCount <= 1) {\n"
+                '    return "All monitored services look healthy";\n'
+                "  }\n\n"
+                '  return `${openIncidentCount} active incidents need attention`;\n'
+                "}\n"
+            ),
+            "client-ui/src/app/frontend-drill/page.tsx": (
+                'import { buildLiveStatusTitle } from "@/lib/frontend-drill/live-status";\n\n'
+                "const incidents = [\n"
+                '  { id: "inc-1", status: "open", title: "Checkout API latency spike" },\n'
+                '  { id: "inc-2", status: "resolved", title: "Background queue caught up" },\n'
+                "];\n\n"
+                "export default function FrontendDrillPage() {\n"
+                '  const openIncidentCount = incidents.filter((incident) => incident.status === "open").length;\n'
+                "  return (\n"
+                '    <main data-drill-root="frontend-drill" className="space-y-4 p-8">\n'
+                '      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8f735c]">Frontend drill</p>\n'
+                '      <h1 className="text-3xl font-semibold text-[#171717]">{buildLiveStatusTitle(openIncidentCount)}</h1>\n'
+                '      <p className="text-sm text-[#5f6470]">{incidents[0].title}</p>\n'
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        },
+    ),
+    "frontend-empty-state-filter": DrillScenario(
+        name="frontend-empty-state-filter",
+        bug_class="frontend-empty-state-filter",
+        difficulty="hard",
+        error_summary="Frontend incident board rendered an empty state even though an open incident was present",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/client-ui/src/app/frontend-drill/page.tsx", line 18, in FrontendDrillPage\n'
+            'AssertionError: expected "Checkout API latency spike" to remain visible'
+        ),
+        request_path="/frontend-drill/empty-state",
+        response_status_code=503,
+        challenge_tags=("client-ui", "wide-search-space", "decoy-modules"),
+        fixture_files={
+            **_frontend_drill_support_files(
+                contains_text=["Checkout API latency spike"],
+                not_contains_text=["No active incidents in the drill board."],
+            ),
+            "client-ui/src/lib/frontend-drill/legacy-selectors.ts": (
+                "export function keepAllIncidentIds(ids: string[]): string[] {\n"
+                "  return ids;\n"
+                "}\n"
+            ),
+            "client-ui/src/lib/frontend-drill/selectors.ts": (
+                'type DrillIncident = { id: string; status: "open" | "resolved"; title: string };\n\n'
+                "export function visibleFrontendIncidents(incidents: DrillIncident[]): DrillIncident[] {\n"
+                '  return incidents.filter((incident) => incident.status !== "open");\n'
+                "}\n"
+            ),
+            "client-ui/src/app/frontend-drill/page.tsx": (
+                'import { visibleFrontendIncidents } from "@/lib/frontend-drill/selectors";\n\n'
+                "const incidents = [\n"
+                '  { id: "inc-1", status: "open" as const, title: "Checkout API latency spike" },\n'
+                '  { id: "inc-2", status: "resolved" as const, title: "Notification worker recovered" },\n'
+                "];\n\n"
+                "export default function FrontendDrillPage() {\n"
+                "  const visibleIncidents = visibleFrontendIncidents(incidents);\n"
+                "  return (\n"
+                '    <main data-drill-root="frontend-drill" className="space-y-4 p-8">\n'
+                '      <h1 className="text-3xl font-semibold text-[#171717]">Frontend incident board</h1>\n'
+                "      {visibleIncidents.length === 0 ? (\n"
+                '        <p className="text-sm text-[#5f6470]">No active incidents in the drill board.</p>\n'
+                "      ) : (\n"
+                '        <ul className="space-y-2 text-sm text-[#171717]">\n'
+                "          {visibleIncidents.map((incident) => (\n"
+                '            <li key={incident.id}>{incident.title}</li>\n'
+                "          ))}\n"
+                "        </ul>\n"
+                "      )}\n"
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        },
+    ),
+    "frontend-failure-banner": DrillScenario(
+        name="frontend-failure-banner",
+        bug_class="frontend-failure-banner",
+        difficulty="hard",
+        error_summary="Frontend autonomous run panel hid the failure banner even though the latest run had failed",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/client-ui/src/components/frontend-drill/failure-banner.tsx", line 9, in FailureBanner\n'
+            'AssertionError: expected failed autonomous run banner to stay visible'
+        ),
+        request_path="/frontend-drill/failure-banner",
+        response_status_code=503,
+        challenge_tags=("client-ui", "component-logic", "conditional-rendering"),
+        fixture_files={
+            **_frontend_drill_support_files(
+                contains_text=["Autonomous repair stopped: Browser verification timed out."],
+            ),
+            "client-ui/src/components/frontend-drill/failure-banner.tsx": (
+                'type DrillRun = { status: "failed" | "succeeded"; lastError: string | null };\n\n'
+                "export function FailureBanner({ run }: { run: DrillRun }) {\n"
+                '  const shouldShowError = run.status === "succeeded" && Boolean(run.lastError);\n'
+                "  if (!shouldShowError || !run.lastError) {\n"
+                "    return null;\n"
+                "  }\n\n"
+                "  return (\n"
+                '    <p className="rounded-xl border border-[rgba(255,106,61,0.2)] bg-[rgba(255,106,61,0.08)] px-3 py-2 text-sm text-[#9b3719]">\n'
+                "      {run.lastError}\n"
+                "    </p>\n"
+                "  );\n"
+                "}\n"
+            ),
+            "client-ui/src/app/frontend-drill/page.tsx": (
+                'import { FailureBanner } from "@/components/frontend-drill/failure-banner";\n\n'
+                "const run = {\n"
+                '  status: "failed" as const,\n'
+                '  lastError: "Autonomous repair stopped: Browser verification timed out.",\n'
+                "};\n\n"
+                "export default function FrontendDrillPage() {\n"
+                "  return (\n"
+                '    <main data-drill-root="frontend-drill" className="space-y-4 p-8">\n'
+                '      <h1 className="text-3xl font-semibold text-[#171717]">Frontend autonomous drill</h1>\n'
+                '      <p className="text-sm text-[#5f6470]">The latest run should surface its failure details to operators.</p>\n'
+                "      <FailureBanner run={run} />\n"
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        },
+    ),
+    "frontend-env-mode-default": DrillScenario(
+        name="frontend-env-mode-default",
+        bug_class="frontend-env-mode-default",
+        difficulty="hard",
+        error_summary="Frontend drill mode badge used the wrong default label when no environment override was present",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/client-ui/src/app/frontend-drill/page.tsx", line 9, in FrontendDrillPage\n'
+            'AssertionError: expected frontend drill mode to default to "monitoring"'
+        ),
+        request_path="/frontend-drill/env-mode",
+        response_status_code=503,
+        challenge_tags=("client-ui", "env-config", "default-behavior"),
+        fixture_files={
+            **_frontend_drill_support_files(
+                contains_text=["Mode: monitoring"],
+                not_contains_text=["Mode: stable"],
+            ),
+            "client-ui/src/lib/frontend-drill/config.ts": (
+                "export function frontendDrillMode(): string {\n"
+                '  return process.env.NEXT_PUBLIC_FRONTEND_DRILL_MODE ?? "stable";\n'
+                "}\n"
+            ),
+            "client-ui/src/app/frontend-drill/page.tsx": (
+                'import { frontendDrillMode } from "@/lib/frontend-drill/config";\n\n'
+                "export default function FrontendDrillPage() {\n"
+                "  return (\n"
+                '    <main data-drill-root="frontend-drill" className="space-y-4 p-8">\n'
+                '      <h1 className="text-3xl font-semibold text-[#171717]">Frontend environment drill</h1>\n'
+                '      <p className="text-sm text-[#5f6470]">{`Mode: ${frontendDrillMode()}`}</p>\n'
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        },
+    ),
+    "frontend-misleading-cascade": DrillScenario(
+        name="frontend-misleading-cascade",
+        bug_class="frontend-misleading-cascade",
+        difficulty="very-hard",
+        error_summary="Frontend retry card still rendered the wrong copy after the first apparent fix",
+        stacktrace=(
+            "Traceback:\n"
+            '  File "/workspace/repo/client-ui/src/app/frontend-drill/page.tsx", line 16, in FrontendDrillPage\n'
+            'AssertionError: expected retry card to show "Retry again in 15 minutes" and "Follow-up required"'
+        ),
+        request_path="/frontend-drill/misleading-cascade",
+        response_status_code=503,
+        challenge_tags=("client-ui", "iterative-repair", "multiple-failures", "wrong-first-fix"),
+        fixture_files={
+            **_frontend_drill_support_files(
+                contains_text=["Retry again in 15 minutes", "Follow-up required"],
+                not_contains_text=["Retry again in 5 minutes", "Follow-up not required"],
+            ),
+            "client-ui/src/lib/frontend-drill/formatters.ts": (
+                "export function formatRetryDelay(value: string): string {\n"
+                '  return `Retry again in ${value.slice(1)} minutes`;\n'
+                "}\n"
+            ),
+            "client-ui/src/lib/frontend-drill/summary.ts": (
+                "export function buildFollowUpSummary(requiresFollowUp: boolean): string {\n"
+                '  return requiresFollowUp ? "Follow-up not required" : "Follow-up required";\n'
+                "}\n"
+            ),
+            "client-ui/src/app/frontend-drill/page.tsx": (
+                'import { formatRetryDelay } from "@/lib/frontend-drill/formatters";\n'
+                'import { buildFollowUpSummary } from "@/lib/frontend-drill/summary";\n\n'
+                "const retryAfter = \"15\";\n"
+                "const requiresFollowUp = true;\n\n"
+                "export default function FrontendDrillPage() {\n"
+                "  return (\n"
+                '    <main data-drill-root="frontend-drill" className="space-y-4 p-8">\n'
+                '      <h1 className="text-3xl font-semibold text-[#171717]">Frontend retry card</h1>\n'
+                '      <p className="text-sm text-[#171717]">{formatRetryDelay(retryAfter)}</p>\n'
+                '      <p className="text-sm text-[#5f6470]">{buildFollowUpSummary(requiresFollowUp)}</p>\n'
+                "    </main>\n"
+                "  );\n"
+                "}\n"
+            ),
+        },
+    ),
 }
 
 
@@ -415,16 +947,39 @@ def _build_benchmark_result(
         "stagnation_count": outcome.get("stagnation_count"),
         "fresh_verification_satisfied": outcome.get("fresh_verification_satisfied"),
         "failure_class": outcome.get("failure_class"),
+        "last_error": run.get("last_error"),
+        "require_browser_verification": (run.get("policy") or {}).get("require_browser_verification"),
+        "latest_verification_kind": (run.get("latest_verification") or {}).get("kind"),
         "final_success": final_success,
     }
 
 
-def _load_latest_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
+def _recommended_max_steps(scenario: DrillScenario) -> int:
+    if "client-ui" in scenario.challenge_tags:
+        return 20
+    return 12
+
+
+def _run_poll_reached_terminal_state(
+    *,
+    status: str | None,
+    promotion_status: str | None,
+    promote: bool,
+) -> bool:
+    if status in {"failed", "cancelled"}:
+        return True
+    if promote:
+        return promotion_status == "proposed"
+    return promotion_status in {"ready", "blocked", "proposed"}
+
+
+def _load_all_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
     directory = Path(results_dir).expanduser().resolve()
     if not directory.exists():
         raise RuntimeError(f"Benchmark results directory does not exist: {directory}")
-    latest_by_scenario: dict[str, tuple[float, dict[str, Any], Path]] = {}
-    for path in directory.glob("*.json"):
+
+    results: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json"), key=lambda candidate: candidate.name):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -432,6 +987,23 @@ def _load_latest_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
         scenario_id = payload.get("scenario_id")
         if not isinstance(scenario_id, str) or not scenario_id:
             continue
+        normalized = dict(payload)
+        scenario = _DRILL_SCENARIOS.get(scenario_id)
+        if scenario is not None:
+            normalized.setdefault("bug_class", scenario.bug_class)
+            normalized.setdefault("difficulty", scenario.difficulty)
+            normalized.setdefault("challenge_tags", list(scenario.challenge_tags))
+        normalized["source_file"] = str(path)
+        results.append(normalized)
+    return results
+
+
+def _load_latest_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
+    all_results = _load_all_benchmark_results(results_dir)
+    latest_by_scenario: dict[str, tuple[float, dict[str, Any], Path]] = {}
+    for payload in all_results:
+        path = Path(str(payload["source_file"]))
+        scenario_id = str(payload["scenario_id"])
         stat = path.stat()
         current = latest_by_scenario.get(scenario_id)
         if current is None or stat.st_mtime > current[0]:
@@ -452,10 +1024,15 @@ def _load_latest_benchmark_results(results_dir: str) -> list[dict[str, Any]]:
 
 
 def _build_benchmark_summary(results_dir: str) -> dict[str, Any]:
+    all_results = _load_all_benchmark_results(results_dir)
     latest_results = _load_latest_benchmark_results(results_dir)
     succeeded = [result for result in latest_results if bool(result.get("final_success"))]
+    successful_attempts = [result for result in all_results if bool(result.get("final_success"))]
     by_difficulty: dict[str, dict[str, Any]] = {}
     by_tag: dict[str, dict[str, Any]] = {}
+    attempts_by_difficulty: dict[str, dict[str, Any]] = {}
+    attempts_by_tag: dict[str, dict[str, Any]] = {}
+    attempts_by_scenario: dict[str, dict[str, Any]] = {}
 
     for result in latest_results:
         difficulty = str(result.get("difficulty") or "unknown")
@@ -475,6 +1052,32 @@ def _build_benchmark_summary(results_dir: str) -> dict[str, Any]:
             tag_bucket["total"] += 1
             tag_bucket["successful"] += int(bool(result.get("final_success")))
 
+    for result in all_results:
+        difficulty = str(result.get("difficulty") or "unknown")
+        bucket = attempts_by_difficulty.setdefault(
+            difficulty,
+            {"difficulty": difficulty, "total_attempts": 0, "successful_attempts": 0, "average_steps": 0.0},
+        )
+        bucket["total_attempts"] += 1
+        bucket["successful_attempts"] += int(bool(result.get("final_success")))
+        total_steps = result.get("total_steps")
+        if isinstance(total_steps, int):
+            bucket["average_steps"] += float(total_steps)
+
+        scenario_id = str(result.get("scenario_id") or "unknown")
+        scenario_bucket = attempts_by_scenario.setdefault(
+            scenario_id,
+            {"scenario_id": scenario_id, "total_attempts": 0, "successful_attempts": 0},
+        )
+        scenario_bucket["total_attempts"] += 1
+        scenario_bucket["successful_attempts"] += int(bool(result.get("final_success")))
+
+        for tag in result.get("challenge_tags", []):
+            label = str(tag)
+            tag_bucket = attempts_by_tag.setdefault(label, {"tag": label, "total_attempts": 0, "successful_attempts": 0})
+            tag_bucket["total_attempts"] += 1
+            tag_bucket["successful_attempts"] += int(bool(result.get("final_success")))
+
     for bucket in by_difficulty.values():
         total = int(bucket["total"])
         bucket["success_rate"] = (bucket["successful"] / total) if total else 0.0
@@ -484,6 +1087,28 @@ def _build_benchmark_summary(results_dir: str) -> dict[str, Any]:
         total = int(bucket["total"])
         bucket["success_rate"] = (bucket["successful"] / total) if total else 0.0
 
+    for bucket in attempts_by_difficulty.values():
+        total_attempts = int(bucket["total_attempts"])
+        bucket["attempt_success_rate"] = (bucket["successful_attempts"] / total_attempts) if total_attempts else 0.0
+        bucket["average_steps"] = (bucket["average_steps"] / total_attempts) if total_attempts else 0.0
+
+    for bucket in attempts_by_tag.values():
+        total_attempts = int(bucket["total_attempts"])
+        bucket["attempt_success_rate"] = (bucket["successful_attempts"] / total_attempts) if total_attempts else 0.0
+
+    flaky_scenarios = [
+        {
+            "scenario_id": scenario_id,
+            "total_attempts": values["total_attempts"],
+            "successful_attempts": values["successful_attempts"],
+            "attempt_success_rate": (values["successful_attempts"] / values["total_attempts"])
+            if values["total_attempts"]
+            else 0.0,
+        }
+        for scenario_id, values in sorted(attempts_by_scenario.items())
+        if 0 < values["successful_attempts"] < values["total_attempts"]
+    ]
+
     return {
         "schema_version": 1,
         "generated_from": "staging_drill_summary",
@@ -492,8 +1117,14 @@ def _build_benchmark_summary(results_dir: str) -> dict[str, Any]:
         "scenario_count": len(latest_results),
         "successful_scenarios": len(succeeded),
         "success_rate": (len(succeeded) / len(latest_results)) if latest_results else 0.0,
+        "attempt_count": len(all_results),
+        "successful_attempts": len(successful_attempts),
+        "attempt_success_rate": (len(successful_attempts) / len(all_results)) if all_results else 0.0,
         "by_difficulty": sorted(by_difficulty.values(), key=lambda item: str(item["difficulty"])),
         "by_challenge_tag": sorted(by_tag.values(), key=lambda item: str(item["tag"])),
+        "attempts_by_difficulty": sorted(attempts_by_difficulty.values(), key=lambda item: str(item["difficulty"])),
+        "attempts_by_challenge_tag": sorted(attempts_by_tag.values(), key=lambda item: str(item["tag"])),
+        "flaky_scenarios": flaky_scenarios,
         "scenarios": latest_results,
     }
 
@@ -602,6 +1233,7 @@ def main() -> None:
     run_payload = {
         "execution_mode": "repair_and_propose",
         "allow_writeback": True,
+        "max_steps": _recommended_max_steps(scenario),
         "benchmark_scenario_id": scenario.name,
         "benchmark_bug_class": scenario.bug_class,
     }
@@ -619,6 +1251,8 @@ def main() -> None:
     run_detail_url = f"{args.api_url}/incidents/{incident_id}/autonomous-runs/{run_id}"
 
     latest_detail = None
+    terminal_failure = False
+    poll_completed = False
     while time.time() < deadline:
         latest_detail = _http_json("GET", run_detail_url)
         approval_status = latest_detail["run"].get("approval_status")
@@ -631,16 +1265,21 @@ def main() -> None:
         status = latest_detail["run"].get("status")
         promotion_status = latest_detail["run"].get("promotion_status")
         if status in {"failed", "cancelled"}:
-            raise RuntimeError(json.dumps(latest_detail, indent=2))
+            terminal_failure = True
+            poll_completed = True
+            break
         if args.promote and promotion_status == "ready":
             latest_detail = _http_json(
                 "POST",
                 f"{args.api_url}/incidents/{incident_id}/autonomous-runs/{run_id}/promote",
             )
             promotion_status = latest_detail["run"].get("promotion_status")
-        if args.promote and promotion_status == "proposed":
-            break
-        if not args.promote and promotion_status in {"ready", "blocked", "proposed"}:
+        if _run_poll_reached_terminal_state(
+            status=status,
+            promotion_status=promotion_status,
+            promote=args.promote,
+        ):
+            poll_completed = True
             break
         time.sleep(args.poll_interval)
 
@@ -657,6 +1296,18 @@ def main() -> None:
             repository_root=args.repository_root,
         )
         result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    if not poll_completed:
+        raise RuntimeError(
+            json.dumps(
+                {
+                    "error": "Timed out waiting for autonomous run completion.",
+                    "final_run_detail": latest_detail,
+                },
+                indent=2,
+            )
+        )
+    if terminal_failure:
+        raise RuntimeError(json.dumps(latest_detail, indent=2))
 
 
 if __name__ == "__main__":

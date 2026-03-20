@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from contextlib import contextmanager
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -18,9 +19,11 @@ from harness.schemas.autonomous import (
     AutonomousEventType,
     AutonomousRunPhase,
     AutonomousRunStatus,
+    AutonomousVerificationEvidence,
 )
 from harness.schemas.initializer import FeatureSeed
-from harness.schemas.verification import VerificationKind
+from harness.schemas.orchestrator import ToolInvocationRequest
+from harness.schemas.verification import VerificationKind, VerificationStatus
 
 
 def test_autonomous_repair_runner_bootstraps_coding_ready_run_and_persists_initializer_artifacts(
@@ -202,7 +205,7 @@ if (result) {
 
     assert snapshot.run.status is AutonomousRunStatus.SUCCEEDED
     assert snapshot.run.phase is AutonomousRunPhase.COMPLETED
-    assert snapshot.run.loop_state.step_index >= 4
+    assert snapshot.run.loop_state.step_index >= 3
     assert snapshot.run.loop_state.checkpoint_ref is not None
     event_types = [event.event_type for event in snapshot.events]
     assert AutonomousEventType.GIT_CHECKPOINT_CREATED in event_types
@@ -271,6 +274,162 @@ async def test_autonomous_repair_runner_can_complete_after_command_verification(
 
 
 @pytest.mark.asyncio
+async def test_autonomous_repair_runner_auto_completes_after_successful_verification(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "buggy_retry.py"
+    target.write_text(
+        "def read_retry_after(headers):\n    return int(headers['retry_after_seconds'])\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_buggy_retry.py"
+    test_file.write_text(
+        (
+            "from buggy_retry import read_retry_after\n\n"
+            "def test_read_retry_after_uses_standard_header():\n"
+            "    assert read_retry_after({'Retry-After': '7'}) == 7\n"
+        ),
+        encoding="utf-8",
+    )
+    _init_git_repo(tmp_path)
+
+    runner = AutonomousRepairRunner()
+    snapshot = await runner.run_until_stop(
+        repository_root=str(tmp_path),
+        objective="Fix retry-after parsing and auto-complete after verification.",
+        initializer_summary="Prepare coding and command verification.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="retry-after auto completes",
+                description="The retry-after parser should pass integration verification and complete immediately.",
+                verification_method="Run pytest verification command",
+                required_verification=[VerificationKind.INTEGRATION],
+                browser_required=False,
+            )
+        ],
+        decision_engine=PostVerificationWanderDecisionEngine(feature_id="retry-after-auto-completes"),
+        max_steps=8,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.SUCCEEDED
+    assert snapshot.run.phase is AutonomousRunPhase.COMPLETED
+    assert snapshot.run.loop_state.last_tool_name == "run_command"
+    assert snapshot.run.latest_verification is not None
+    assert snapshot.run.latest_verification.kind == VerificationKind.INTEGRATION.value
+    assert snapshot.run.loop_state.step_index == 2
+    assert not any(
+        event.event_type is AutonomousEventType.TOOL_CALL_STARTED
+        and event.payload.get("tool_name") == "open_file"
+        for event in snapshot.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_repair_runner_completes_immediately_when_resume_starts_verified(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    target = tmp_path / "buggy_retry.py"
+    target.write_text(
+        "def read_retry_after(headers):\n    return int(headers['retry_after_seconds'])\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_buggy_retry.py"
+    test_file.write_text(
+        (
+            "from buggy_retry import read_retry_after\n\n"
+            "def test_read_retry_after_uses_standard_header():\n"
+            "    assert read_retry_after({'Retry-After': '7'}) == 7\n"
+        ),
+        encoding="utf-8",
+    )
+    _init_git_repo(tmp_path)
+
+    runner = AutonomousRepairRunner()
+    bootstrap = runner.bootstrap_run(
+        repository_root=str(tmp_path),
+        objective="Resume and complete once verification is already satisfied.",
+        initializer_summary="Prepare coding and command verification.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="resume after verification",
+                description="The retry-after parser should complete immediately when a resumed run is already fully verified.",
+                verification_method="Run pytest verification command",
+                required_verification=[VerificationKind.INTEGRATION],
+                browser_required=False,
+            )
+        ],
+    )
+    run_id = bootstrap.run.id
+    runner._ensure_baseline_checkpoint(run_id)  # noqa: SLF001
+
+    coding_session_id = bootstrap.run.coding_session_id
+    assert coding_session_id is not None
+    coding_snapshot = runner._orchestrator.restore_session(coding_session_id)  # noqa: SLF001
+    feature_id = coding_snapshot.feature_catalog.features[0].id
+
+    runner._orchestrator.invoke_tool(  # noqa: SLF001
+        coding_session_id,
+        ToolInvocationRequest(
+            tool_name="edit_file",
+            arguments={
+                "file_path": str(target),
+                "start_line": 1,
+                "end_line": 2,
+                "replacement_text": (
+                    "def read_retry_after(headers):\n"
+                    "    return int(headers['Retry-After'])\n"
+                ),
+            },
+            feature_id=feature_id,
+        ),
+    )
+    verification = runner._orchestrator.invoke_tool(  # noqa: SLF001
+        coding_session_id,
+        ToolInvocationRequest(
+            tool_name="run_command",
+            arguments={
+                "command": f"{sys.executable} -m pytest test_buggy_retry.py -q",
+                "working_directory": str(tmp_path),
+            },
+            feature_id=feature_id,
+            verification_kind=VerificationKind.INTEGRATION,
+        ),
+    )
+    assert verification.ok is True
+    assert verification.feature_state is not None
+    assert verification.feature_state.status is VerificationStatus.FULLY_VERIFIED
+
+    run = runner.get_snapshot(run_id).run
+    runner._persist_run(  # noqa: SLF001
+        run.model_copy(
+            update={
+                "latest_verification": AutonomousVerificationEvidence(
+                    source="tool",
+                    kind=VerificationKind.INTEGRATION.value,
+                    summary="Command completed successfully.",
+                    passed=True,
+                    command=f"{sys.executable} -m pytest test_buggy_retry.py -q",
+                    recorded_at=datetime.now(UTC),
+                    metadata={"feature_id": feature_id},
+                )
+            }
+        )
+    )
+
+    snapshot = await runner.continue_run(
+        run_id=run_id,
+        decision_engine=ShouldNotDecideEngine(),
+        max_steps=2,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.SUCCEEDED
+    assert snapshot.run.phase is AutonomousRunPhase.COMPLETED
+    assert not any(event.event_type is AutonomousEventType.DECISION_MADE for event in snapshot.events)
+
+
+@pytest.mark.asyncio
 async def test_autonomous_repair_runner_fails_repair_completion_without_code_changes(
     tmp_path: Path,
 ) -> None:
@@ -331,6 +490,34 @@ async def test_autonomous_repair_runner_fails_when_engine_completes_before_verif
     assert snapshot.run.last_error is not None
     assert "before verification" in snapshot.run.last_error.lower()
     assert snapshot.events[-1].event_type is AutonomousEventType.RUN_FAILED
+
+
+@pytest.mark.asyncio
+async def test_autonomous_repair_runner_fails_cleanly_when_decision_engine_errors(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    _init_git_repo(tmp_path)
+    runner = AutonomousRepairRunner()
+
+    snapshot = await runner.run_until_stop(
+        repository_root=str(tmp_path),
+        objective="Exercise decision engine failure handling.",
+        initializer_summary="Prepare coding session.",
+        feature_seeds=[
+            FeatureSeed(
+                feature_name="decision errors are surfaced cleanly",
+                description="Decision-engine exceptions should fail the run explicitly instead of hanging or crashing.",
+                verification_method="N/A",
+                required_verification=[],
+            )
+        ],
+        decision_engine=ExplodingDecisionEngine(),
+        max_steps=2,
+    )
+
+    assert snapshot.run.status is AutonomousRunStatus.FAILED
+    assert snapshot.run.phase is AutonomousRunPhase.FAILED
+    assert snapshot.run.last_error is not None
+    assert "decision engine failed" in snapshot.run.last_error.lower()
 
 
 @pytest.mark.asyncio
@@ -549,6 +736,34 @@ class CommandVerificationDecisionEngine:
         )
 
 
+class ShouldNotDecideEngine:
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        raise AssertionError(
+            "Decision engine should not be consulted when the resumed run is already ready to auto-complete."
+        )
+
+
+class ExplodingDecisionEngine:
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        raise RuntimeError("simulated provider failure")
+
+
 class NoCodeChangeDecisionEngine:
     async def decide(
         self,
@@ -574,6 +789,56 @@ class NoCodeChangeDecisionEngine:
             summary="Verification passed, so complete the run.",
             rationale="The runner should reject this because no code changed.",
             action=AutonomousDecisionAction.COMPLETE,
+        )
+
+
+class PostVerificationWanderDecisionEngine:
+    def __init__(self, *, feature_id: str) -> None:
+        self._feature_id = feature_id
+
+    async def decide(
+        self,
+        *,
+        run,
+        coding_session,
+        available_tools,
+        last_tool_result=None,
+        recent_events=None,
+    ) -> AutonomousDecision:
+        if run.loop_state.step_index == 0:
+            return AutonomousDecision(
+                summary="Fix the retry-after header lookup.",
+                rationale="Repair the bug before running verification.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="edit_file",
+                arguments={
+                    "relative_path": "buggy_retry.py",
+                    "new_content": (
+                        "def read_retry_after(headers):\n"
+                        "    return int(headers['Retry-After'])\n"
+                    ),
+                },
+                arguments_summary="Replace the buggy file contents.",
+                feature_id=self._feature_id,
+            )
+        if run.loop_state.step_index == 1:
+            return AutonomousDecision(
+                summary="Run the verification command.",
+                rationale="Fresh verification evidence should be enough for the runner to auto-complete.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={"command": f"{sys.executable} -m pytest test_buggy_retry.py -q"},
+                arguments_summary="Run pytest for the retry-after fixture.",
+                feature_id=self._feature_id,
+                verification_kind=VerificationKind.INTEGRATION.value,
+            )
+        return AutonomousDecision(
+            summary="Keep inspecting even though verification passed.",
+            rationale="The runner should auto-complete before this extra step is ever invoked.",
+            action=AutonomousDecisionAction.INVOKE_TOOL,
+            selected_tool="open_file",
+            arguments={"file_path": "test_buggy_retry.py"},
+            arguments_summary="Open the test file.",
         )
 
 

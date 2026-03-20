@@ -1,0 +1,60 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "env-misleading-cascade",
+  "benchmark_scenario_id": "env-misleading-cascade",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-19T20:42:57.629897Z",
+  "created_at": "2026-03-19T20:42:13.452860Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": true,
+  "incident_id": "8ef38f27-2535-4e95-9d62-bea6cf634575",
+  "last_error": "Run exceeded the max step budget of 12.",
+  "latest_verification": {
+    "command": "python3 -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "integration",
+    "metadata": {
+      "feature_id": "billing-api-retry-response-still-failed-after-the-config-backed-fix-20260319204207",
+      "tool_name": "run_command",
+      "turn_id": 13
+    },
+    "passed": true,
+    "recorded_at": "2026-03-19T20:42:57.624303Z",
+    "source": "tool",
+    "summary": "Command completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the config-backed fix 20260319204207' for service billing-api.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-env-misleading-cascade-20260319",
+  "run_id": "cfb41fe4-58ae-476e-aa51-e5e0502d7974",
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 12,
+  "total_events": 60,
+  "total_steps": 12,
+  "total_tool_calls": 13
+}

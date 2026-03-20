@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "env-config-mismatch",
+  "bug_class": "env-config-mismatch",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "env-config",
+    "multi-file",
+    "default-behavior"
+  ],
+  "repository_root": ".tmp-e2e/staging-drill-messy-env-config-mismatch-202603200003",
+  "run_id": "ca268bc9-6593-4f11-9725-f24ad6badd5a",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 9,
+  "recovery_attempts": 2,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}

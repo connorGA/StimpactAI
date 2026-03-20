@@ -1,0 +1,61 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "decoy-config-fallback",
+  "benchmark_scenario_id": "decoy-config-fallback",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-19T21:13:07.925191Z",
+  "created_at": "2026-03-19T21:12:31.239235Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "1ab4535d-918e-4413-b572-2b49c01dee88",
+  "last_error": null,
+  "latest_verification": {
+    "command": "python -m pytest staging_drill_fixture/test_buggy_retry.py -q",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "kubernetes",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "f485ca88-90cf-4cc6-b0e7-dc2c975ab9b9"
+    },
+    "passed": true,
+    "recorded_at": "2026-03-19T21:13:24.876818Z",
+    "source": "sandbox",
+    "summary": "Kubernetes job stimpact-sandbox-f485ca88 completed successfully."
+  },
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry selector used legacy defaults when no env override was present 20260319211225' for service billing-api.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-decoy-config-fallback-20260319",
+  "run_id": "9176ad07-908e-4da8-90b9-0afa97681a8b",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

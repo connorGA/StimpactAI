@@ -1,0 +1,48 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": "wrong-first-fix-pressure",
+  "benchmark_scenario_id": "wrong-first-fix-pressure",
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-03-19T22:25:25.051734Z",
+  "created_at": "2026-03-19T22:24:32.974796Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "0e77b213-b299-43e5-8465-e8d8e897aed0",
+  "last_error": "Run exceeded the max step budget of 12.",
+  "latest_verification": null,
+  "objective": "Investigate, repair, and verify incident 'billing-api: Retry response still failed after the first plausible parser fix 20260319222426' for service billing-api.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [],
+    "require_browser_verification": true,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 0,
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/stimpact-drill-wrong-first-fix-pressure-20260319",
+  "run_id": "f0a832eb-b34f-46f9-b19b-6d2ed2ce05d3",
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 12,
+  "total_events": 60,
+  "total_steps": 12,
+  "total_tool_calls": 13
+}

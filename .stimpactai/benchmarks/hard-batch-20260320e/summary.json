@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "generated_from": "staging_drill_summary",
+  "results_directory": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/hard-batch-20260320e",
+  "generated_at": "2026-03-20T04:09:02.563226+00:00",
+  "scenario_count": 2,
+  "successful_scenarios": 0,
+  "success_rate": 0.0,
+  "attempt_count": 2,
+  "successful_attempts": 0,
+  "attempt_success_rate": 0.0,
+  "by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total": 1,
+      "successful": 0,
+      "average_steps": 0.0,
+      "success_rate": 0.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total": 1,
+      "successful": 0,
+      "average_steps": 0.0,
+      "success_rate": 0.0
+    }
+  ],
+  "by_challenge_tag": [
+    {
+      "tag": "decoy-modules",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "multi-file",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "wide-search-space",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total": 1,
+      "successful": 0,
+      "success_rate": 0.0
+    }
+  ],
+  "attempts_by_difficulty": [
+    {
+      "difficulty": "hard",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "average_steps": 0.0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "difficulty": "very-hard",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "average_steps": 0.0,
+      "attempt_success_rate": 0.0
+    }
+  ],
+  "attempts_by_challenge_tag": [
+    {
+      "tag": "decoy-modules",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "iterative-repair",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "misleading-stacktrace",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "multi-file",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "multiple-failures",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "wide-search-space",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    },
+    {
+      "tag": "wrong-first-fix",
+      "total_attempts": 1,
+      "successful_attempts": 0,
+      "attempt_success_rate": 0.0
+    }
+  ],
+  "flaky_scenarios": [],
+  "scenarios": [
+    {
+      "schema_version": 1,
+      "scenario_id": "wide-search-space",
+      "bug_class": "wide-search-space-policy",
+      "difficulty": "hard",
+      "challenge_tags": [
+        "wide-search-space",
+        "multi-file",
+        "decoy-modules"
+      ],
+      "repository_root": ".tmp-e2e/staging-drill-hardbench-wide-search-space-20260319210655",
+      "run_id": "11a2cf1b-cfa4-40cb-884a-0a444ef9706c",
+      "status": "failed",
+      "phase": "failed",
+      "total_steps": 0,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": false,
+      "failure_class": null,
+      "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "require_browser_verification": false,
+      "latest_verification_kind": null,
+      "final_success": false,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/hard-batch-20260320e/wide-search-space.json"
+    },
+    {
+      "schema_version": 1,
+      "scenario_id": "wrong-first-fix-pressure",
+      "bug_class": "wrong-first-fix-pressure",
+      "difficulty": "very-hard",
+      "challenge_tags": [
+        "wrong-first-fix",
+        "iterative-repair",
+        "misleading-stacktrace",
+        "multiple-failures"
+      ],
+      "repository_root": ".tmp-e2e/staging-drill-hardbench-wrong-first-fix-pressure-20260319210832",
+      "run_id": "cad873b2-83c6-420a-8d19-5e96a1a0898d",
+      "status": "failed",
+      "phase": "failed",
+      "total_steps": 0,
+      "recovery_attempts": 0,
+      "stagnation_count": 0,
+      "fresh_verification_satisfied": false,
+      "failure_class": null,
+      "last_error": "Decision engine failed: Autonomous decision generation failed after 3 attempts: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}",
+      "require_browser_verification": false,
+      "latest_verification_kind": null,
+      "final_success": false,
+      "source_file": "/Users/connor/Desktop/StimpactAi/.stimpactai/benchmarks/hard-batch-20260320e/wrong-first-fix-pressure.json"
+    }
+  ]
+}

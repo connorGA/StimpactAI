@@ -17,9 +17,10 @@ class AutonomousPolicyService:
         incident: IncidentRecord,
         repo_profile: RepoProfileRecord | None,
         request: AutonomousRunCreateRequest,
+        browser_verification_supported: bool = False,
     ) -> tuple[AutonomousPolicyDecision, AutonomousApprovalStatus]:
         allow_writeback = bool(request.allow_writeback)
-        require_browser_verification = incident.severity in {
+        require_browser_verification = browser_verification_supported and incident.severity in {
             IncidentSeverity.HIGH,
             IncidentSeverity.CRITICAL,
         }

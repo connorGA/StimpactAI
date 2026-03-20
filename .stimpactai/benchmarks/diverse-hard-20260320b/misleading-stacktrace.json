@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "scenario_id": "misleading-stacktrace",
+  "bug_class": "misleading-stacktrace-helper",
+  "difficulty": "hard",
+  "challenge_tags": [
+    "misleading-stacktrace",
+    "multi-file",
+    "wrapper-indirection"
+  ],
+  "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/diverse-hard-20260320b-misleading-stacktrace-20260319223836",
+  "run_id": "f56ae204-bd0f-4dc1-968f-cca27d97f766",
+  "status": "succeeded",
+  "phase": "completed",
+  "total_steps": 4,
+  "recovery_attempts": 0,
+  "stagnation_count": 0,
+  "fresh_verification_satisfied": true,
+  "failure_class": null,
+  "last_error": null,
+  "require_browser_verification": false,
+  "latest_verification_kind": "sandbox",
+  "final_success": true
+}
