@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from pathlib import Path
 
 import asyncpg
 
@@ -119,6 +120,24 @@ def _collect_kubernetes_summary() -> dict[str, Any]:
     }
 
 
+def _collect_manifest_summary() -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[1]
+    manifest_paths = [
+        "infra/kubernetes/apps/control-plane-config.yaml",
+        "infra/kubernetes/apps/database-migration-job.yaml",
+        "infra/kubernetes/apps/api-deployment.yaml",
+        "infra/kubernetes/apps/frontend-deployment.yaml",
+        "infra/kubernetes/apps/worker-deployments.yaml",
+        "infra/kubernetes/apps/ingress.yaml",
+    ]
+    return {
+        "required_manifests": {
+            relative_path: (repo_root / relative_path).exists()
+            for relative_path in manifest_paths
+        }
+    }
+
+
 async def main() -> None:
     summary = {
         "env": {
@@ -131,6 +150,7 @@ async def main() -> None:
         },
         "aws": _collect_aws_summary(),
         "kubernetes": _collect_kubernetes_summary(),
+        "manifests": _collect_manifest_summary(),
         "database": await _collect_database_summary(),
     }
     summary["ready_for_drill"] = bool(
@@ -141,6 +161,7 @@ async def main() -> None:
         and summary["database"].get("configured")
         and summary["database"].get("counts", {}).get("provider_integrations", 0) > 0
         and summary["database"].get("counts", {}).get("repo_profiles", 0) > 0
+        and all(summary["manifests"]["required_manifests"].values())
     )
     print(json.dumps(summary, indent=2, default=str))
 

@@ -17,6 +17,20 @@ INSERT INTO async_jobs (
 RETURNING *;
 """
 
+RECLAIM_EXPIRED_ASYNC_JOBS_SQL = """
+UPDATE async_jobs
+SET status = 'queued',
+    available_at = NOW(),
+    lease_expires_at = NULL,
+    updated_at = NOW(),
+    last_error = COALESCE(last_error, 'Recovered after stale worker lease expired.')
+WHERE status = 'running'
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at <= NOW() - ($1 * INTERVAL '1 second')
+  AND ($2::text IS NULL OR job_type = $2)
+RETURNING *;
+"""
+
 LEASE_ASYNC_JOBS_SQL = """
 WITH candidates AS (
     SELECT id
@@ -98,6 +112,19 @@ class AsyncJobRepository:
             LEASE_ASYNC_JOBS_SQL,
             limit,
             lease_seconds,
+            job_type.value if job_type is not None else None,
+        )
+        return [AsyncJobRecord.from_db_row(row) for row in rows]
+
+    async def reclaim_expired_leases(
+        self,
+        *,
+        stale_after_seconds: int = 300,
+        job_type: AsyncJobType | None = None,
+    ) -> list[AsyncJobRecord]:
+        rows = await self._fetch(
+            RECLAIM_EXPIRED_ASYNC_JOBS_SQL,
+            stale_after_seconds,
             job_type.value if job_type is not None else None,
         )
         return [AsyncJobRecord.from_db_row(row) for row in rows]

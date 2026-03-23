@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
 from pathlib import Path
 import subprocess
 
@@ -94,11 +93,8 @@ async def test_github_provider_client_builds_sandbox_access(monkeypatch) -> None
 
     monkeypatch.setattr(client, "_create_installation_token", fake_create_installation_token)
     access = await client.build_sandbox_access(integration, repository)
-    payload = json.loads(access.secret_value)
-
-    assert payload["provider"] == "github"
-    assert payload["auth_type"] == "github_app_installation_token"
-    assert payload["clone_url"].startswith("https://x-access-token:token-123@github.com/")
+    assert access.secret_format == "text"
+    assert access.secret_value.startswith("https://x-access-token:token-123@github.com/")
 
 
 def test_apply_patch_and_push_branch_accepts_diff_without_trailing_newline(tmp_path: Path) -> None:

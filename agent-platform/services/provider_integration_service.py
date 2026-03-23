@@ -276,7 +276,7 @@ class ProviderIntegrationService:
         sandbox_run_id: str,
         integration: ProviderIntegrationRecord,
         repository: ProviderRepositoryRecord,
-    ) -> tuple[str | None, str | None]:
+    ) -> str | None:
         client = get_provider_client(integration.provider)
         credentials_secret_ref = await self._load_credentials_secret_ref(integration)
         access = await client.build_sandbox_access(
@@ -290,7 +290,7 @@ class ProviderIntegrationService:
             label=label,
             value=access.secret_value,
         )
-        return external_ref, access.secret_format
+        return external_ref
 
     async def propose_patch_writeback(
         self,

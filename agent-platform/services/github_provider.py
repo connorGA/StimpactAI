@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from urllib.parse import quote
 
@@ -122,15 +121,8 @@ class GitHubProviderClient:
             token=installation_token,
         )
         return ProviderSandboxAccess(
-            secret_value=json.dumps(
-                {
-                    "provider": self.provider.value,
-                    "auth_type": "github_app_installation_token",
-                    "clone_url": authenticated_clone_url,
-                    "repository": f"{repository.owner}/{repository.name}",
-                }
-            ),
-            secret_format="json",
+            secret_value=authenticated_clone_url,
+            secret_format="text",
         )
 
     async def propose_patch(

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from typing import Protocol
 
 
 @dataclass(slots=True)
@@ -24,6 +26,23 @@ class SandboxExecutionResult:
     verification_succeeded: bool
     summary: str
     execution_log: str
+
+
+@dataclass(slots=True)
+class SecretBindingRef:
+    mount_as: str
+    external_ref: str
+
+
+class SecretValueResolver(Protocol):
+    def get_secret(self, *, external_ref: str) -> str: ...
+
+
+@dataclass(slots=True)
+class _PreparedSecrets:
+    env_loader_path: str | None
+    secret_values: list[str]
+    log_text: str | None
 
 
 class LocalSandboxRunner:
@@ -51,6 +70,8 @@ class LocalSandboxRunner:
         baseline_ref: str | None = None,
         secret_env: dict[str, str] | None = None,
         secret_files: dict[str, str] | None = None,
+        secret_bindings: list[SecretBindingRef] | None = None,
+        secrets_reader: SecretValueResolver | None = None,
     ) -> SandboxExecutionResult:
         if not repository_root.exists():
             return SandboxExecutionResult(
@@ -86,6 +107,17 @@ class LocalSandboxRunner:
             )
             if materialized_secret_files:
                 logs.append(materialized_secret_files)
+            prepared_secrets = self._prepare_secret_bindings(
+                workspace=workspace,
+                secret_bindings=secret_bindings or [],
+                secrets_reader=secrets_reader,
+            )
+            if prepared_secrets.log_text:
+                logs.append(prepared_secrets.log_text)
+            redacted_secret_values = [
+                *(secret_env.values() if secret_env else []),
+                *prepared_secrets.secret_values,
+            ]
 
             if commands.install_command:
                 install_result = self._run_shell_command(
@@ -96,6 +128,8 @@ class LocalSandboxRunner:
                     patch_run_id=patch_run_id,
                     step_name="install",
                     secret_env=secret_env,
+                    env_loader_path=prepared_secrets.env_loader_path,
+                    secret_values=redacted_secret_values,
                 )
                 logs.append(install_result.log_text)
                 if install_result.returncode != 0:
@@ -115,6 +149,8 @@ class LocalSandboxRunner:
                 patch_run_id=patch_run_id,
                 step_name="reproduce",
                 secret_env=secret_env,
+                env_loader_path=prepared_secrets.env_loader_path,
+                secret_values=redacted_secret_values,
             )
             logs.append(reproduce_result.log_text)
             reproduction_observed = self._reproduction_step_succeeded(reproduce_result)
@@ -150,6 +186,8 @@ class LocalSandboxRunner:
                 patch_run_id=patch_run_id,
                 step_name="verify",
                 secret_env=secret_env,
+                env_loader_path=prepared_secrets.env_loader_path,
+                secret_values=redacted_secret_values,
             )
             logs.append(verify_result.log_text)
             if verify_result.returncode != 0:
@@ -274,6 +312,60 @@ class LocalSandboxRunner:
             stderr="",
         )
 
+    def _prepare_secret_bindings(
+        self,
+        *,
+        workspace: Path,
+        secret_bindings: list[SecretBindingRef],
+        secrets_reader: SecretValueResolver | None,
+    ) -> _PreparedSecrets:
+        if not secret_bindings:
+            return _PreparedSecrets(env_loader_path=None, secret_values=[], log_text=None)
+        if secrets_reader is None:
+            raise ValueError("A secrets reader is required when secret bindings are provided.")
+
+        secret_root = workspace / ".stimpact" / "secrets"
+        env_dir = secret_root / "env"
+        env_dir.mkdir(parents=True, exist_ok=True)
+        loader_path = secret_root / "export_env.sh"
+        secret_values: list[str] = []
+        written_paths: list[str] = []
+        env_exports: list[str] = ["#!/bin/sh", "set -eu"]
+
+        for binding in secret_bindings:
+            value = secrets_reader.get_secret(external_ref=binding.external_ref)
+            secret_values.append(value)
+            if "/" in binding.mount_as:
+                target = Path(binding.mount_as)
+                if target.is_absolute():
+                    raise ValueError("Absolute secret file mounts are not supported for local sandbox execution.")
+                destination = workspace / target
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(value, encoding="utf-8")
+                written_paths.append(str(target))
+                continue
+
+            env_file = env_dir / binding.mount_as
+            env_file.write_text(value, encoding="utf-8")
+            env_exports.append(
+                f"export {binding.mount_as}={_shell_quote(env_file.read_text(encoding='utf-8'))}"
+            )
+            written_paths.append(binding.mount_as)
+
+        loader_path.write_text("\n".join(env_exports) + "\n", encoding="utf-8")
+        return _PreparedSecrets(
+            env_loader_path=str(loader_path.relative_to(workspace)),
+            secret_values=secret_values,
+            log_text=_format_log(
+                step_name="secret-materialize",
+                command="resolve secret bindings",
+                returncode=0,
+                elapsed_ms=0,
+                stdout="\n".join(f"prepared {path}" for path in written_paths),
+                stderr="",
+            ),
+        )
+
     def _run_shell_command(
         self,
         *,
@@ -284,6 +376,8 @@ class LocalSandboxRunner:
         patch_run_id: str,
         step_name: str,
         secret_env: dict[str, str] | None = None,
+        env_loader_path: str | None = None,
+        secret_values: list[str] | None = None,
     ) -> "_CommandResult":
         env = {
             **{
@@ -297,14 +391,18 @@ class LocalSandboxRunner:
         }
         if secret_env:
             env.update(secret_env)
+        effective_command = command
+        if env_loader_path:
+            quoted_loader = shlex.quote(env_loader_path)
+            effective_command = f". {quoted_loader}; {command}"
         return self._run_subprocess(
-            ["/bin/sh", "-lc", command],
+            ["/bin/sh", "-lc", effective_command],
             workspace=workspace,
             timeout_seconds=timeout_seconds,
             step_name=step_name,
             env=env,
-            command_override=command,
-            secret_values=list(secret_env.values()) if secret_env else None,
+            command_override=effective_command,
+            secret_values=secret_values if secret_values is not None else list(secret_env.values()) if secret_env else None,
         )
 
     def _run_subprocess(
@@ -400,3 +498,7 @@ def _redact_log_text(value: str, secret_values: list[str] | None = None) -> str:
         if len(secret) >= 4 and secret in redacted:
             redacted = redacted.replace(secret, "[redacted-secret]")
     return redacted
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"

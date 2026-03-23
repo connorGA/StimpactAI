@@ -12,6 +12,7 @@ from api.core.config import (
     get_outbox_signal_stream,
     get_redis_url,
 )
+from api.observability import get_metrics_registry
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +45,21 @@ class RedisOutboxSignalBus:
         self._maxlen = get_outbox_signal_maxlen()
 
     async def signal(self, *, event_id: str, event_type: str) -> None:
-        await self._client.xadd(
-            self._stream,
-            {
-                "event_id": event_id,
-                "event_type": event_type,
-                "payload": json.dumps({"event_id": event_id, "event_type": event_type}, default=str),
-            },
-            maxlen=self._maxlen,
-            approximate=True,
-        )
+        try:
+            await self._client.xadd(
+                self._stream,
+                {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "payload": json.dumps({"event_id": event_id, "event_type": event_type}, default=str),
+                },
+                maxlen=self._maxlen,
+                approximate=True,
+            )
+        except Exception:
+            get_metrics_registry().increment("stimpact_outbox_signal_failures_total")
+            logger.exception("Failed to publish Redis outbox signal.")
+            raise
 
     async def wait_for_signal(self, *, last_id: str = "$", block_ms: int | None = None) -> list[dict[str, str]]:
         effective_block_ms = block_ms or get_outbox_signal_block_ms()

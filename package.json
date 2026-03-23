@@ -15,9 +15,17 @@
     "staging:drill": "PYTHONPATH=agent-platform .venv/bin/python -m staging_drill",
     "test": "npm run test:backend && npm run test:frontend",
     "test:backend": ".venv/bin/python -m pytest agent-platform/tests",
+    "test:backend:coverage": ".venv/bin/python -m pytest --cov=api --cov=models --cov=services --cov=workers --cov=shared --cov-report=term-missing agent-platform/tests",
     "test:frontend": "npm --prefix client-ui run lint && npm --prefix client-ui run build",
+    "test:e2e": "npm --prefix client-ui run test:e2e",
+    "test:sdk": "npm --prefix sdk run test",
     "build": "npm --prefix client-ui run build",
-    "lint": "npm --prefix client-ui run lint && .venv/bin/python -m compileall agent-platform shared"
+    "lint": "npm --prefix client-ui run lint && .venv/bin/python -m compileall agent-platform shared",
+    "lint:backend": ".venv/bin/python -m ruff check agent-platform/api agent-platform/models agent-platform/services agent-platform/workers shared",
+    "typecheck:backend": "MYPYPATH=agent-platform:. .venv/bin/python -m mypy --namespace-packages --explicit-package-bases --disable-error-code import-untyped agent-platform/api/core/config.py agent-platform/api/core/security.py agent-platform/api/db/postgres.py agent-platform/models/control_plane.py shared/types/telemetry.py",
+    "ci:backend": "npm run lint:backend && npm run typecheck:backend && npm run test:backend:coverage",
+    "ci:frontend": "npm run test:frontend && npm run test:e2e",
+    "ci:all": "npm run ci:backend && npm run ci:frontend && npm run test:sdk"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.14",

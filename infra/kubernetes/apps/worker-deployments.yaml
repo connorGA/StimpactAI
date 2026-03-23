@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stimpact-outbox-worker
+  namespace: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stimpact-outbox-worker
+  template:
+    metadata:
+      labels:
+        app: stimpact-outbox-worker
+        stimpact.ai/workload: control-plane
+    spec:
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: worker
+          image: CHANGE_ME_ECR_URI/agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "worker_runner.py", "outbox"]
+          workingDir: /app/agent-platform
+          envFrom:
+            - configMapRef:
+                name: stimpact-runtime-config
+            - secretRef:
+                name: stimpact-runtime-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stimpact-autonomous-worker
+  namespace: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stimpact-autonomous-worker
+  template:
+    metadata:
+      labels:
+        app: stimpact-autonomous-worker
+        stimpact.ai/workload: control-plane
+    spec:
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: worker
+          image: CHANGE_ME_ECR_URI/agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "worker_runner.py", "autonomous"]
+          workingDir: /app/agent-platform
+          envFrom:
+            - configMapRef:
+                name: stimpact-runtime-config
+            - secretRef:
+                name: stimpact-runtime-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stimpact-sandbox-worker
+  namespace: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stimpact-sandbox-worker
+  template:
+    metadata:
+      labels:
+        app: stimpact-sandbox-worker
+        stimpact.ai/workload: control-plane
+    spec:
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: worker
+          image: CHANGE_ME_ECR_URI/agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "worker_runner.py", "sandbox"]
+          workingDir: /app/agent-platform
+          envFrom:
+            - configMapRef:
+                name: stimpact-runtime-config
+            - secretRef:
+                name: stimpact-runtime-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stimpact-kubernetes-monitor
+  namespace: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stimpact-kubernetes-monitor
+  template:
+    metadata:
+      labels:
+        app: stimpact-kubernetes-monitor
+        stimpact.ai/workload: control-plane
+    spec:
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: worker
+          image: CHANGE_ME_ECR_URI/agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "worker_runner.py", "kubernetes-monitor"]
+          workingDir: /app/agent-platform
+          envFrom:
+            - configMapRef:
+                name: stimpact-runtime-config
+            - secretRef:
+                name: stimpact-runtime-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

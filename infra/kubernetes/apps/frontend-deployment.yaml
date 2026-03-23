@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stimpact-ui
+  namespace: control-plane
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: stimpact-ui
+  template:
+    metadata:
+      labels:
+        app: stimpact-ui
+        stimpact.ai/workload: control-plane
+    spec:
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: ui
+          image: CHANGE_ME_ECR_URI/client-ui:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_PLATFORM_API_URL
+              value: http://stimpact-api.control-plane.svc.cluster.local:8000
+            - name: AGENT_PLATFORM_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: stimpact-runtime-secrets
+                  key: AGENT_PLATFORM_ADMIN_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stimpact-ui
+  namespace: control-plane
+spec:
+  selector:
+    app: stimpact-ui
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

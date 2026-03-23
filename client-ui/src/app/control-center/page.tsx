@@ -1,198 +1,299 @@
-import { PageHeader, PreviewNotice } from "@/components/dashboard-ui";
+import Link from "next/link";
+
+import {
+  getHealthReadiness,
+  getProjectPolicy,
+  listProjectApiKeys,
+  listProviderIntegrations,
+  listRepoProfiles,
+  listSecretRefs,
+} from "@/lib/agent-platform";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
+import { PageHeader, SectionCard, StatCard } from "@/components/dashboard-ui";
+
+export const dynamic = "force-dynamic";
 
 const autonomyModes = [
   {
+    id: "observe",
     name: "Observe",
-    detail: "The platform analyzes incidents but never recommends or acts.",
-    active: false,
+    detail: "Analyze incidents only. No repair recommendations or executions are allowed.",
   },
   {
+    id: "recommend",
     name: "Recommend",
-    detail: "Draft guidance is allowed, but execution remains fully manual.",
-    active: true,
+    detail: "Generate grounded remediation guidance while keeping execution manual.",
   },
   {
+    id: "supervised_execute",
     name: "Supervised execute",
-    detail: "Low-risk playbooks may run after explicit operator approval.",
-    active: false,
+    detail: "Allow low-risk execution paths once an operator approves the action.",
   },
   {
+    id: "autonomous",
     name: "Autonomous",
-    detail: "Trusted remediations may execute inside strict guardrails.",
-    active: false,
+    detail: "Permit trusted repair flows to proceed automatically within guardrails.",
   },
-];
+] as const;
 
-const agentConfigs = [
-  "Failure classifier",
-  "Root cause analyzer",
-  "Patch planner",
-  "Runbook executor",
-];
+export default async function ControlCenterPage() {
+  const projectId = await resolvePrimaryProjectId();
 
-const guardrailRows = [
-  "Require approval for production writes",
-  "Block actions during active deploys",
-  "Restrict autonomous actions to approved services",
-  "Require rollback plan generation",
-  "Post-action verification is mandatory",
-];
+  if (!projectId) {
+    return (
+      <main className="space-y-6">
+        <PageHeader
+          eyebrow="Control center"
+          title="Autonomy policy, guardrails, and agent permissions"
+          description="Connect a project, ingest telemetry, or add a repo profile to unlock the control plane."
+        />
+      </main>
+    );
+  }
 
-export default function ControlCenterPage() {
+  const [policy, integrations, repoProfiles, apiKeys, secretRefs, readiness] =
+    await Promise.all([
+      getProjectPolicy(projectId),
+      listProviderIntegrations(projectId),
+      listRepoProfiles(projectId),
+      listProjectApiKeys(projectId),
+      listSecretRefs(projectId),
+      getHealthReadiness().catch(() => null),
+    ]);
+
+  const guardrails = [
+    {
+      label: "Require human approval",
+      enabled: policy.require_human_approval,
+      detail: "Human review gates autonomous or production-impacting activity.",
+    },
+    {
+      label: "Block during active deploys",
+      enabled: policy.block_during_active_deploys,
+      detail: "Prevents repair execution while another rollout is already in progress.",
+    },
+    {
+      label: "Restrict to approved services",
+      enabled: policy.restrict_to_approved_services,
+      detail:
+        policy.approved_services.length > 0
+          ? `Approved services: ${policy.approved_services.join(", ")}`
+          : "No approved service allowlist is currently defined.",
+    },
+    {
+      label: "Require rollback plan",
+      enabled: policy.require_rollback_plan,
+      detail: "Patch and execution plans must include a rollback path.",
+    },
+    {
+      label: "Require post-action verification",
+      enabled: policy.require_post_action_verification,
+      detail: "Verification remains mandatory after a patch or automation run.",
+    },
+  ];
+
+  const agentConfigs = [
+    {
+      label: "Failure classifier",
+      enabled: policy.failure_classifier_enabled,
+      detail: "Categorizes incoming incidents before deeper reasoning begins.",
+    },
+    {
+      label: "Root cause analyzer",
+      enabled: policy.root_cause_enabled,
+      detail: "Builds grounded RCA from stack traces, code evidence, and incident context.",
+    },
+    {
+      label: "Patch planner",
+      enabled: policy.patch_planner_enabled,
+      detail: "Drafts candidate fixes and patch summaries for operator review or automation.",
+    },
+    {
+      label: "Runbook executor",
+      enabled: policy.runbook_executor_enabled,
+      detail: "Controls whether remediation playbooks can execute from the platform.",
+    },
+  ];
+
   return (
-    <main className="space-y-8">
+    <main className="space-y-6">
       <PageHeader
         eyebrow="Control center"
-        title="Autonomy policy, guardrails, and agent permissions"
-        description="The control center now reads more like an enterprise settings console than a dashboard: explicit sections, durable policy language, and less decorative surface noise."
+        title="Autonomy policy, guardrails, and project access"
+        description={`Live control-plane state for ${projectId}. Review policy, credentials, repo profiles, and platform readiness here, then use onboarding to connect a new repository or add secrets.`}
+        action={
+          <Link
+            href="/onboarding"
+            className="inline-flex rounded-[16px] bg-[#17385d] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1f4a78]"
+          >
+            Open onboarding
+          </Link>
+        }
       />
 
-      <section className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <section className="ops-sheet-dark rounded-[28px] p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/48">
-            Current posture
-          </p>
-          <h2 className="mt-3 text-3xl font-semibold">Recommend mode</h2>
-          <p className="mt-3 text-sm leading-6 text-white/72">
-            Human operators remain in control while the platform drafts analysis
-            and suggested actions.
-          </p>
+      <section className="grid gap-4 md:grid-cols-4">
+        <StatCard
+          label="Autonomy mode"
+          value={formatMode(policy.autonomy_mode)}
+          detail={
+            policy.allow_production_writes
+              ? "Production writes currently permitted."
+              : "Production writes remain blocked."
+          }
+        />
+        <StatCard
+          label="Connected repos"
+          value={String(repoProfiles.length)}
+          detail="Active repo profiles available for sandbox and repair flows."
+          tone="blue"
+        />
+        <StatCard
+          label="Project API keys"
+          value={String(apiKeys.filter((key) => key.status === "active").length)}
+          detail="Active SDK ingest keys currently registered for this project."
+          tone="yellow"
+        />
+        <StatCard
+          label="Platform readiness"
+          value={readiness?.status ?? "unknown"}
+          detail={
+            readiness?.checks.database.ready
+              ? "Database checks are healthy."
+              : "Database readiness needs attention."
+          }
+          tone="white"
+        />
+      </section>
 
-          <div className="ops-row-divider mt-6">
-            <PolicyChip label="Approval path" value="Human-in-loop" />
-            <PolicyChip label="Production writes" value="Blocked" />
-            <PolicyChip label="Blast radius" value="Low-risk only" />
-          </div>
-        </section>
-
-        <section className="ops-sheet rounded-[28px] p-6">
-          <p className="ops-kicker text-[11px] font-semibold uppercase">
-            Autonomy modes
-          </p>
-          <div className="mt-5 border-t border-[rgba(24,24,27,0.08)]">
-            {autonomyModes.map((mode) => (
-              <div
-                key={mode.name}
-                className={`flex flex-col gap-4 border-b border-[rgba(24,24,27,0.08)] py-5 last:border-b-0 xl:flex-row xl:items-center xl:justify-between ${
-                  mode.active
-                    ? "bg-[rgba(255,255,255,0.22)]"
-                    : ""
-                }`}
-              >
-                <div className="max-w-xl">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-base font-semibold text-[#111827]">{mode.name}</h3>
-                    <span
-                      className={`h-2.5 w-2.5 rounded-full ${
-                        mode.active ? "vault-dot" : "bg-[#cbd5e1]"
-                      }`}
-                    />
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-[#667085]">{mode.detail}</p>
-                </div>
-                <button
-                  type="button"
-                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                    mode.active
-                      ? "ops-button text-white"
-                      : "ops-button-secondary"
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        <SectionCard
+          title="Autonomy modes"
+          description="The control plane now reflects the persisted project policy."
+        >
+          <div className="space-y-3">
+            {autonomyModes.map((mode) => {
+              const active = policy.autonomy_mode === mode.id;
+              return (
+                <div
+                  key={mode.id}
+                  className={`rounded-[22px] border px-4 py-4 ${
+                    active
+                      ? "border-[rgba(255,106,61,0.22)] bg-[rgba(255,106,61,0.08)]"
+                      : "border-[rgba(17,24,39,0.08)] bg-white"
                   }`}
                 >
-                  {mode.active ? "Current mode" : "Select"}
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-semibold text-[#171717]">{mode.name}</p>
+                      <p className="mt-1 text-sm leading-6 text-[#746d66]">{mode.detail}</p>
+                    </div>
+                    <StatusPill active={active} label={active ? "Current" : "Available"} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </section>
-      </section>
+        </SectionCard>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <section className="ops-sheet rounded-[28px] p-6">
-          <p className="ops-kicker text-[11px] font-semibold uppercase">
-            Guardrails
-          </p>
-          <div className="mt-5 border-t border-[rgba(24,24,27,0.08)]">
-            {guardrailRows.map((row, index) => (
+        <SectionCard
+          title="Project access"
+          description="Credentials and repositories currently available to the remediation platform."
+        >
+          <div className="space-y-4">
+            <KeyValueRow label="Provider integrations" value={String(integrations.length)} />
+            <KeyValueRow label="Secret refs" value={String(secretRefs.length)} />
+            <KeyValueRow
+              label="Approved services"
+              value={policy.approved_services.length > 0 ? policy.approved_services.join(", ") : "None"}
+            />
+            <div className="rounded-[20px] bg-[#f8fbff] px-4 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
+                Repo profiles
+              </p>
+              <div className="mt-3 space-y-2 text-sm text-[#35547d]">
+                {repoProfiles.map((profile) => (
+                  <p key={profile.id}>
+                    {profile.runtime_kind} runtime with verify command <code>{profile.verify_command}</code>
+                  </p>
+                ))}
+                {repoProfiles.length === 0 ? <p>No active repo profiles configured.</p> : null}
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <SectionCard
+          title="Guardrails"
+          description="Operator safety rules now read from the project policy model."
+        >
+          <div className="space-y-3">
+            {guardrails.map((guardrail) => (
               <div
-                key={row}
-                className="flex items-center justify-between gap-4 border-b border-[rgba(24,24,27,0.08)] py-4 last:border-b-0"
+                key={guardrail.label}
+                className="flex items-start justify-between gap-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
               >
                 <div>
-                  <p className="font-medium text-[#111827]">{row}</p>
-                  <p className="mt-1 text-sm text-[#667085]">
-                    Visible now as configuration UI. Backend enforcement wiring
-                    is still pending.
-                  </p>
+                  <p className="font-medium text-[#171717]">{guardrail.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">{guardrail.detail}</p>
                 </div>
-                <ToggleSwitch checked={index < 4} />
+                <StatusPill active={guardrail.enabled} label={guardrail.enabled ? "Enabled" : "Disabled"} />
               </div>
             ))}
           </div>
-        </section>
+        </SectionCard>
 
-        <section className="ops-sheet-muted rounded-[28px] p-6">
-          <p className="ops-kicker text-[11px] font-semibold uppercase">
-            Agent configuration
-          </p>
-          <div className="mt-5 border-t border-[rgba(24,24,27,0.08)]">
-            {agentConfigs.map((agent, index) => (
+        <SectionCard
+          title="Agent configuration"
+          description="Per-agent execution switches currently available for this project."
+        >
+          <div className="space-y-3">
+            {agentConfigs.map((agent) => (
               <div
-                key={agent}
-                className="border-b border-[rgba(24,24,27,0.08)] py-4 last:border-b-0"
+                key={agent.label}
+                className="flex items-start justify-between gap-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="font-medium text-[#111827]">{agent}</p>
-                    <p className="mt-1 text-sm leading-6 text-[#667085]">
-                      Per-agent configuration panels, thresholds, and approval
-                      bindings will live here.
-                    </p>
-                  </div>
-                  <ToggleSwitch checked={index !== 3} />
+                <div>
+                  <p className="font-medium text-[#171717]">{agent.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">{agent.detail}</p>
                 </div>
+                <StatusPill active={agent.enabled} label={agent.enabled ? "Enabled" : "Disabled"} />
               </div>
             ))}
           </div>
-        </section>
-      </section>
-
-      <PreviewNotice
-        title="Control-center features still not configured"
-        items={[
-          "Mode switching, policy storage, and environment-specific enforcement are not wired yet.",
-          "Blast-radius scoring and simulation are shown as product direction only.",
-          "Real guardrail enforcement will attach once automation execution exists in later phases.",
-        ]}
-      />
+        </SectionCard>
+      </div>
     </main>
   );
 }
 
-function PolicyChip({ label, value }: { label: string; value: string }) {
+function formatMode(mode: string): string {
+  return mode
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function StatusPill({ active, label }: { active: boolean; label: string }) {
   return (
-    <div className="py-4 first:pt-0 last:pb-0">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/48">
-        {label}
-      </p>
-      <p className="mt-2 text-lg font-semibold text-white">{value}</p>
-    </div>
+    <span
+      className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+        active
+          ? "bg-[rgba(67,160,71,0.12)] text-[#2f6f35]"
+          : "bg-[rgba(17,24,39,0.08)] text-[#5f6470]"
+      }`}
+    >
+      {label}
+    </span>
   );
 }
 
-function ToggleSwitch({ checked }: { checked: boolean }) {
+function KeyValueRow({ label, value }: { label: string; value: string }) {
   return (
-    <button
-      type="button"
-      className={`relative h-7 w-12 rounded-full transition ${
-        checked ? "bg-[var(--vault-orange)]" : "bg-[#cbd5e1]"
-      }`}
-      aria-pressed={checked}
-    >
-      <span
-        className={`absolute top-1 h-5 w-5 rounded-full bg-white transition ${
-          checked ? "left-6" : "left-1"
-        }`}
-      />
-    </button>
+    <div className="flex items-center justify-between gap-4 border-b border-[rgba(17,24,39,0.08)] pb-3 last:border-b-0 last:pb-0">
+      <span className="text-sm text-[#746d66]">{label}</span>
+      <span className="text-sm font-semibold text-[#171717]">{value}</span>
+    </div>
   );
 }

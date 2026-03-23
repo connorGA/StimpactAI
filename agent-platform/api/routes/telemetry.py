@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
 
+from api.core.security import enforce_telemetry_rate_limit, require_telemetry_ingest_access
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.events.publisher import IncidentEventPublisher, get_incident_event_publisher
 from api.events.outbox_signaler import OutboxSignaler
@@ -28,6 +29,8 @@ async def ingest_error(
     repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
     publisher: IncidentEventPublisher = Depends(get_incident_event_publisher),
     outbox_signaler: OutboxSignaler = Depends(get_outbox_signaler),
+    _auth: None = Depends(require_telemetry_ingest_access),
+    _rate_limit: None = Depends(enforce_telemetry_rate_limit),
 ) -> TelemetryAcceptedResponse:
     telemetry = NormalizedTelemetry.from_validated_request(
         project_id=payload.project_id,

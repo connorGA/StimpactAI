@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { AutonomousRunPanel } from "@/components/autonomous-run-panel";
 import { ChatPanel } from "@/components/chat-panel";
-import { PageHeader, PreviewNotice, SectionCard } from "@/components/dashboard-ui";
+import { PageHeader, SectionCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -517,13 +517,23 @@ export default async function IncidentDetailPage({
             initialDetail={latestAutonomousRunDetail}
           />
 
-          <PreviewNotice
-            title="Detail-page features still to be connected"
-            items={[
-              "Deploy correlation, assignee ownership, and linked change requests are not wired yet.",
-              "PR and merge-request automation will appear after provider write integration and deployment workflow are added.",
-            ]}
-          />
+          <section className="ops-sheet-muted rounded-[22px] p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="inline-flex rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
+                  Operator notes
+                </span>
+                <h3 className="mt-3 text-base font-semibold text-[#171717]">
+                  Additional incident context can expand from here
+                </h3>
+              </div>
+              <div className="mt-2 h-2.5 w-2.5 rounded-full bg-[linear-gradient(180deg,#4b6bfb,#3451d1)]" />
+            </div>
+            <ul className="mt-4 space-y-2 text-sm leading-6 text-[#746d66]">
+              <li>Deploy correlation and ownership context can be layered onto this page as those sources come online.</li>
+              <li>Provider-backed change proposals can attach directly to the incident workflow after promotion automation is enabled.</li>
+            </ul>
+          </section>
         </div>
       </div>
     </main>

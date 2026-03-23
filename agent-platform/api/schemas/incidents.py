@@ -82,6 +82,36 @@ class IncidentListResponse(BaseModel):
     offset: int
 
 
+class IncidentCountBreakdownResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    count: int = Field(ge=0)
+
+
+class IncidentActivityPointResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    count: int = Field(ge=0)
+
+
+class IncidentReportingOverviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str | None = None
+    total_visible_incidents: int = Field(ge=0)
+    open_incidents: int = Field(ge=0)
+    critical_incidents: int = Field(ge=0)
+    total_event_volume: int = Field(ge=0)
+    latest_incident_at: datetime | None = None
+    service_counts: list[IncidentCountBreakdownResponse] = Field(default_factory=list)
+    environment_counts: list[IncidentCountBreakdownResponse] = Field(default_factory=list)
+    severity_counts: list[IncidentCountBreakdownResponse] = Field(default_factory=list)
+    recent_incident_activity: list[IncidentActivityPointResponse] = Field(default_factory=list)
+    daily_incident_activity: list[IncidentActivityPointResponse] = Field(default_factory=list)
+
+
 class IncidentDetailResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

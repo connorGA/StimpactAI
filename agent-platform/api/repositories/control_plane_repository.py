@@ -7,6 +7,10 @@ import asyncpg
 
 from api.core.errors import PersistenceError
 from models.control_plane import (
+    AutonomyMode,
+    ProjectApiKeyRecord,
+    ProjectApiKeyStatus,
+    ProjectPolicyRecord,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -30,6 +34,13 @@ RETURNING *;
 LIST_PROVIDER_INTEGRATIONS_SQL = """
 SELECT *
 FROM provider_integrations
+ORDER BY created_at DESC;
+"""
+
+LIST_PROVIDER_INTEGRATIONS_BY_PROJECT_SQL = """
+SELECT *
+FROM provider_integrations
+WHERE jsonb_extract_path_text(metadata, 'project_id') = $1
 ORDER BY created_at DESC;
 """
 
@@ -120,6 +131,115 @@ SELECT *
 FROM secret_refs
 WHERE id = $1
 LIMIT 1;
+"""
+
+INSERT_PROJECT_API_KEY_SQL = """
+INSERT INTO project_api_keys (
+    id, project_id, name, key_prefix, key_hash, status
+) VALUES (
+    $1, $2, $3, $4, $5, $6
+)
+RETURNING *;
+"""
+
+LIST_PROJECT_API_KEYS_SQL = """
+SELECT *
+FROM project_api_keys
+WHERE project_id = $1
+ORDER BY created_at DESC;
+"""
+
+GET_PROJECT_API_KEY_SQL = """
+SELECT *
+FROM project_api_keys
+WHERE id = $1
+LIMIT 1;
+"""
+
+FIND_ACTIVE_PROJECT_API_KEY_BY_HASH_SQL = """
+SELECT *
+FROM project_api_keys
+WHERE project_id = $1
+  AND key_hash = $2
+  AND status = 'active'
+LIMIT 1;
+"""
+
+COUNT_ACTIVE_PROJECT_API_KEYS_SQL = """
+SELECT COUNT(*)
+FROM project_api_keys
+WHERE project_id = $1
+  AND status = 'active';
+"""
+
+MARK_PROJECT_API_KEY_USED_SQL = """
+UPDATE project_api_keys
+SET last_used_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+REVOKE_PROJECT_API_KEY_SQL = """
+UPDATE project_api_keys
+SET status = $2,
+    revoked_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+ENSURE_PROJECT_POLICY_SQL = """
+INSERT INTO project_policies (
+    project_id
+) VALUES (
+    $1
+)
+ON CONFLICT (project_id) DO NOTHING;
+"""
+
+GET_PROJECT_POLICY_SQL = """
+SELECT *
+FROM project_policies
+WHERE project_id = $1
+LIMIT 1;
+"""
+
+UPSERT_PROJECT_POLICY_SQL = """
+INSERT INTO project_policies (
+    project_id,
+    autonomy_mode,
+    require_human_approval,
+    allow_production_writes,
+    allow_low_risk_autonomy,
+    block_during_active_deploys,
+    restrict_to_approved_services,
+    require_rollback_plan,
+    require_post_action_verification,
+    approved_services,
+    failure_classifier_enabled,
+    root_cause_enabled,
+    patch_planner_enabled,
+    runbook_executor_enabled
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14
+)
+ON CONFLICT (project_id) DO UPDATE
+SET autonomy_mode = EXCLUDED.autonomy_mode,
+    require_human_approval = EXCLUDED.require_human_approval,
+    allow_production_writes = EXCLUDED.allow_production_writes,
+    allow_low_risk_autonomy = EXCLUDED.allow_low_risk_autonomy,
+    block_during_active_deploys = EXCLUDED.block_during_active_deploys,
+    restrict_to_approved_services = EXCLUDED.restrict_to_approved_services,
+    require_rollback_plan = EXCLUDED.require_rollback_plan,
+    require_post_action_verification = EXCLUDED.require_post_action_verification,
+    approved_services = EXCLUDED.approved_services,
+    failure_classifier_enabled = EXCLUDED.failure_classifier_enabled,
+    root_cause_enabled = EXCLUDED.root_cause_enabled,
+    patch_planner_enabled = EXCLUDED.patch_planner_enabled,
+    runbook_executor_enabled = EXCLUDED.runbook_executor_enabled,
+    updated_at = NOW()
+RETURNING *;
 """
 
 INSERT_REPO_PROFILE_SQL = """
@@ -216,8 +336,9 @@ class ControlPlaneRepository:
         )
         return ProviderIntegrationRecord.from_db_row(row)
 
-    async def list_provider_integrations(self) -> list[ProviderIntegrationRecord]:
-        rows = await self._fetch(LIST_PROVIDER_INTEGRATIONS_SQL)
+    async def list_provider_integrations(self, project_id: str | None = None) -> list[ProviderIntegrationRecord]:
+        query = LIST_PROVIDER_INTEGRATIONS_BY_PROJECT_SQL if project_id is not None else LIST_PROVIDER_INTEGRATIONS_SQL
+        rows = await self._fetch(query, project_id) if project_id is not None else await self._fetch(query)
         return [ProviderIntegrationRecord.from_db_row(row) for row in rows]
 
     async def get_provider_integration(self, provider_integration_id: str) -> ProviderIntegrationRecord | None:
@@ -352,6 +473,116 @@ class ControlPlaneRepository:
         if row is None:
             return None
         return SecretRefRecord.from_db_row(row)
+
+    async def create_project_api_key(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        key_prefix: str,
+        key_hash: str,
+        status: ProjectApiKeyStatus = ProjectApiKeyStatus.ACTIVE,
+    ) -> ProjectApiKeyRecord:
+        row = await self._fetchrow(
+            INSERT_PROJECT_API_KEY_SQL,
+            str(uuid4()),
+            project_id,
+            name,
+            key_prefix,
+            key_hash,
+            status.value,
+        )
+        return ProjectApiKeyRecord.from_db_row(row)
+
+    async def list_project_api_keys(self, project_id: str) -> list[ProjectApiKeyRecord]:
+        rows = await self._fetch(LIST_PROJECT_API_KEYS_SQL, project_id)
+        return [ProjectApiKeyRecord.from_db_row(row) for row in rows]
+
+    async def get_project_api_key(self, key_id: str) -> ProjectApiKeyRecord | None:
+        row = await self._fetchrow(GET_PROJECT_API_KEY_SQL, key_id, allow_missing=True)
+        if row is None:
+            return None
+        return ProjectApiKeyRecord.from_db_row(row)
+
+    async def find_active_project_api_key(
+        self,
+        *,
+        project_id: str,
+        key_hash: str,
+    ) -> ProjectApiKeyRecord | None:
+        row = await self._fetchrow(
+            FIND_ACTIVE_PROJECT_API_KEY_BY_HASH_SQL,
+            project_id,
+            key_hash,
+            allow_missing=True,
+        )
+        if row is None:
+            return None
+        return ProjectApiKeyRecord.from_db_row(row)
+
+    async def has_active_project_api_keys(self, project_id: str) -> bool:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for control-plane operations.")
+        try:
+            async with self._pool.acquire() as connection:
+                count = await connection.fetchval(COUNT_ACTIVE_PROJECT_API_KEYS_SQL, project_id)
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to execute a control-plane query.") from exc
+        return bool(count and int(count) > 0)
+
+    async def mark_project_api_key_used(self, key_id: str) -> ProjectApiKeyRecord:
+        row = await self._fetchrow(MARK_PROJECT_API_KEY_USED_SQL, key_id)
+        return ProjectApiKeyRecord.from_db_row(row)
+
+    async def revoke_project_api_key(self, key_id: str) -> ProjectApiKeyRecord:
+        row = await self._fetchrow(
+            REVOKE_PROJECT_API_KEY_SQL,
+            key_id,
+            ProjectApiKeyStatus.REVOKED.value,
+        )
+        return ProjectApiKeyRecord.from_db_row(row)
+
+    async def get_or_create_project_policy(self, project_id: str) -> ProjectPolicyRecord:
+        await self._execute(ENSURE_PROJECT_POLICY_SQL, project_id)
+        row = await self._fetchrow(GET_PROJECT_POLICY_SQL, project_id)
+        return ProjectPolicyRecord.from_db_row(row)
+
+    async def update_project_policy(
+        self,
+        *,
+        project_id: str,
+        autonomy_mode: AutonomyMode,
+        require_human_approval: bool,
+        allow_production_writes: bool,
+        allow_low_risk_autonomy: bool,
+        block_during_active_deploys: bool,
+        restrict_to_approved_services: bool,
+        require_rollback_plan: bool,
+        require_post_action_verification: bool,
+        approved_services: list[str],
+        failure_classifier_enabled: bool,
+        root_cause_enabled: bool,
+        patch_planner_enabled: bool,
+        runbook_executor_enabled: bool,
+    ) -> ProjectPolicyRecord:
+        row = await self._fetchrow(
+            UPSERT_PROJECT_POLICY_SQL,
+            project_id,
+            autonomy_mode.value,
+            require_human_approval,
+            allow_production_writes,
+            allow_low_risk_autonomy,
+            block_during_active_deploys,
+            restrict_to_approved_services,
+            require_rollback_plan,
+            require_post_action_verification,
+            json.dumps(approved_services),
+            failure_classifier_enabled,
+            root_cause_enabled,
+            patch_planner_enabled,
+            runbook_executor_enabled,
+        )
+        return ProjectPolicyRecord.from_db_row(row)
 
     async def create_repo_profile(
         self,

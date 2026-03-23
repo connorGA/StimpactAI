@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stimpact-database-migrations
+  namespace: control-plane
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: stimpact-database-migrations
+        stimpact.ai/workload: control-plane
+    spec:
+      restartPolicy: Never
+      serviceAccountName: stimpact-control-plane
+      nodeSelector:
+        stimpact.ai/workload: control-plane
+      containers:
+        - name: migrate
+          image: CHANGE_ME_ECR_URI/agent-platform:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import asyncio
+              from api.db.postgres import PostgresConnectionManager
+              async def main():
+                  manager = PostgresConnectionManager()
+                  await manager.connect()
+                  await manager.close()
+              asyncio.run(main())
+          workingDir: /app/agent-platform
+          envFrom:
+            - configMapRef:
+                name: stimpact-runtime-config
+            - secretRef:
+                name: stimpact-runtime-secrets
+          env:
+            - name: AGENT_PLATFORM_RUN_MIGRATIONS
+              value: "true"

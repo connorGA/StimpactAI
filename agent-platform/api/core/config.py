@@ -150,6 +150,104 @@ def get_deployment_environment() -> str:
     return get_nonempty_env("AGENT_PLATFORM_ENVIRONMENT", "ENVIRONMENT") or "dev"
 
 
+def is_local_development_environment() -> bool:
+    return get_deployment_environment().strip().lower() in {"dev", "development", "local", "test"}
+
+
+def get_admin_api_token() -> str | None:
+    return get_nonempty_env("AGENT_PLATFORM_ADMIN_TOKEN")
+
+
+def is_control_plane_auth_enforced() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_REQUIRE_CONTROL_PLANE_AUTH")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return get_admin_api_token() is not None
+
+
+def is_project_api_key_auth_enforced() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def should_run_migrations_on_startup() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_RUN_MIGRATIONS")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return is_local_development_environment()
+
+
+def should_require_database() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_REQUIRE_DATABASE")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return not is_local_development_environment()
+
+
+def should_require_redis() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_REQUIRE_REDIS")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return not is_local_development_environment()
+
+
+def should_fail_readiness_when_degraded() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_STRICT_READINESS")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return not is_local_development_environment()
+
+
+def validate_runtime_configuration(*, runtime: str) -> None:
+    errors: list[str] = []
+    if should_require_database() and get_database_url() is None:
+        errors.append("DATABASE_URL is required for this runtime.")
+    if should_require_redis() and get_redis_url() is None:
+        errors.append("REDIS_URL is required for this runtime.")
+    if not is_local_development_environment() and should_run_migrations_on_startup():
+        errors.append(
+            "AGENT_PLATFORM_RUN_MIGRATIONS must be disabled for long-running services; run migrations via an explicit job."
+        )
+    if runtime == "api" and is_control_plane_auth_enforced() and get_admin_api_token() is None:
+        errors.append("AGENT_PLATFORM_ADMIN_TOKEN must be configured when control-plane auth is enabled.")
+    if errors:
+        raise ValueError("Invalid runtime configuration: " + " ".join(errors))
+
+
+def get_control_plane_rate_limit_per_minute() -> int:
+    value = os.getenv("AGENT_PLATFORM_CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", "120").strip()
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 120
+
+
+def get_telemetry_rate_limit_per_minute() -> int:
+    value = os.getenv("AGENT_PLATFORM_TELEMETRY_RATE_LIMIT_PER_MINUTE", "600").strip()
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 600
+
+
+def get_outbox_stale_lock_seconds() -> int:
+    value = os.getenv("AGENT_PLATFORM_OUTBOX_STALE_LOCK_SECONDS", "300").strip()
+    try:
+        return max(30, int(value))
+    except ValueError:
+        return 300
+
+
+def get_async_job_stale_lease_seconds() -> int:
+    value = os.getenv("AGENT_PLATFORM_ASYNC_JOB_STALE_LEASE_SECONDS", "300").strip()
+    try:
+        return max(30, int(value))
+    except ValueError:
+        return 300
+
+
 def get_eks_cluster_name() -> str:
     return get_nonempty_env("AGENT_PLATFORM_EKS_CLUSTER_NAME") or "stimpactai-cluster"
 

@@ -16,7 +16,7 @@ var _s = __turbopack_context__.k.signature();
 ;
 const navItems = [
     {
-        href: "/",
+        href: "/live",
         label: "Live",
         description: "Incidents and uptime",
         icon: "pulse"
@@ -40,6 +40,24 @@ const navItems = [
         icon: "shield"
     },
     {
+        href: "/onboarding",
+        label: "Onboarding",
+        description: "Project setup",
+        icon: "spark"
+    },
+    {
+        href: "/operations",
+        label: "Operations",
+        description: "Response workflow",
+        icon: "flow"
+    },
+    {
+        href: "/automations",
+        label: "Automations",
+        description: "Execution catalog",
+        icon: "play"
+    },
+    {
         href: "/chat",
         label: "Agent",
         description: "Inbox and chat focus",
@@ -53,20 +71,20 @@ function AppShellNav({ mobile = false, compact = false }) {
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("nav", {
             className: "flex gap-2 overflow-x-auto lg:hidden",
             children: navItems.map((item)=>{
-                const isActive = pathname === item.href || item.href !== "/" && pathname.startsWith(item.href);
+                const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$client$2f$app$2d$dir$2f$link$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"], {
                     href: item.href,
                     className: `vault-nav-link min-w-fit rounded-xl border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#f5f8ff,#e8f0fb)] px-4 py-2 text-sm font-medium shadow-[0_8px_20px_rgba(15,23,42,0.04)] transition ${isActive ? "vault-nav-link-active" : ""}`,
                     children: item.label
                 }, item.href, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 59,
+                    lineNumber: 77,
                     columnNumber: 13
                 }, this);
             })
         }, void 0, false, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 52,
+            lineNumber: 70,
             columnNumber: 7
         }, this);
     }
@@ -76,7 +94,7 @@ function AppShellNav({ mobile = false, compact = false }) {
             children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("nav", {
                 className: "space-y-1.5",
                 children: navItems.map((item)=>{
-                    const isActive = pathname === item.href || item.href !== "/" && pathname.startsWith(item.href);
+                    const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
                     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$client$2f$app$2d$dir$2f$link$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"], {
                         href: item.href,
                         className: `vault-sidebar-link vault-nav-link block -mx-2 px-4 py-3 transition ${isActive ? "vault-nav-link-active" : ""}`,
@@ -91,7 +109,7 @@ function AppShellNav({ mobile = false, compact = false }) {
                                             children: item.label
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/app-shell-nav.tsx",
-                                            lineNumber: 93,
+                                            lineNumber: 111,
                                             columnNumber: 21
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -99,13 +117,13 @@ function AppShellNav({ mobile = false, compact = false }) {
                                             children: item.description
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/app-shell-nav.tsx",
-                                            lineNumber: 94,
+                                            lineNumber: 112,
                                             columnNumber: 21
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                                    lineNumber: 92,
+                                    lineNumber: 110,
                                     columnNumber: 19
                                 }, this),
                                 compact ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -114,12 +132,12 @@ function AppShellNav({ mobile = false, compact = false }) {
                                         icon: item.icon
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/app-shell-nav.tsx",
-                                        lineNumber: 98,
+                                        lineNumber: 116,
                                         columnNumber: 23
                                     }, this)
                                 }, void 0, false, {
                                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                                    lineNumber: 97,
+                                    lineNumber: 115,
                                     columnNumber: 21
                                 }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
                                     className: "opacity-60",
@@ -127,39 +145,39 @@ function AppShellNav({ mobile = false, compact = false }) {
                                         icon: item.icon
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/app-shell-nav.tsx",
-                                        lineNumber: 102,
+                                        lineNumber: 120,
                                         columnNumber: 23
                                     }, this)
                                 }, void 0, false, {
                                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                                    lineNumber: 101,
+                                    lineNumber: 119,
                                     columnNumber: 21
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/src/components/app-shell-nav.tsx",
-                            lineNumber: 91,
+                            lineNumber: 109,
                             columnNumber: 17
                         }, this)
                     }, item.href, false, {
                         fileName: "[project]/src/components/app-shell-nav.tsx",
-                        lineNumber: 84,
+                        lineNumber: 102,
                         columnNumber: 15
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/src/components/app-shell-nav.tsx",
-                lineNumber: 77,
+                lineNumber: 95,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 76,
+            lineNumber: 94,
             columnNumber: 7
         }, this)
     }, void 0, false, {
         fileName: "[project]/src/components/app-shell-nav.tsx",
-        lineNumber: 75,
+        lineNumber: 93,
         columnNumber: 5
     }, this);
 }
@@ -184,12 +202,12 @@ function NavIcon({ icon }) {
                 d: "M2.5 10h3l1.8-3.5L10 14l2.2-4h5.3"
             }, void 0, false, {
                 fileName: "[project]/src/components/app-shell-nav.tsx",
-                lineNumber: 132,
+                lineNumber: 150,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 122,
+            lineNumber: 140,
             columnNumber: 7
         }, this);
     }
@@ -208,34 +226,34 @@ function NavIcon({ icon }) {
                     d: "M3 16.5h14"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 149,
+                    lineNumber: 167,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M6 14V9"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 150,
+                    lineNumber: 168,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M10 14V5.5"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 151,
+                    lineNumber: 169,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M14 14v-3"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 152,
+                    lineNumber: 170,
                     columnNumber: 9
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 139,
+            lineNumber: 157,
             columnNumber: 7
         }, this);
     }
@@ -254,48 +272,48 @@ function NavIcon({ icon }) {
                     d: "M6.5 5h9"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 169,
+                    lineNumber: 187,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M6.5 10h9"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 170,
+                    lineNumber: 188,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M6.5 15h9"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 171,
+                    lineNumber: 189,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M3.5 5h.01"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 172,
+                    lineNumber: 190,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M3.5 10h.01"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 173,
+                    lineNumber: 191,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                     d: "M3.5 15h.01"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell-nav.tsx",
-                    lineNumber: 174,
+                    lineNumber: 192,
                     columnNumber: 9
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 159,
+            lineNumber: 177,
             columnNumber: 7
         }, this);
     }
@@ -313,12 +331,88 @@ function NavIcon({ icon }) {
                 d: "M10 2.8 15.5 5v4.4c0 3.6-2.2 6.1-5.5 7.8-3.3-1.7-5.5-4.2-5.5-7.8V5L10 2.8Z"
             }, void 0, false, {
                 fileName: "[project]/src/components/app-shell-nav.tsx",
-                lineNumber: 191,
+                lineNumber: 209,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 181,
+            lineNumber: 199,
+            columnNumber: 7
+        }, this);
+    }
+    if (icon === "flow") {
+        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("svg", {
+            "aria-hidden": "true",
+            viewBox: "0 0 20 20",
+            className: "h-4 w-4",
+            fill: "none",
+            stroke: "currentColor",
+            strokeWidth: "1.7",
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+            children: [
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                    d: "M4 5h4v4H4z"
+                }, void 0, false, {
+                    fileName: "[project]/src/components/app-shell-nav.tsx",
+                    lineNumber: 226,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                    d: "M12 11h4v4h-4z"
+                }, void 0, false, {
+                    fileName: "[project]/src/components/app-shell-nav.tsx",
+                    lineNumber: 227,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                    d: "M8 7h4"
+                }, void 0, false, {
+                    fileName: "[project]/src/components/app-shell-nav.tsx",
+                    lineNumber: 228,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                    d: "M10 7v4"
+                }, void 0, false, {
+                    fileName: "[project]/src/components/app-shell-nav.tsx",
+                    lineNumber: 229,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                    d: "M10 11h2"
+                }, void 0, false, {
+                    fileName: "[project]/src/components/app-shell-nav.tsx",
+                    lineNumber: 230,
+                    columnNumber: 9
+                }, this)
+            ]
+        }, void 0, true, {
+            fileName: "[project]/src/components/app-shell-nav.tsx",
+            lineNumber: 216,
+            columnNumber: 7
+        }, this);
+    }
+    if (icon === "play") {
+        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("svg", {
+            "aria-hidden": "true",
+            viewBox: "0 0 20 20",
+            className: "h-4 w-4",
+            fill: "none",
+            stroke: "currentColor",
+            strokeWidth: "1.7",
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
+                d: "M6 4.5 14 10l-8 5.5Z"
+            }, void 0, false, {
+                fileName: "[project]/src/components/app-shell-nav.tsx",
+                lineNumber: 247,
+                columnNumber: 9
+            }, this)
+        }, void 0, false, {
+            fileName: "[project]/src/components/app-shell-nav.tsx",
+            lineNumber: 237,
             columnNumber: 7
         }, this);
     }
@@ -335,12 +429,12 @@ function NavIcon({ icon }) {
             d: "M10 3.5 11.9 7.3l4.1.6-3 2.9.7 4.1-3.7-2-3.7 2 .7-4.1-3-2.9 4.1-.6L10 3.5Z"
         }, void 0, false, {
             fileName: "[project]/src/components/app-shell-nav.tsx",
-            lineNumber: 207,
+            lineNumber: 263,
             columnNumber: 7
         }, this)
     }, void 0, false, {
         fileName: "[project]/src/components/app-shell-nav.tsx",
-        lineNumber: 197,
+        lineNumber: 253,
         columnNumber: 5
     }, this);
 }
@@ -414,7 +508,7 @@ function AppShell({ children }) {
                             children: [
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
                                     className: `text-[11px] font-semibold uppercase tracking-[0.16em] ${collapsed ? "text-center" : ""}`,
-                                    children: collapsed ? "Live" : "Live preview"
+                                    children: collapsed ? "Live" : "Live workspace"
                                 }, void 0, false, {
                                     fileName: "[project]/src/components/app-shell.tsx",
                                     lineNumber: 29,
@@ -422,7 +516,7 @@ function AppShell({ children }) {
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
                                     className: `mt-2 text-sm leading-6 text-white/58 ${collapsed ? "hidden" : "block"}`,
-                                    children: "Streaming incident updates and policy enforcement are still preview-only."
+                                    children: "Streaming incident updates, policy enforcement, and onboarding are available from the live workspace."
                                 }, void 0, false, {
                                     fileName: "[project]/src/components/app-shell.tsx",
                                     lineNumber: 36,

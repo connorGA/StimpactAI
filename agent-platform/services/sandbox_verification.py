@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import ipaddress
-import json
 from pathlib import Path
 import socket
 import subprocess
 from urllib.parse import urlparse
 
 from api.core.config import (
+    get_aws_region,
     get_repository_root,
     get_sandbox_execution_backend,
     get_sandbox_timeout_seconds,
@@ -20,12 +20,12 @@ from api.repositories.incident_repository import IncidentRepository
 from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
 from models.artifact import ArtifactStorageBackend, ArtifactType
-from models.async_job import AsyncJobRecord, AsyncJobStatus, AsyncJobType
+from models.async_job import AsyncJobRecord, AsyncJobType
 from models.control_plane import RepoProfileRecord, RepoProfileSecretBindingRecord
 from models.patch import PatchRunRecord
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from sandbox.kubernetes_runner import KubernetesJobMonitor, KubernetesSandboxRunner
-from sandbox.runner import LocalSandboxRunner, SandboxCommandSet
+from sandbox.runner import LocalSandboxRunner, SandboxCommandSet, SecretBindingRef
 from services.artifact_storage import ArtifactStorage, S3ArtifactStorage
 from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter, SecretsReader
 from services.patch_generation import PatchGenerationService
@@ -314,7 +314,7 @@ class SandboxVerificationService:
             verify_command=repo_profile.verify_command,
             timeout_seconds=get_sandbox_timeout_seconds(),
         )
-        secret_env, secret_files, _secret_refs = await self._resolve_secret_bindings(repo_profile.id)
+        secret_bindings = await self._resolve_secret_bindings(repo_profile.id)
         execution = self._local_runner.run(
             repository_root=repository_root,
             patch_diff=patch_diff,
@@ -322,8 +322,14 @@ class SandboxVerificationService:
             incident_id=sandbox_run.incident_id,
             patch_run_id=sandbox_run.patch_run_id,
             baseline_ref=baseline_commit_sha,
-            secret_env=secret_env,
-            secret_files=secret_files,
+            secret_bindings=[
+                SecretBindingRef(
+                    mount_as=binding.mount_as,
+                    external_ref=binding.secret_ref.external_ref,
+                )
+                for binding in secret_bindings
+            ],
+            secrets_reader=self._secrets_reader,
         )
         artifact_id = await self._store_log_artifact(
             incident_id=sandbox_run.incident_id,
@@ -403,21 +409,11 @@ class SandboxVerificationService:
             default_branch=source_branch,
             target_commit_sha=snapshot.target_commit_sha,
         )
-        provider_access_secret_arn, provider_access_secret_format = (
-            await self._provider_integration_service.build_sandbox_access_secret(
-                project_id=repo_profile.project_id,
-                sandbox_run_id=sandbox_run.id,
-                integration=provider_integration,
-                repository=provider_repository,
-            )
-        )
-        provider_access_value = None
-        if provider_access_secret_arn:
-            provider_access_value = self._secrets_reader.get_secret(external_ref=provider_access_secret_arn)
-        authenticated_clone_url = self._extract_authenticated_clone_url(
-            provider_access_value=provider_access_value,
-            provider_access_secret_format=provider_access_secret_format,
-            fallback_clone_url=snapshot.clone_url,
+        provider_access_secret_arn = await self._provider_integration_service.build_sandbox_access_secret(
+            project_id=repo_profile.project_id,
+            sandbox_run_id=sandbox_run.id,
+            integration=provider_integration,
+            repository=provider_repository,
         )
         repository_archive_url = self._store_repository_archive(
             repository_root=repository_root,
@@ -433,12 +429,15 @@ class SandboxVerificationService:
             content_type="text/x-diff",
             artifact_type=ArtifactType.PATCH_DIFF,
         )
-        secret_env, secret_files, secret_refs = await self._resolve_secret_bindings(repo_profile.id)
+        secret_bindings = await self._resolve_secret_bindings(repo_profile.id)
         network_allowlist = list(repo_profile.network_allowlist)
         if repository_archive_url:
             archive_host = urlparse(repository_archive_url).hostname
             if archive_host:
                 network_allowlist.append(archive_host)
+        aws_region = get_aws_region()
+        if aws_region and (secret_bindings or provider_access_secret_arn):
+            network_allowlist.append(f"secretsmanager.{aws_region}.amazonaws.com")
         submission = self._kubernetes_runner.submit(
             incident_id=sandbox_run.incident_id,
             sandbox_run_id=sandbox_run.id,
@@ -448,25 +447,13 @@ class SandboxVerificationService:
             patch_diff_content=patch_run.unified_diff,
             network_allowlist=network_allowlist,
             network_allowlist_cidrs=self._resolve_network_allowlist_cidrs(network_allowlist),
-            secret_env_refs=[binding.secret_ref.label for binding in secret_refs],
-            secret_env=secret_env,
-            secret_files=secret_files,
-            authenticated_clone_url=authenticated_clone_url,
+            secret_bindings=secret_bindings,
             repository_archive_url=repository_archive_url,
             provider_access_secret_arn=provider_access_secret_arn,
-            provider_access_secret_format=provider_access_secret_format,
         )
         manifest_text = self._redact_manifest(
             submission.manifest,
-            secret_env={
-                **secret_env,
-                **(
-                    {"STIMPACT_AUTHENTICATED_CLONE_URL": authenticated_clone_url}
-                    if authenticated_clone_url
-                    else {}
-                ),
-            },
-            secret_files=secret_files,
+            secret_bindings=secret_bindings,
         )
         manifest_artifact_id = await self._store_log_artifact(
             incident_id=sandbox_run.incident_id,
@@ -674,17 +661,8 @@ class SandboxVerificationService:
     async def _resolve_secret_bindings(
         self,
         repo_profile_id: str,
-    ) -> tuple[dict[str, str], dict[str, str], list[RepoProfileSecretBindingRecord]]:
-        bindings = await self._control_plane_repository.list_repo_profile_secret_bindings(repo_profile_id)
-        secret_env: dict[str, str] = {}
-        secret_files: dict[str, str] = {}
-        for binding in bindings:
-            value = self._secrets_reader.get_secret(external_ref=binding.secret_ref.external_ref)
-            if "/" in binding.mount_as:
-                secret_files[binding.mount_as] = value
-            else:
-                secret_env[binding.mount_as] = value
-        return secret_env, secret_files, bindings
+    ) -> list[RepoProfileSecretBindingRecord]:
+        return await self._control_plane_repository.list_repo_profile_secret_bindings(repo_profile_id)
 
     def _resolve_network_allowlist_cidrs(self, network_allowlist: list[str]) -> list[str]:
         resolved: set[str] = set()
@@ -715,40 +693,24 @@ class SandboxVerificationService:
                 resolved.add(str(network))
         return sorted(resolved)
 
-    def _extract_authenticated_clone_url(
-        self,
-        *,
-        provider_access_value: str | None,
-        provider_access_secret_format: str | None,
-        fallback_clone_url: str,
-    ) -> str:
-        if not provider_access_value:
-            return fallback_clone_url
-        if provider_access_secret_format != "json":
-            return fallback_clone_url
-        try:
-            payload = json.loads(provider_access_value)
-        except json.JSONDecodeError:
-            return fallback_clone_url
-        clone_url = payload.get("clone_url")
-        if not isinstance(clone_url, str) or not clone_url.strip():
-            return fallback_clone_url
-        return clone_url.strip()
-
     def _redact_manifest(
         self,
         manifest: dict[str, object],
         *,
-        secret_env: dict[str, str],
-        secret_files: dict[str, str],
+        secret_bindings: list[RepoProfileSecretBindingRecord],
     ) -> str:
         secrets_by_name = {
-            **{name: "***REDACTED***" for name in secret_env},
-            **{
-                f"STIMPACT_SECRET_FILE_{index}": "***REDACTED***"
-                for index, _item in enumerate(sorted(secret_files.items()))
-            },
+            f"STIMPACT_SECRET_BINDING_{index}_MOUNT_AS": binding.mount_as
+            for index, binding in enumerate(secret_bindings)
         }
+        secrets_by_name.update(
+            {
+                f"STIMPACT_SECRET_BINDING_{index}_EXTERNAL_REF": "***REDACTED***"
+                for index, binding in enumerate(secret_bindings)
+                if binding.secret_ref.external_ref
+            }
+        )
+        secrets_by_name["STIMPACT_PROVIDER_ACCESS_SECRET_ARN"] = "***REDACTED***"
 
         def _redact_job(job_manifest: dict[str, object]) -> dict[str, object]:
             spec = job_manifest.get("spec")

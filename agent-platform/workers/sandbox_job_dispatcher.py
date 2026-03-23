@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from api.core.config import get_async_job_stale_lease_seconds
 from api.repositories.async_job_repository import AsyncJobRepository
 from models.async_job import AsyncJobStatus, AsyncJobType
 from services.autonomous_runs import AutonomousRunService
@@ -21,6 +22,10 @@ class SandboxJobDispatcher:
         self._worker_id = worker_id
 
     async def run_once(self, *, limit: int = 10) -> int:
+        await self._repository.reclaim_expired_leases(
+            stale_after_seconds=get_async_job_stale_lease_seconds(),
+            job_type=AsyncJobType.SANDBOX_RUN,
+        )
         jobs = await self._repository.lease_jobs(limit=limit, job_type=AsyncJobType.SANDBOX_RUN)
         processed = 0
 

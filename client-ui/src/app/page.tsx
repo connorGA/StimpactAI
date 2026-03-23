@@ -1,436 +1,516 @@
 import Link from "next/link";
 
-import { PreviewNotice } from "@/components/dashboard-ui";
-import { SeverityBadge } from "@/components/severity-badge";
-import { StatusBadge } from "@/components/status-badge";
-import {
-  getIncidents,
-  getLatestIncidentAutonomousRunDetail,
-} from "@/lib/agent-platform";
-import {
-  buildIncidentTrendSeries,
-  calculateLinePath,
-  calculateUptimePreview,
-  countCriticalIncidents,
-  countOpenIncidents,
-  formatTimestamp,
-  getLiveStatusSummary,
-  getServiceHealthRows,
-} from "@/lib/dashboard";
-import type {
-  AutonomousRunStatus,
-  IncidentAutonomousRunDetail,
-  IncidentSummary,
-} from "@/lib/types";
+const NAV_ITEMS = [
+  { label: "HOME", href: "#home" },
+  { label: "ABOUT US", href: "#about" },
+  { label: "GALLERY", href: "#gallery" },
+  { label: "CONTACT US", href: "#contact" },
+];
 
-export const dynamic = "force-dynamic";
+const SYSTEM_FLOW_STEPS = [
+  {
+    title: "Detect errors immediately",
+    eyebrow: "01. Detect",
+    summary:
+      "Stimpact watches production in real time and raises the issue as soon as abnormal errors, latency spikes, or failed deploy signals appear.",
+    detail:
+      "Alerts, traces, logs, and incident signals are correlated into one live case so responders do not lose time stitching the incident together by hand.",
+    accent: "real-time error detection",
+    points: ["error spikes", "trace anomalies", "deploy failures"],
+  },
+  {
+    title: "Show the team what is happening live",
+    eyebrow: "02. Surface",
+    summary:
+      "The live dashboard exposes the active case through a shared operations panel, incident timeline, and chat-driven coordination workspace.",
+    detail:
+      "Users can watch the case evolve in the live panel, review evidence, see impacted services, and collaborate in chat while the system keeps updating context.",
+    accent: "live panel + chat",
+    points: ["live panel", "incident chat", "shared timeline"],
+  },
+  {
+    title: "Draft the repair automatically",
+    eyebrow: "03. Repair",
+    summary:
+      "Once the issue is understood, the platform proposes code changes and recovery actions that match the service state and repository policy.",
+    detail:
+      "The repair step stays policy-aware so automation can be advisory, semi-automatic, or fully autonomous depending on what the user has enabled.",
+    accent: "automatic repair planning",
+    points: ["patch candidates", "policy checks", "repo-aware actions"],
+  },
+  {
+    title: "Test every fix in a replica sandbox",
+    eyebrow: "04. Sandbox",
+    summary:
+      "Candidate repairs are executed in a replica sandbox environment that mirrors the real service before anything touches production.",
+    detail:
+      "This validation step reproduces the issue, applies the fix, and confirms whether the repair actually stabilizes the system without risking the live stack.",
+    accent: "replica validation",
+    points: ["reproduce incident", "apply patch", "verify recovery"],
+  },
+  {
+    title: "Resolve, commit, and redeploy when allowed",
+    eyebrow: "05. Execute",
+    summary:
+      "If the user enables execution, Stimpact can perform the git operations, move the fix through the repository workflow, and trigger redeployment.",
+    detail:
+      "Operators still keep visibility through the dashboard while the system opens the repair path, updates the incident record, and closes the loop in production.",
+    accent: "git + optional redeploy",
+    points: ["git operations", "deployment handoff", "resolved incident state"],
+  },
+] as const;
 
-export default async function Home() {
-  const incidentList = await getIncidents({ limit: 12, offset: 0 });
-  const incidents = incidentList.items;
-  const openIncidents = countOpenIncidents(incidents);
-  const criticalIncidents = countCriticalIncidents(incidents);
-  const uptimePreview = calculateUptimePreview(incidents);
-  const liveStatus = getLiveStatusSummary(incidents);
-  const serviceHealth = getServiceHealthRows(incidents);
-  const incidentTrend = buildIncidentTrendSeries(incidents);
-  const linePath = calculateLinePath(incidentTrend, 112, 480);
-  const autonomousRuns = await loadLatestAutonomousRuns(incidents.slice(0, 4));
-  const activeUpdates = buildActiveUpdates(incidents, autonomousRuns);
+const SERVICE_HIGHLIGHTS = [
+  {
+    title: "Immediate error detection",
+    detail: "Flags failures as soon as production behavior shifts.",
+  },
+  {
+    title: "Replica sandbox repair",
+    detail: "Tests fixes safely before touching the live environment.",
+  },
+  {
+    title: "Live panel and chat",
+    detail: "Lets the team watch, discuss, and guide the response in real time.",
+  },
+  {
+    title: "Git ops and redeploy",
+    detail: "Can commit, push, and redeploy when execution is enabled by the user.",
+  },
+] as const;
 
+const PRICING_PLANS = [
+  {
+    name: "Starter",
+    price: "$299",
+    cadence: "per project / month",
+    summary: "Best for teams that want live incident visibility and guided response on a single integrated project.",
+    features: [
+      "1 integrated project",
+      "real-time error detection",
+      "live panel and incident chat",
+      "sandbox repair validation",
+      "human approval before execution",
+    ],
+    accent: "launch safely",
+  },
+  {
+    name: "Growth",
+    price: "$899",
+    cadence: "per project / month",
+    summary: "For production teams that want autonomous repair loops, richer visibility, and optional repository execution.",
+    features: [
+      "up to 3 environments per project",
+      "automatic repair drafting",
+      "replica sandbox verification",
+      "git operations when enabled",
+      "optional redeploy triggers",
+    ],
+    accent: "most popular",
+    featured: true,
+  },
+  {
+    name: "Scale",
+    price: "$2,400+",
+    cadence: "per project / month",
+    summary: "For critical systems needing deeper policy controls, enterprise workflows, and higher-volume operational coverage.",
+    features: [
+      "custom environment mappings",
+      "advanced policy and approval rules",
+      "multi-team coordination surfaces",
+      "enterprise deployment integrations",
+      "priority onboarding and support",
+    ],
+    accent: "custom control",
+  },
+] as const;
+
+const WAVE_LAYERS = Array.from({ length: 22 }, (_, index) => index);
+const WAVE_PATH_A =
+  "M-180 414 C 20 610, 162 214, 338 332 S 618 632, 770 362 1012 112, 1186 252 1406 516, 1660 236";
+const WAVE_PATH_B =
+  "M-180 392 C 18 560, 168 248, 342 354 S 620 608, 770 346 1014 146, 1190 276 1408 486, 1660 262";
+const WAVE_PATH_C =
+  "M-180 430 C 12 646, 156 190, 334 314 S 616 654, 772 378 1010 88, 1182 234 1402 536, 1660 214";
+
+export default function Home() {
   return (
-    <main className="space-y-8">
-      <section className="px-1">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="ops-kicker text-[11px] font-semibold uppercase">
-              Live operations
-            </p>
-            <h1 className="ops-title mt-3 max-w-4xl text-4xl font-semibold tracking-tight lg:text-[3.25rem]">
-              Operational status, warning flow, and active service posture
-            </h1>
-            <p className="ops-copy mt-4 max-w-3xl text-sm leading-7">
-              The live page should read like an operations workspace. It is about
-              what changed, what is risky, and what needs attention right now.
-            </p>
-          </div>
+    <main className="landing-page-canvas relative min-h-screen overflow-hidden bg-[#030610]">
+      <section
+        id="home"
+        className="landing-reference-shell relative flex min-h-screen w-full flex-col overflow-hidden px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10"
+      >
+        <div className="landing-dot-matrix absolute bottom-12 right-10 z-20 h-12 w-44 sm:bottom-14 sm:right-16" />
+        <div className="landing-orb landing-orb-left" />
+        <div className="landing-orb landing-orb-top" />
+        <div className="landing-orb landing-orb-right" />
+        <div className="landing-orb landing-orb-bottom" />
 
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/incidents"
-              className="ops-button-secondary inline-flex rounded-full px-4 py-2.5 text-sm font-semibold"
-            >
-              Incident history
-            </Link>
-            <Link
-              href="/control-center"
-              className="ops-button inline-flex rounded-full px-4 py-2.5 text-sm font-semibold"
-            >
-              Open controls
-            </Link>
-          </div>
-        </div>
-      </section>
+        <header className="relative z-30 grid items-center gap-6 md:grid-cols-[auto_1fr_auto]">
+          <Link href="/" className="inline-flex w-fit items-center gap-3 text-white/90">
+            <BrandMark />
+            <span className="text-sm font-semibold tracking-[0.04em]">Stimpact</span>
+          </Link>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_360px]">
-        <section className="ops-sheet-dark rounded-[28px] p-7">
-          <div className="flex flex-col gap-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/46">
-                  Current system state
-                </p>
-                <h2 className="mt-3 max-w-3xl text-4xl font-semibold tracking-tight text-white">
-                  {liveStatus.title}
-                </h2>
-                <p className="mt-3 max-w-2xl text-sm leading-7 text-white/70">
-                  {liveStatus.detail}
-                </p>
-              </div>
-              <span className="ops-pill-strong inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]">
-                {openIncidents === 0 ? "Stable" : "Watching"}
-              </span>
-            </div>
-
-            <div className="grid gap-4 border-y border-white/10 py-5 md:grid-cols-3">
-              <LiveMetric label="Current uptime" value={uptimePreview} detail="Preview until SLO telemetry is wired." />
-              <LiveMetric label="Open incidents" value={String(openIncidents)} detail="Issues currently requiring investigation." />
-              <LiveMetric label="Critical incidents" value={String(criticalIncidents)} detail="Highest-severity items in the queue." />
-            </div>
-
-            <div className="rounded-[22px] border border-white/10 bg-white/4 p-4">
-              <div className="flex items-end justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/46">
-                    Signal shape
-                  </p>
-                  <p className="mt-2 text-sm text-white/68">
-                    Recent incident pressure over the sampled window.
-                  </p>
-                </div>
-                <Link href="/metrics" className="text-sm font-semibold text-white/80 transition hover:text-white">
-                  Open metrics
-                </Link>
-              </div>
-              <div className="ops-grid-chart mt-4 rounded-[18px] bg-black/10 px-4 py-4">
-                <svg viewBox="0 0 480 112" className="h-28 w-full">
-                  <path
-                    d={linePath}
-                    fill="none"
-                    stroke="url(#liveSignalLine)"
-                    strokeWidth="4"
-                    strokeLinecap="round"
-                  />
-                  <defs>
-                    <linearGradient id="liveSignalLine" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#ffb253" />
-                      <stop offset="100%" stopColor="#ff5a2a" />
-                    </linearGradient>
-                  </defs>
-                </svg>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <aside className="ops-sheet-muted rounded-[28px] p-6">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="ops-kicker text-[11px] font-semibold uppercase">
-                Warning stream
-              </p>
-              <h2 className="mt-2 text-2xl font-semibold text-[#171717]">
-                Incoming operator updates
-              </h2>
-            </div>
-            <span className="ops-pill inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]">
-              {openIncidents === 0 ? "Quiet" : "Active"}
-            </span>
-          </div>
-
-          <div className="ops-row-divider mt-6">
-            {activeUpdates.map((update) => (
-              <div key={`${update.title}-${update.timestamp}`} className="py-4 first:pt-0 last:pb-0">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-[#171717]">{update.title}</p>
-                    <p className="mt-1 text-sm leading-6 text-[#5f6470]">{update.detail}</p>
-                    {update.autonomousLabel ? (
-                      <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#b4453d]">
-                        {update.autonomousLabel}
-                      </p>
-                    ) : null}
-                  </div>
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8f735c]">
-                    {update.timestamp}
-                  </span>
-                </div>
-              </div>
+          <nav
+            aria-label="Primary"
+            className="hidden items-center justify-center gap-10 md:flex"
+          >
+            {NAV_ITEMS.map((item) => (
+              <Link key={item.label} href={item.href} className="landing-reference-nav-link">
+                {item.label}
+              </Link>
             ))}
-          </div>
-        </aside>
+          </nav>
+
+          <Link
+            href="/live"
+            className="landing-reference-outline-button hidden justify-self-end px-5 py-2 text-sm font-medium text-white/80 sm:inline-flex"
+          >
+            learn more
+          </Link>
+        </header>
+
+        <AnimatedWaveHero />
+
+        <div className="relative z-30 mt-16 max-w-[520px] sm:mt-20 lg:mt-28">
+          <h1 className="text-5xl font-semibold tracking-[-0.04em] text-white/92 sm:text-6xl lg:text-[4.15rem]">
+            Landing Page
+          </h1>
+          <p className="mt-4 max-w-[420px] text-sm leading-6 text-white/42 sm:text-[15px]">
+            Stimpact brings autonomous incident response, live operations, and sandbox
+            verification into one cinematic control surface for modern reliability teams.
+          </p>
+        </div>
+
+        <div className="relative z-30 mt-auto pt-16">
+          <Link
+            href="/onboarding"
+            className="landing-reference-outline-button inline-flex px-6 py-2.5 text-xl font-medium text-white/88"
+          >
+            sign up
+          </Link>
+        </div>
+
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <section className="ops-sheet rounded-[28px] p-7">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="ops-kicker text-[11px] font-semibold uppercase">
-                Live incident feed
-              </p>
-              <h2 className="mt-2 text-3xl font-semibold text-[#171717]">
-                Active warnings and updates
-              </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-[#5f6470]">
-                A running feed of the most relevant visible incidents. This is a
-                working surface, not a stack of summary cards.
-              </p>
-            </div>
-            <Link
-              href="/incidents"
-              className="ops-button-secondary inline-flex rounded-full px-4 py-2.5 text-sm font-semibold"
-            >
-              Open incident center
-            </Link>
-          </div>
+      <SystemFlowSection />
+      <PricingSection />
+      <FooterSection />
 
-          <div className="mt-6 border-t border-[rgba(24,24,27,0.08)]">
-            {incidents.length === 0 ? (
-              <div className="py-10 text-sm text-[#5f6470]">
-                No live incident warnings are currently present.
-              </div>
-            ) : (
-              incidents.slice(0, 4).map((incident) => (
-                <Link
-                  key={incident.id}
-                  href={`/incidents/${incident.id}`}
-                  className="block border-b border-[rgba(24,24,27,0.08)] py-5 transition last:border-b-0 hover:bg-white/24"
-                >
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <SeverityBadge severity={incident.severity} />
-                        <StatusBadge status={incident.status} />
-                        {autonomousRuns[incident.id] ? (
-                          <AutonomousRunBadge
-                            status={autonomousRuns[incident.id]!.run.status}
-                          />
-                        ) : null}
-                        <span className="text-xs uppercase tracking-[0.14em] text-[#8f735c]">
-                          {incident.service}
-                        </span>
-                      </div>
-                      <h3 className="mt-3 text-lg font-semibold text-[#171717]">
-                        {incident.title}
-                      </h3>
-                      <p className="mt-1 text-sm text-[#5f6470]">
-                        {incident.project_id} • {incident.environment} • last update{" "}
-                        {formatTimestamp(incident.last_seen_at)}
-                      </p>
-                      {autonomousRuns[incident.id]?.run.status === "failed" &&
-                      autonomousRuns[incident.id]?.run.last_error ? (
-                        <p className="mt-2 text-sm text-[#b4453d]">
-                          Latest autonomous repair failed:{" "}
-                          {truncateAutonomousError(autonomousRuns[incident.id]?.run.last_error ?? "")}
-                        </p>
-                      ) : null}
-                    </div>
-
-                    <div className="grid min-w-[220px] grid-cols-2 gap-6 xl:text-right">
-                      <FeedStat label="Events" value={String(incident.event_count)} />
-                      <FeedStat
-                        label="Telemetry"
-                        value={incident.latest_telemetry_id.slice(0, 10)}
-                      />
-                    </div>
-                  </div>
-                </Link>
-              ))
-            )}
-          </div>
-        </section>
-
-        <aside className="space-y-6">
-          <section className="ops-sheet rounded-[28px] p-6">
-            <p className="ops-kicker text-[11px] font-semibold uppercase">
-              Service health
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold text-[#171717]">
-              Health by impacted service
-            </h2>
-
-            <div className="ops-row-divider mt-5">
-              {serviceHealth.length === 0 ? (
-                <div className="py-4 text-sm text-[#5f6470]">
-                  Service health will populate as incidents arrive.
-                </div>
-              ) : (
-                serviceHealth.map((service) => (
-                  <div
-                    key={service.label}
-                    className="flex items-center justify-between py-4 first:pt-0 last:pb-0"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full ${
-                          service.status === "critical"
-                            ? "vault-dot"
-                            : service.status === "watch"
-                              ? "bg-[linear-gradient(180deg,#ffb84d,#ff8d35)]"
-                              : "vault-dot-green"
-                        }`}
-                      />
-                      <span className="text-sm font-medium text-[#171717]">
-                        {service.label}
-                      </span>
-                    </div>
-                    <span className="text-sm capitalize text-[#5f6470]">
-                      {service.status}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-
-          <PreviewNotice
-            title="Still to be wired on the live page"
-            items={[
-              "True uptime and SLO telemetry will replace the preview uptime metric.",
-              "Streaming updates and deploy markers are designed for this page but not live yet.",
-            ]}
-          />
-        </aside>
-      </section>
+      <div id="gallery" className="sr-only">
+        Gallery section anchor
+      </div>
+      <div id="contact" className="sr-only">
+        Contact section anchor
+      </div>
     </main>
   );
 }
 
-function LiveMetric({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
+function BrandMark() {
   return (
-    <div className="border-l border-white/10 pl-4 first:border-l-0 first:pl-0">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/42">
-        {label}
-      </p>
-      <p className="mt-3 text-4xl font-semibold text-white">{value}</p>
-      <p className="mt-2 text-sm leading-6 text-white/62">{detail}</p>
+    <svg aria-hidden="true" viewBox="0 0 32 32" className="h-9 w-9 text-white/86">
+      <g fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M16 3.75 27.5 10.5V21.5L16 28.25 4.5 21.5V10.5L16 3.75Z" opacity="0.88" />
+        <path d="M16 8.5 23 12.5V19.5L16 23.5 9 19.5V12.5L16 8.5Z" opacity="0.92" />
+        <path d="M11.2 16h9.6" opacity="0.55" />
+      </g>
+    </svg>
+  );
+}
+
+function AnimatedWaveHero() {
+  return (
+    <div className="landing-wave absolute inset-x-0 top-[12%] bottom-[10%] z-10">
+      <svg aria-hidden="true" viewBox="0 0 1500 760" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="landing-wave-stroke" x1="0%" y1="24%" x2="100%" y2="60%">
+            <stop offset="0%" stopColor="var(--vault-blue)" />
+            <stop offset="58%" stopColor="var(--vault-orange)" />
+            <stop offset="100%" stopColor="var(--vault-gold)" />
+          </linearGradient>
+          <linearGradient id="landing-wave-fade" x1="0%" y1="50%" x2="100%" y2="50%">
+            <stop offset="0%" stopColor="rgba(255,255,255,0)" />
+            <stop offset="12%" stopColor="rgba(255,255,255,0.18)" />
+            <stop offset="88%" stopColor="rgba(255,255,255,0.2)" />
+            <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+          </linearGradient>
+          <filter id="landing-wave-blur" x="-20%" y="-30%" width="140%" height="160%">
+            <feGaussianBlur stdDeviation="18" />
+          </filter>
+        </defs>
+
+        <g className="landing-wave-ensemble">
+          <path
+            d={WAVE_PATH_A}
+            fill="none"
+            stroke="url(#landing-wave-stroke)"
+            strokeWidth="42"
+            strokeLinecap="round"
+            opacity="0.18"
+            filter="url(#landing-wave-blur)"
+            vectorEffect="non-scaling-stroke"
+          >
+            <animate
+              attributeName="d"
+              dur="18s"
+              repeatCount="indefinite"
+              values={`${WAVE_PATH_A};${WAVE_PATH_B};${WAVE_PATH_C};${WAVE_PATH_A}`}
+            />
+          </path>
+
+          {WAVE_LAYERS.map((index) => {
+            return (
+              <g key={index} className="landing-wave-layer">
+                <path
+                  d={WAVE_PATH_A}
+                  transform={`translate(${index * 24 - 180} ${Math.sin(index * 0.55) * 24})`}
+                  fill="none"
+                  stroke="url(#landing-wave-stroke)"
+                  strokeWidth="2.6"
+                  strokeLinecap="round"
+                  opacity={0.12 + index * 0.026}
+                  vectorEffect="non-scaling-stroke"
+                  shapeRendering="geometricPrecision"
+                >
+                  <animate
+                    attributeName="d"
+                    dur={`${18 + index * 0.12}s`}
+                    begin={`${index * -0.28}s`}
+                    repeatCount="indefinite"
+                    values={`${WAVE_PATH_A};${WAVE_PATH_B};${WAVE_PATH_C};${WAVE_PATH_A}`}
+                  />
+                </path>
+              </g>
+            );
+          })}
+
+          <path
+            d={WAVE_PATH_A}
+            fill="none"
+            stroke="url(#landing-wave-fade)"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+            opacity="0.62"
+            vectorEffect="non-scaling-stroke"
+          >
+            <animate
+              attributeName="d"
+              dur="18s"
+              repeatCount="indefinite"
+              values={`${WAVE_PATH_A};${WAVE_PATH_B};${WAVE_PATH_C};${WAVE_PATH_A}`}
+            />
+          </path>
+        </g>
+      </svg>
     </div>
   );
 }
 
-function FeedStat({ label, value }: { label: string; value: string }) {
+function SystemFlowSection() {
   return (
-    <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f735c]">
-        {label}
-      </p>
-      <p className="mt-2 truncate text-sm font-semibold text-[#171717]">{value}</p>
-    </div>
+    <section id="about" className="landing-flow-section relative overflow-hidden px-6 py-24 sm:px-8 lg:px-12 lg:py-32">
+      <div className="mx-auto max-w-[1280px]">
+        <div className="mx-auto max-w-[760px] text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/42">
+            System flow
+          </p>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white/92 sm:text-5xl">
+            One continuous operating loop from signal intake to verified resolution.
+          </h2>
+          <p className="mx-auto mt-5 max-w-[680px] text-base leading-7 text-white/50">
+            From the first production error to sandbox verification and optional execution,
+            the service behaves like one coordinated response loop your team can watch live.
+          </p>
+        </div>
+
+        <div className="landing-highlight-grid mt-12">
+          {SERVICE_HIGHLIGHTS.map((item) => (
+            <div key={item.title} className="landing-highlight-card">
+              <p className="text-sm font-semibold tracking-tight text-white/90">{item.title}</p>
+              <p className="mt-2 text-sm leading-6 text-white/48">{item.detail}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="landing-flow-timeline relative mt-20">
+          {SYSTEM_FLOW_STEPS.map((step, index) => (
+            <div
+              key={step.title}
+              className={`landing-flow-row relative grid gap-6 md:grid-cols-2 md:gap-16 ${
+                index % 2 === 0 ? "" : "md:[&>*:first-child]:col-start-2"
+              }`}
+            >
+              <div className="landing-flow-card relative">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                    {step.eyebrow}
+                  </p>
+                  <span className="landing-flow-accent-pill">{step.accent}</span>
+                </div>
+                <h3 className="mt-4 text-2xl font-semibold tracking-tight text-white/92">
+                  {step.title}
+                </h3>
+                <p className="mt-4 text-base leading-7 text-white/58">{step.summary}</p>
+                <p className="mt-4 text-sm leading-7 text-white/42">{step.detail}</p>
+                <div className="mt-5 flex flex-wrap gap-2.5">
+                  {step.points.map((point) => (
+                    <span key={point} className="landing-flow-point-pill">
+                      {point}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div
+                className="landing-flow-node"
+                aria-hidden="true"
+                style={{ ["--flow-node-color" as string]: getFlowNodeColor(index) }}
+              >
+                <span className="landing-flow-node-inner">{index + 1}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
-type AutonomousRunLookup = Record<string, IncidentAutonomousRunDetail | null>;
-
-function buildActiveUpdates(
-  incidents: IncidentSummary[],
-  autonomousRuns: AutonomousRunLookup,
-) {
-  if (incidents.length === 0) {
-    return [
-      {
-        title: "No active incident updates",
-        detail: "The platform is currently not reporting a new active warning.",
-        timestamp: "Now",
-        autonomousLabel: null,
-      },
-      {
-        title: "Uptime looks stable",
-        detail: "Current preview uptime is healthy while no live incidents are visible.",
-        timestamp: "Now",
-        autonomousLabel: null,
-      },
-    ];
-  }
-
-  return incidents.slice(0, 3).map((incident) => {
-    const autonomousRun = autonomousRuns[incident.id];
-    if (autonomousRun?.run.status === "failed") {
-      return {
-        title: incident.title,
-        detail: `${incident.service} in ${incident.environment} has ${incident.event_count} attached events. The latest autonomous repair attempt stopped before completion.`,
-        timestamp: formatTimestamp(incident.last_seen_at),
-        autonomousLabel: "Autonomous repair failed",
-      };
-    }
-    return {
-      title: incident.title,
-      detail: `${incident.service} in ${incident.environment} has ${incident.event_count} attached events.`,
-      timestamp: formatTimestamp(incident.last_seen_at),
-      autonomousLabel: autonomousRun ? buildAutonomousLabel(autonomousRun.run.status) : null,
-    };
-  });
+function getFlowNodeColor(index: number) {
+  if (index === 0) return "rgba(var(--vault-blue-rgb), 0.95)";
+  if (index === SYSTEM_FLOW_STEPS.length - 1) return "rgba(var(--vault-gold-rgb), 0.95)";
+  return "rgba(var(--vault-orange-rgb), 0.95)";
 }
 
-async function loadLatestAutonomousRuns(
-  incidents: IncidentSummary[],
-): Promise<AutonomousRunLookup> {
-  const pairs = await Promise.all(
-    incidents.map(async (incident) => {
-      try {
-        const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
-        return [incident.id, detail] as const;
-      } catch {
-        return [incident.id, null] as const;
-      }
-    }),
-  );
-  return Object.fromEntries(pairs);
-}
-
-function buildAutonomousLabel(status: AutonomousRunStatus): string | null {
-  if (status === "failed") {
-    return "Autonomous repair failed";
-  }
-  if (status === "running" || status === "queued") {
-    return "Autonomous repair active";
-  }
-  return null;
-}
-
-function truncateAutonomousError(error: string): string {
-  return error.length <= 120 ? error : `${error.slice(0, 117)}...`;
-}
-
-function AutonomousRunBadge({ status }: { status: AutonomousRunStatus }) {
-  const label =
-    status === "failed"
-      ? "Autonomous failed"
-      : status === "running" || status === "queued"
-        ? "Autonomous active"
-        : status === "succeeded"
-          ? "Autonomous succeeded"
-          : "Autonomous cancelled";
-  const className =
-    status === "failed"
-      ? "bg-[rgba(233,89,80,0.12)] text-[#b4453d]"
-      : status === "running" || status === "queued"
-        ? "bg-[rgba(44,123,229,0.12)] text-[#35547d]"
-        : status === "succeeded"
-          ? "bg-[rgba(67,160,71,0.12)] text-[#2f6f35]"
-          : "bg-[rgba(24,24,27,0.08)] text-[#5f6470]";
+function PricingSection() {
   return (
-    <span
-      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${className}`}
-    >
-      {label}
-    </span>
+    <section className="relative px-6 py-24 sm:px-8 lg:px-12 lg:py-28">
+      <div className="mx-auto max-w-[1280px]">
+        <div className="mx-auto max-w-[820px] text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/42">
+            Pricing
+          </p>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white/92 sm:text-5xl">
+            Pricing that scales by integrated project, not by passive seats.
+          </h2>
+          <p className="mx-auto mt-5 max-w-[720px] text-base leading-7 text-white/50">
+            Each connected project gets its own live detection, sandbox validation, and
+            repair workflow. Teams pay for the projects Stimpact is actively protecting.
+          </p>
+        </div>
+
+        <div className="landing-pricing-grid mt-14">
+          {PRICING_PLANS.map((plan) => (
+            <section
+              key={plan.name}
+              className={`landing-pricing-card ${plan.featured ? "landing-pricing-card-featured" : ""}`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold tracking-[0.08em] text-white/86">
+                    {plan.name}
+                  </p>
+                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/38">
+                    {plan.accent}
+                  </p>
+                </div>
+                <span className="landing-pricing-pill">{plan.accent}</span>
+              </div>
+
+              <div className="mt-8 flex items-end gap-3">
+                <span className="text-4xl font-semibold tracking-tight text-white/94 sm:text-5xl">
+                  {plan.price}
+                </span>
+                <span className="pb-1 text-sm text-white/46">{plan.cadence}</span>
+              </div>
+
+              <p className="mt-5 text-sm leading-7 text-white/56">{plan.summary}</p>
+
+              <div className="mt-8 space-y-3">
+                {plan.features.map((feature) => (
+                  <div key={feature} className="landing-pricing-feature">
+                    <span className="landing-pricing-feature-dot" />
+                    <span>{feature}</span>
+                  </div>
+                ))}
+              </div>
+
+              <Link
+                href="/onboarding"
+                className={`mt-8 inline-flex w-full items-center justify-center rounded-full px-5 py-3 text-sm font-semibold ${
+                  plan.featured
+                    ? "landing-button-primary text-white"
+                    : "landing-reference-outline-button text-white/88"
+                }`}
+              >
+                Start this plan
+              </Link>
+            </section>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FooterSection() {
+  return (
+    <footer className="relative px-6 pb-10 pt-8 sm:px-8 lg:px-12">
+      <div className="mx-auto max-w-[1280px] border-t border-white/8 pt-8">
+        <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-[520px]">
+            <div className="inline-flex items-center gap-3 text-white/88">
+              <BrandMark />
+              <span className="text-sm font-semibold tracking-[0.04em]">Stimpact</span>
+            </div>
+            <p className="mt-4 text-sm leading-7 text-white/46">
+              Real-time incident detection, autonomous repair workflows, replica sandbox
+              verification, and optional git and redeploy execution for every protected
+              project.
+            </p>
+          </div>
+
+          <div className="grid gap-8 text-sm sm:grid-cols-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+                Platform
+              </p>
+              <div className="mt-4 space-y-3 text-white/56">
+                <p>Detection</p>
+                <p>Sandbox repair</p>
+                <p>Live panel</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+                Execution
+              </p>
+              <div className="mt-4 space-y-3 text-white/56">
+                <p>Git operations</p>
+                <p>Deploy controls</p>
+                <p>Approval policies</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+                Access
+              </p>
+              <div className="mt-4 space-y-3 text-white/56">
+                <Link href="/onboarding">Get started</Link>
+                <Link href="/live">Open live workspace</Link>
+                <Link href="#about">View system flow</Link>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 flex flex-col gap-3 border-t border-white/8 pt-6 text-xs text-white/34 sm:flex-row sm:items-center sm:justify-between">
+          <p>Pricing is billed per integrated project under active protection.</p>
+          <p>Execution steps like git push or redeploy only run when explicitly enabled.</p>
+        </div>
+      </div>
+    </footer>
   );
 }

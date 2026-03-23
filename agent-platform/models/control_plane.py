@@ -45,6 +45,18 @@ class SecretBackend(StrEnum):
     AWS_SECRETS_MANAGER = "aws_secrets_manager"
 
 
+class ProjectApiKeyStatus(StrEnum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
+class AutonomyMode(StrEnum):
+    OBSERVE = "observe"
+    RECOMMEND = "recommend"
+    SUPERVISED_EXECUTE = "supervised_execute"
+    AUTONOMOUS = "autonomous"
+
+
 class RuntimeKind(StrEnum):
     GENERIC = "generic"
     PYTHON = "python"
@@ -144,6 +156,78 @@ class SecretRefRecord(BaseModel):
             description=row["description"],
             backend=SecretBackend(str(row["backend"])),
             external_ref=str(row["external_ref"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectApiKeyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    key_prefix: str
+    key_hash: str
+    status: ProjectApiKeyStatus
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectApiKeyRecord":
+        return cls(
+            id=str(row["id"]),
+            project_id=str(row["project_id"]),
+            name=str(row["name"]),
+            key_prefix=str(row["key_prefix"]),
+            key_hash=str(row["key_hash"]),
+            status=ProjectApiKeyStatus(str(row["status"])),
+            last_used_at=row["last_used_at"],
+            revoked_at=row["revoked_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectPolicyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    autonomy_mode: AutonomyMode
+    require_human_approval: bool
+    allow_production_writes: bool
+    allow_low_risk_autonomy: bool
+    block_during_active_deploys: bool
+    restrict_to_approved_services: bool
+    require_rollback_plan: bool
+    require_post_action_verification: bool
+    approved_services: list[str] = Field(default_factory=list)
+    failure_classifier_enabled: bool
+    root_cause_enabled: bool
+    patch_planner_enabled: bool
+    runbook_executor_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectPolicyRecord":
+        return cls(
+            project_id=str(row["project_id"]),
+            autonomy_mode=AutonomyMode(str(row["autonomy_mode"])),
+            require_human_approval=bool(row["require_human_approval"]),
+            allow_production_writes=bool(row["allow_production_writes"]),
+            allow_low_risk_autonomy=bool(row["allow_low_risk_autonomy"]),
+            block_during_active_deploys=bool(row["block_during_active_deploys"]),
+            restrict_to_approved_services=bool(row["restrict_to_approved_services"]),
+            require_rollback_plan=bool(row["require_rollback_plan"]),
+            require_post_action_verification=bool(row["require_post_action_verification"]),
+            approved_services=_decode_json_array(row["approved_services"]),
+            failure_classifier_enabled=bool(row["failure_classifier_enabled"]),
+            root_cause_enabled=bool(row["root_cause_enabled"]),
+            patch_planner_enabled=bool(row["patch_planner_enabled"]),
+            runbook_executor_enabled=bool(row["runbook_executor_enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

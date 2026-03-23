@@ -27,6 +27,16 @@ class StubAsyncJobRepository:
         )
         self.marked_statuses: list[tuple[str, AsyncJobStatus, str | None]] = []
         self.attempts: list[tuple[str, AsyncJobStatus]] = []
+        self.reclaimed_calls: list[tuple[int, AsyncJobType | None]] = []
+
+    async def reclaim_expired_leases(
+        self,
+        *,
+        stale_after_seconds: int = 300,
+        job_type: AsyncJobType | None = None,
+    ) -> list[AsyncJobRecord]:
+        self.reclaimed_calls.append((stale_after_seconds, job_type))
+        return []
 
     async def lease_jobs(
         self,
@@ -108,6 +118,7 @@ async def test_sandbox_job_dispatcher_processes_async_jobs() -> None:
     assert service.processed_job_ids == ["job-1"]
     assert repository.marked_statuses == [("job-1", AsyncJobStatus.SUCCEEDED, None)]
     assert repository.attempts == [("job-1", AsyncJobStatus.SUCCEEDED)]
+    assert repository.reclaimed_calls == [(300, AsyncJobType.SANDBOX_RUN)]
 
 
 async def test_autonomous_job_dispatcher_processes_async_jobs() -> None:
@@ -128,6 +139,7 @@ async def test_autonomous_job_dispatcher_processes_async_jobs() -> None:
     assert service.processed_job_ids == ["job-1"]
     assert repository.marked_statuses == [("job-1", AsyncJobStatus.SUCCEEDED, None)]
     assert repository.attempts == [("job-1", AsyncJobStatus.SUCCEEDED)]
+    assert repository.reclaimed_calls == [(300, AsyncJobType.AUTONOMOUS_REPAIR)]
 
 
 async def test_kubernetes_monitor_dispatcher_records_terminal_runs() -> None:

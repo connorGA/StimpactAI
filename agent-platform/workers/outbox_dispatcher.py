@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from api.core.config import get_outbox_stale_lock_seconds
 from api.events.redis_bus import OutboxSignalBus
 from api.repositories.outbox_repository import OutboxRepository
 from services.incident_creation import IncidentCreationService
@@ -24,6 +25,7 @@ class OutboxDispatcher:
         self._last_signal_id = "$"
 
     async def run_once(self, *, batch_size: int = 100) -> int:
+        await self._repository.reclaim_stale_events(stale_after_seconds=get_outbox_stale_lock_seconds())
         events = await self._repository.lease_pending_events(limit=batch_size)
 
         for event in events:

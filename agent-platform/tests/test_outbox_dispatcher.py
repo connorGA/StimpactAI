@@ -9,6 +9,11 @@ class StubOutboxRepository:
         self.events = events
         self.processed_ids: list[str] = []
         self.failed_calls: list[tuple[str, int, str]] = []
+        self.reclaimed_with: list[int] = []
+
+    async def reclaim_stale_events(self, *, stale_after_seconds: int = 300) -> list[dict[str, object]]:
+        self.reclaimed_with.append(stale_after_seconds)
+        return []
 
     async def lease_pending_events(self, *, limit: int = 100) -> list[dict[str, object]]:
         return self.events[:limit]
@@ -60,6 +65,7 @@ async def test_outbox_dispatcher_processes_supported_events() -> None:
     assert service.payloads == [{"telemetry_id": "telemetry-1"}]
     assert repository.processed_ids == ["event-1"]
     assert repository.failed_calls == []
+    assert repository.reclaimed_with == [300]
 
 
 async def test_outbox_dispatcher_marks_invalid_payloads_as_failed() -> None:
@@ -84,3 +90,4 @@ async def test_outbox_dispatcher_marks_invalid_payloads_as_failed() -> None:
     assert failed_id == "event-2"
     assert retry_delay == 30
     assert "Expecting value" in error_message
+    assert repository.reclaimed_with == [300]

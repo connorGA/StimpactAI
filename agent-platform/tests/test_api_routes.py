@@ -6,17 +6,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.core.errors import register_exception_handlers
+from api.core.security import get_security_control_plane_repository, hash_api_key
 from api.events.publisher import IncidentEventPublisher
 from api.routes.control_plane import (
     get_control_plane_repository,
     get_provider_integration_service,
+    project_router as project_control_plane_router,
     get_secrets_writer,
     public_router as provider_callback_router,
     router as control_plane_router,
 )
+from api.routes.health import router as health_router
+from api.routes.incident_chat import (
+    get_control_plane_repository as get_incident_chat_control_plane_repository,
+    get_incident_chat_service,
+    get_incident_repository as get_incident_chat_repository,
+    router as incident_chat_router,
+)
 from api.routes.incidents import (
     get_autonomous_run_service,
     get_artifact_repository,
+    get_control_plane_repository as get_incident_control_plane_repository,
     get_failure_classifier,
     get_incident_repository,
     get_patch_generation_service,
@@ -45,6 +55,10 @@ from harness.schemas.autonomous import AutonomousEventType
 from harness.schemas.initializer import FeatureSeed
 from models.async_job import AsyncJobStatus
 from models.control_plane import (
+    AutonomyMode,
+    ProjectApiKeyRecord,
+    ProjectApiKeyStatus,
+    ProjectPolicyRecord,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -72,11 +86,22 @@ from services.provider_integration_service import GitHubCallbackPreview, GitLabC
 
 
 def build_test_app() -> FastAPI:
+    class StubPostgresManager:
+        is_configured = True
+        pool = None
+
+        async def ping(self) -> bool:
+            return True
+
     app = FastAPI()
+    app.state.postgres = StubPostgresManager()
     register_exception_handlers(app)
+    app.include_router(health_router)
     app.include_router(telemetry_router)
+    app.include_router(incident_chat_router)
     app.include_router(incidents_router)
     app.include_router(control_plane_router)
+    app.include_router(project_control_plane_router)
     app.include_router(provider_callback_router)
     return app
 
@@ -176,10 +201,27 @@ class StubFailureClassifier:
         )
 
 
+class StubIncidentChatService:
+    async def chat_about_incidents(self, payload) -> object:
+        project_id = getattr(payload, "project_id", None) or "all-projects"
+        return {
+            "answer": f"Summarized incidents for {project_id}.",
+            "referenced_incident_ids": ["incident-1"],
+        }
+
+    async def chat_about_incident(self, incident_id: str, payload) -> object:
+        _ = payload
+        return {
+            "answer": f"Summarized incident {incident_id}.",
+            "referenced_incident_ids": [incident_id],
+        }
+
+
 class StubControlPlaneRepository:
     def __init__(self) -> None:
         now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
         self.attached_mounts: list[str] = []
+        self.project_api_keys: list[ProjectApiKeyRecord] = []
         self.secret_ref = SecretRefRecord(
             id="secret-1",
             project_id="project-1",
@@ -198,7 +240,19 @@ class StubControlPlaneRepository:
             credentials_secret_ref_id=self.secret_ref.id,
             webhook_secret_ref_id=None,
             aws_region="us-east-1",
-            metadata={},
+            metadata={"project_id": "project-1", "installation_id": "117170229"},
+            created_at=now,
+            updated_at=now,
+        )
+        self.provider_repository = ProviderRepositoryRecord(
+            id="provider-repo-1",
+            provider_integration_id="integration-1",
+            provider=ProviderKind.GITHUB,
+            external_repository_id="123",
+            owner="acme",
+            name="billing-api",
+            default_branch="main",
+            clone_url="https://github.com/acme/billing-api.git",
             created_at=now,
             updated_at=now,
         )
@@ -218,6 +272,24 @@ class StubControlPlaneRepository:
             created_at=now,
             updated_at=now,
         )
+        self.project_policy = ProjectPolicyRecord(
+            project_id="project-1",
+            autonomy_mode=AutonomyMode.RECOMMEND,
+            require_human_approval=True,
+            allow_production_writes=False,
+            allow_low_risk_autonomy=True,
+            block_during_active_deploys=True,
+            restrict_to_approved_services=False,
+            require_rollback_plan=True,
+            require_post_action_verification=True,
+            approved_services=["billing-api"],
+            failure_classifier_enabled=True,
+            root_cause_enabled=True,
+            patch_planner_enabled=True,
+            runbook_executor_enabled=False,
+            created_at=now,
+            updated_at=now,
+        )
 
     async def create_secret_ref(self, **kwargs) -> SecretRefRecord:
         assert kwargs["project_id"] == "project-1"
@@ -230,12 +302,109 @@ class StubControlPlaneRepository:
     async def get_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
         return self.secret_ref if secret_ref_id == self.secret_ref.id else None
 
+    async def create_project_api_key(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        key_prefix: str,
+        key_hash: str,
+        status: ProjectApiKeyStatus = ProjectApiKeyStatus.ACTIVE,
+    ) -> ProjectApiKeyRecord:
+        record = ProjectApiKeyRecord(
+            id=f"api-key-{len(self.project_api_keys) + 1}",
+            project_id=project_id,
+            name=name,
+            key_prefix=key_prefix,
+            key_hash=key_hash,
+            status=status,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=self.secret_ref.created_at,
+            updated_at=self.secret_ref.updated_at,
+        )
+        self.project_api_keys.append(record)
+        return record
+
+    async def list_project_api_keys(self, project_id: str) -> list[ProjectApiKeyRecord]:
+        return [record for record in self.project_api_keys if record.project_id == project_id]
+
+    async def get_project_api_key(self, key_id: str) -> ProjectApiKeyRecord | None:
+        for record in self.project_api_keys:
+            if record.id == key_id:
+                return record
+        return None
+
+    async def find_active_project_api_key(
+        self,
+        *,
+        project_id: str,
+        key_hash: str,
+    ) -> ProjectApiKeyRecord | None:
+        for record in self.project_api_keys:
+            if (
+                record.project_id == project_id
+                and record.key_hash == key_hash
+                and record.status is ProjectApiKeyStatus.ACTIVE
+            ):
+                return record
+        return None
+
+    async def has_active_project_api_keys(self, project_id: str) -> bool:
+        return any(
+            record.project_id == project_id and record.status is ProjectApiKeyStatus.ACTIVE
+            for record in self.project_api_keys
+        )
+
+    async def mark_project_api_key_used(self, key_id: str) -> ProjectApiKeyRecord:
+        for index, record in enumerate(self.project_api_keys):
+            if record.id == key_id:
+                updated = record.model_copy(update={"last_used_at": datetime.now(tz=UTC)})
+                self.project_api_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project api key {key_id}")
+
+    async def revoke_project_api_key(self, key_id: str) -> ProjectApiKeyRecord:
+        for index, record in enumerate(self.project_api_keys):
+            if record.id == key_id:
+                updated = record.model_copy(
+                    update={
+                        "status": ProjectApiKeyStatus.REVOKED,
+                        "revoked_at": datetime.now(tz=UTC),
+                    }
+                )
+                self.project_api_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project api key {key_id}")
+
+    async def get_or_create_project_policy(self, project_id: str) -> ProjectPolicyRecord:
+        assert project_id == self.project_policy.project_id
+        return self.project_policy
+
+    async def update_project_policy(self, *, project_id: str, **kwargs) -> ProjectPolicyRecord:
+        assert project_id == self.project_policy.project_id
+        self.project_policy = self.project_policy.model_copy(update=kwargs)
+        return self.project_policy
+
     async def create_provider_integration(self, **kwargs) -> ProviderIntegrationRecord:
         assert kwargs["provider"] is ProviderKind.GITHUB
         return self.provider_integration
 
-    async def list_provider_integrations(self) -> list[ProviderIntegrationRecord]:
-        return [self.provider_integration]
+    async def list_provider_integrations(
+        self,
+        project_id: str | None = None,
+    ) -> list[ProviderIntegrationRecord]:
+        if project_id is None or self.provider_integration.metadata.get("project_id") == project_id:
+            return [self.provider_integration]
+        return []
+
+    async def get_provider_integration(self, provider_integration_id: str) -> ProviderIntegrationRecord | None:
+        return self.provider_integration if provider_integration_id == self.provider_integration.id else None
+
+    async def list_provider_repositories(self, provider_integration_id: str) -> list[ProviderRepositoryRecord]:
+        if provider_integration_id == self.provider_integration.id:
+            return [self.provider_repository]
+        return []
 
     async def create_provider_repository(self, **kwargs):
         now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
@@ -794,6 +963,24 @@ def test_list_incidents_passes_filters_and_serializes_response() -> None:
     assert body["items"][0]["severity"] == "critical"
 
 
+def test_incident_reporting_overview_returns_real_aggregates() -> None:
+    app = build_test_app()
+    repository = StubIncidentRepository()
+    app.dependency_overrides[get_incident_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get("/incidents/reporting/overview", params={"project_id": "project-1"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == "project-1"
+    assert body["total_visible_incidents"] == 1
+    assert body["open_incidents"] == 1
+    assert body["critical_incidents"] == 1
+    assert body["total_event_volume"] == 2
+    assert body["service_counts"][0]["label"] == "billing-api"
+
+
 def test_get_incident_returns_detail_payload() -> None:
     app = build_test_app()
     repository = StubIncidentRepository()
@@ -820,6 +1007,153 @@ def test_get_missing_incident_returns_not_found() -> None:
     assert response.json()["error"]["code"] == "incident_not_found"
 
 
+def test_incident_list_requires_project_key_when_project_has_active_key() -> None:
+    app = build_test_app()
+    incident_repository = StubIncidentRepository()
+    security_repository = StubControlPlaneRepository()
+    security_repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Incident read key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("incident-project-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=security_repository.secret_ref.created_at,
+            updated_at=security_repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_incident_repository] = lambda: incident_repository
+    app.dependency_overrides[get_incident_control_plane_repository] = lambda: security_repository
+
+    client = TestClient(app)
+    unauthorized = client.get("/incidents", params={"project_id": "project-1"})
+    authorized = client.get(
+        "/incidents",
+        params={"project_id": "project-1"},
+        headers={"X-Stimpact-Project-Key": "incident-project-key"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_incident_list_requires_project_id_when_scoped_credentials_are_used(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", "1")
+    app = build_test_app()
+    app.dependency_overrides[get_incident_control_plane_repository] = StubControlPlaneRepository
+
+    client = TestClient(app)
+    response = client.get("/incidents")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "project_id_required"
+
+
+def test_incident_detail_requires_matching_project_key_when_auth_is_enforced(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", "1")
+    app = build_test_app()
+    incident_repository = StubIncidentRepository()
+    incident_repository.incident = incident_repository.incident.model_copy(update={"project_id": "project-2"})
+    security_repository = StubControlPlaneRepository()
+    security_repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Project one key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("project-one-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=security_repository.secret_ref.created_at,
+            updated_at=security_repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_incident_repository] = lambda: incident_repository
+    app.dependency_overrides[get_incident_control_plane_repository] = lambda: security_repository
+
+    client = TestClient(app)
+    response = client.get(
+        "/incidents/incident-1",
+        headers={"X-Stimpact-Project-Key": "project-one-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] in {"project_api_key_invalid", "project_api_key_required"}
+
+
+def test_global_incident_chat_requires_matching_project_key() -> None:
+    app = build_test_app()
+    security_repository = StubControlPlaneRepository()
+    security_repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Chat key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("chat-project-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=security_repository.secret_ref.created_at,
+            updated_at=security_repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_incident_chat_service] = StubIncidentChatService
+    app.dependency_overrides[get_incident_chat_control_plane_repository] = lambda: security_repository
+
+    client = TestClient(app)
+    unauthorized = client.post(
+        "/incidents/chat",
+        json={"messages": [{"role": "user", "content": "Summarize incidents"}], "project_id": "project-1"},
+    )
+    authorized = client.post(
+        "/incidents/chat",
+        json={"messages": [{"role": "user", "content": "Summarize incidents"}], "project_id": "project-1"},
+        headers={"X-Stimpact-Project-Key": "chat-project-key"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json()["referenced_incident_ids"] == ["incident-1"]
+
+
+def test_incident_detail_chat_uses_incident_project_scope() -> None:
+    app = build_test_app()
+    incident_repository = StubIncidentRepository()
+    security_repository = StubControlPlaneRepository()
+    security_repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Detail chat key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("detail-chat-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=security_repository.secret_ref.created_at,
+            updated_at=security_repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_incident_chat_repository] = lambda: incident_repository
+    app.dependency_overrides[get_incident_chat_service] = StubIncidentChatService
+    app.dependency_overrides[get_incident_chat_control_plane_repository] = lambda: security_repository
+
+    client = TestClient(app)
+    response = client.post(
+        "/incidents/incident-1/chat",
+        json={"messages": [{"role": "user", "content": "What happened?"}]},
+        headers={"X-Stimpact-Project-Key": "detail-chat-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["referenced_incident_ids"] == ["incident-1"]
+
+
 def test_get_incident_classification_returns_category_payload() -> None:
     app = build_test_app()
     repository = StubIncidentRepository()
@@ -838,6 +1172,7 @@ def test_get_incident_classification_returns_category_payload() -> None:
 
 def test_get_incident_root_cause_returns_analysis_payload() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_root_cause_analysis_service] = StubRootCauseAnalysisService
 
     client = TestClient(app)
@@ -853,6 +1188,7 @@ def test_get_incident_root_cause_returns_analysis_payload() -> None:
 
 def test_get_incident_patch_returns_patch_payload() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_patch_generation_service] = StubPatchGenerationService
 
     client = TestClient(app)
@@ -868,6 +1204,7 @@ def test_get_incident_patch_returns_patch_payload() -> None:
 
 def test_get_incident_sandbox_run_returns_payload() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_sandbox_verification_service] = StubSandboxVerificationService
 
     client = TestClient(app)
@@ -882,6 +1219,7 @@ def test_get_incident_sandbox_run_returns_payload() -> None:
 
 def test_post_incident_sandbox_run_executes_verification() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_sandbox_verification_service] = StubSandboxVerificationService
 
     client = TestClient(app)
@@ -895,6 +1233,7 @@ def test_post_incident_sandbox_run_executes_verification() -> None:
 
 def test_list_incident_sandbox_runs_returns_history() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_sandbox_verification_service] = StubSandboxVerificationService
 
     client = TestClient(app)
@@ -908,6 +1247,7 @@ def test_list_incident_sandbox_runs_returns_history() -> None:
 
 def test_get_incident_sandbox_run_detail_returns_steps_and_artifacts() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_sandbox_verification_service] = StubSandboxVerificationService
     app.dependency_overrides[get_sandbox_repository] = StubSandboxRepository
     app.dependency_overrides[get_artifact_repository] = StubArtifactRepository
@@ -924,6 +1264,7 @@ def test_get_incident_sandbox_run_detail_returns_steps_and_artifacts() -> None:
 
 def test_create_autonomous_run_returns_queued_run() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -952,6 +1293,7 @@ def test_create_autonomous_run_returns_queued_run() -> None:
 
 def test_list_autonomous_runs_returns_history() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -965,6 +1307,7 @@ def test_list_autonomous_runs_returns_history() -> None:
 
 def test_get_latest_autonomous_run_returns_detail() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -978,6 +1321,7 @@ def test_get_latest_autonomous_run_returns_detail() -> None:
 
 def test_stream_autonomous_run_events_returns_sse_snapshot() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -991,6 +1335,7 @@ def test_stream_autonomous_run_events_returns_sse_snapshot() -> None:
 
 def test_approve_autonomous_run_returns_updated_detail() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -1006,6 +1351,7 @@ def test_approve_autonomous_run_returns_updated_detail() -> None:
 
 def test_promote_autonomous_run_returns_promotion_metadata() -> None:
     app = build_test_app()
+    app.dependency_overrides[get_incident_repository] = StubIncidentRepository
     app.dependency_overrides[get_autonomous_run_service] = StubAutonomousRunService
 
     client = TestClient(app)
@@ -1163,6 +1509,75 @@ def test_list_provider_repositories_returns_synced_records() -> None:
     assert body[0]["provider_integration_id"] == "integration-1"
 
 
+def test_project_onboarding_returns_aggregated_project_state() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get("/control-plane/projects/project-1/onboarding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == "project-1"
+    assert body["policy"]["project_id"] == "project-1"
+    assert body["secret_refs"][0]["id"] == "secret-1"
+    assert body["integrations"][0]["integration"]["id"] == "integration-1"
+    assert body["integrations"][0]["repositories"][0]["id"] == "provider-repo-1"
+    assert body["repo_profiles"][0]["id"] == "profile-1"
+
+
+def test_project_secret_ref_route_rejects_mismatched_project_id() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_control_plane_repository] = StubControlPlaneRepository
+    app.dependency_overrides[get_secrets_writer] = StubSecretsWriter
+
+    client = TestClient(app)
+    response = client.post(
+        "/control-plane/projects/project-1/secret-refs",
+        json={
+            "project_id": "project-2",
+            "label": "OPENAI_API_KEY",
+            "description": "Runtime secret",
+            "value": "super-secret-value",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "project_mismatch"
+
+
+def test_project_onboarding_route_accepts_project_api_key_when_admin_auth_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "admin-token")
+    repository = StubControlPlaneRepository()
+    repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="onboarding",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("project-secret-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app = build_test_app()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get(
+        "/control-plane/projects/project-1/onboarding",
+        headers={"X-Stimpact-Project-Key": "project-secret-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["project_id"] == "project-1"
+
+
 def test_gitlab_callback_exchanges_code_and_returns_connected_integration() -> None:
     app = build_test_app()
     app.dependency_overrides[get_provider_integration_service] = StubProviderIntegrationService
@@ -1215,3 +1630,126 @@ def test_github_webhook_accepts_verified_payload() -> None:
     body = response.json()
     assert body["provider"] == "github"
     assert body["event"] == "ping"
+
+
+def test_health_routes_report_liveness_and_readiness() -> None:
+    app = build_test_app()
+    client = TestClient(app)
+
+    live = client.get("/health/live")
+    ready = client.get("/health/ready")
+    metrics = client.get("/health/metrics")
+
+    assert live.status_code == 200
+    assert live.json()["status"] == "ok"
+    assert ready.status_code == 200
+    assert ready.json()["checks"]["database"]["ready"] is True
+    assert metrics.status_code == 200
+    assert "stimpact_build_info" in metrics.text
+
+
+def test_health_readiness_returns_503_when_strict_and_database_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_STRICT_READINESS", "true")
+
+    class UnreadyPostgresManager:
+        is_configured = True
+
+        async def ping(self) -> bool:
+            return False
+
+    app = build_test_app()
+    app.state.postgres = UnreadyPostgresManager()
+    client = TestClient(app)
+
+    ready = client.get("/health/ready")
+
+    assert ready.status_code == 503
+    assert ready.json()["status"] == "degraded"
+
+
+def test_control_plane_routes_require_admin_token_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    app.dependency_overrides[get_control_plane_repository] = StubControlPlaneRepository
+    client = TestClient(app)
+
+    unauthorized = client.get("/control-plane/provider-integrations")
+    authorized = client.get(
+        "/control-plane/provider-integrations",
+        headers={"Authorization": "Bearer super-admin-token"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_telemetry_ingest_requires_project_api_key_when_project_has_active_key() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="SDK key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("secret-project-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+    app.state.outbox_signaler = RecordingOutboxSignaler()
+    app.dependency_overrides[get_telemetry_repository] = RecordingTelemetryRepository
+    app.dependency_overrides[get_incident_event_publisher] = IncidentEventPublisher
+    client = TestClient(app)
+    payload = {
+        "project_id": "project-1",
+        "environment": "production",
+        "service": "billing-api",
+        "error_message": "Database timeout",
+        "stacktrace": "Traceback",
+        "timestamp": "2026-03-16T12:00:00Z",
+    }
+
+    unauthorized = client.post("/telemetry/error", json=payload)
+    authorized = client.post(
+        "/telemetry/error",
+        json=payload,
+        headers={"X-Stimpact-Project-Key": "secret-project-key"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 202
+
+
+def test_project_api_keys_can_be_created_listed_and_revoked(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    created = client.post(
+        "/control-plane/projects/project-1/api-keys",
+        json={"name": "SDK ingest"},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    created_body = created.json()
+    assert created_body["api_key"]["project_id"] == "project-1"
+    assert created_body["plaintext_key"].startswith("stimp_live_")
+
+    listed = client.get("/control-plane/projects/project-1/api-keys", headers=headers)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+    revoked = client.post(
+        f"/control-plane/projects/project-1/api-keys/{created_body['api_key']['id']}/revoke",
+        headers=headers,
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"

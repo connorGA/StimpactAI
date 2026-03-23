@@ -220,15 +220,8 @@ class GitLabProviderClient:
                 1,
             )
         return ProviderSandboxAccess(
-            secret_value=json.dumps(
-                {
-                    "provider": self.provider.value,
-                    "auth_type": "gitlab_oauth_token",
-                    "clone_url": clone_url,
-                    "repository": f"{repository.owner}/{repository.name}",
-                }
-            ),
-            secret_format="json",
+            secret_value=clone_url,
+            secret_format="text",
         )
 
     async def propose_patch(

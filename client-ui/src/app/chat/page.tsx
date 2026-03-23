@@ -107,7 +107,7 @@ export default async function ChatPage() {
               <ContextRow label="Open incidents" value={String(countOpenIncidents(incidents))} />
               <ContextRow label="Visible incidents" value={String(incidents.length)} />
               <ContextRow label="Memory mode" value="Session only" />
-              <ContextRow label="Draft status updates" value="Preview only" />
+              <ContextRow label="Draft status updates" value="Operator draft" />
             </div>
           </section>
         </div>

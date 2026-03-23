@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from models.control_plane import (
+    AutonomyMode,
+    ProjectApiKeyRecord,
+    ProjectApiKeyStatus,
+    ProjectPolicyRecord,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -33,6 +38,14 @@ class CreateSecretRefRequest(BaseModel):
             raise ValueError("secret value must not be blank")
         return normalized
 
+    @field_validator("project_id", "label")
+    @classmethod
+    def validate_projectish_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
 
 class SecretRefResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -49,6 +62,90 @@ class SecretRefResponse(BaseModel):
     @classmethod
     def from_record(cls, record: SecretRefRecord) -> "SecretRefResponse":
         return cls(**record.model_dump(mode="json"))
+
+
+class CreateProjectApiKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        return normalized
+
+
+class ProjectApiKeyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    key_prefix: str
+    status: ProjectApiKeyStatus
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ProjectApiKeyRecord) -> "ProjectApiKeyResponse":
+        payload = record.model_dump(mode="json")
+        payload.pop("key_hash", None)
+        return cls(**payload)
+
+
+class ProjectApiKeyCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: ProjectApiKeyResponse
+    plaintext_key: str
+
+
+class ProjectPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    autonomy_mode: AutonomyMode
+    require_human_approval: bool
+    allow_production_writes: bool
+    allow_low_risk_autonomy: bool
+    block_during_active_deploys: bool
+    restrict_to_approved_services: bool
+    require_rollback_plan: bool
+    require_post_action_verification: bool
+    approved_services: list[str] = Field(default_factory=list)
+    failure_classifier_enabled: bool
+    root_cause_enabled: bool
+    patch_planner_enabled: bool
+    runbook_executor_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ProjectPolicyRecord) -> "ProjectPolicyResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class UpdateProjectPolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    autonomy_mode: AutonomyMode
+    require_human_approval: bool
+    allow_production_writes: bool
+    allow_low_risk_autonomy: bool
+    block_during_active_deploys: bool
+    restrict_to_approved_services: bool
+    require_rollback_plan: bool
+    require_post_action_verification: bool
+    approved_services: list[str] = Field(default_factory=list, max_length=50)
+    failure_classifier_enabled: bool
+    root_cause_enabled: bool
+    patch_planner_enabled: bool
+    runbook_executor_enabled: bool
 
 
 class CreateProviderIntegrationRequest(BaseModel):
@@ -87,6 +184,14 @@ class CreateGitHubAppIntegrationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     installation_id: str | None = Field(default=None, min_length=1, max_length=64)
 
+    @field_validator("project_id", "name")
+    @classmethod
+    def validate_nonempty_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
 
 class StartGitLabOAuthRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -94,6 +199,14 @@ class StartGitLabOAuthRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=200)
     gitlab_base_url: str | None = Field(default=None, max_length=500)
+
+    @field_validator("project_id", "name")
+    @classmethod
+    def validate_nonempty_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
 
 
 class ProviderInstallationResponse(BaseModel):
@@ -194,12 +307,69 @@ class CreateRepoProfileRequest(BaseModel):
     secret_ref_ids: list[str] = Field(default_factory=list, max_length=50)
     secret_mounts: list["RepoProfileSecretMountRequest"] = Field(default_factory=list, max_length=50)
 
+    @field_validator(
+        "project_id",
+        "provider_repository_id",
+        "reproduce_command",
+        "verify_command",
+        mode="before",
+    )
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("value must be a string")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("base_image", "install_command", "success_criteria", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("startup_commands", "network_allowlist", mode="before")
+    @classmethod
+    def normalize_string_list(cls, value: list[str]) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("value must be a list")
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
 
 class RepoProfileSecretMountRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     secret_ref_id: str
     mount_as: str = Field(min_length=1, max_length=512)
+
+    @field_validator("mount_as")
+    @classmethod
+    def validate_mount_as(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("mount path must not be blank")
+        if ".." in normalized.split("/"):
+            raise ValueError("mount path must not contain parent directory traversal")
+        if "/" not in normalized and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+            raise ValueError("environment variable mounts must be valid shell variable names")
+        return normalized
+
+
+class ProjectBootstrapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_project_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("project id must not be blank")
+        return normalized
 
 
 class RepoProfileSecretMountResponse(BaseModel):
@@ -257,3 +427,22 @@ class RepoProfileResponse(BaseModel):
             for binding in mounts
         ]
         return cls(**payload)
+
+
+class ProviderIntegrationOnboardingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration: ProviderIntegrationResponse
+    repositories: list[ProviderRepositoryResponse] = Field(default_factory=list)
+
+
+class ProjectOnboardingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    policy: ProjectPolicyResponse
+    secret_refs: list[SecretRefResponse] = Field(default_factory=list)
+    api_keys: list[ProjectApiKeyResponse] = Field(default_factory=list)
+    integrations: list[ProviderIntegrationOnboardingResponse] = Field(default_factory=list)
+    repo_profiles: list[RepoProfileResponse] = Field(default_factory=list)
+    suggested_next_steps: list[str] = Field(default_factory=list)

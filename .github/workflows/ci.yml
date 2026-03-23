@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            client-ui/package-lock.json
+            sdk/package-lock.json
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Install backend dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e agent-platform
+          .venv/bin/python -m pip install -r agent-platform/requirements-dev.txt
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install frontend dependencies
+        run: npm --prefix client-ui ci
+
+      - name: Install SDK dependencies
+        run: npm --prefix sdk ci
+
+      - name: Install Playwright browser
+        run: npm --prefix client-ui exec playwright install --with-deps chromium
+
+      - name: Run repository CI suite
+        env:
+          AGENT_PLATFORM_API_URL: http://127.0.0.1:4010
+        run: npm run ci:all
+
+      - name: Build backend container
+        run: docker build -f agent-platform/Dockerfile .
+
+      - name: Build frontend container
+        run: docker build -f client-ui/Dockerfile .
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubectl apply --dry-run=client -f infra/kubernetes/namespaces-and-serviceaccounts.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/control-plane-config.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/database-migration-job.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/api-deployment.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/frontend-deployment.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/worker-deployments.yaml
+          kubectl apply --dry-run=client -f infra/kubernetes/apps/ingress.yaml

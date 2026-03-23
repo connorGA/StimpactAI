@@ -1,34 +1,67 @@
 import Link from "next/link";
 
 import {
+  getIncidents,
+  getLatestIncidentAutonomousRunDetail,
+  getProjectPolicy,
+  listProviderIntegrations,
+  listRepoProfiles,
+} from "@/lib/agent-platform";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
+import {
   PageHeader,
-  PreviewNotice,
   SectionCard,
   StatCard,
 } from "@/components/dashboard-ui";
+export const dynamic = "force-dynamic";
 
-const playbooks = [
-  {
-    title: "Restart unhealthy service pods",
-    summary: "Controlled remediation for crash-looping workloads with approval gates.",
-  },
-  {
-    title: "Route traffic away from degraded region",
-    summary: "Traffic-management response pattern for regional instability.",
-  },
-  {
-    title: "Generate rollback recommendation",
-    summary: "Incident-informed rollback suggestion based on error concentration.",
-  },
-];
+export default async function AutomationsPage() {
+  const projectId = await resolvePrimaryProjectId();
+  const incidents = await getIncidents({ limit: 6, offset: 0 });
+  const [policy, repoProfiles, integrations] = projectId
+    ? await Promise.all([
+        getProjectPolicy(projectId),
+        listRepoProfiles(projectId),
+        listProviderIntegrations(projectId),
+      ])
+    : [null, [], []];
+  const latestRuns = await Promise.all(
+    incidents.items.slice(0, 4).map(async (incident) => {
+      try {
+        const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
+        return { incident, run: detail.run };
+      } catch {
+        return { incident, run: null };
+      }
+    }),
+  );
+  const playbooks = [
+    {
+      title: "Autonomous repair",
+      summary: "Queues a full repair workflow for an incident using the configured repo profile.",
+      status:
+        policy && repoProfiles.length > 0 && policy.patch_planner_enabled
+          ? "available"
+          : "needs setup",
+    },
+    {
+      title: "Sandbox verification",
+      summary: "Reproduces the incident and verifies a generated patch inside an isolated runtime.",
+      status: repoProfiles.length > 0 ? "available" : "needs setup",
+    },
+    {
+      title: "Provider repository sync",
+      summary: "Refreshes the connected repository catalog before a remediation or promotion flow starts.",
+      status: integrations.length > 0 ? "available" : "needs setup",
+    },
+  ] as const;
 
-export default function AutomationsPage() {
   return (
     <main className="space-y-6">
       <PageHeader
         eyebrow="Automations"
-        title="Preview the self-healing and playbook control plane"
-        description="This page shows the product direction for guided remediation and automation governance, even before those backend capabilities are fully connected."
+        title="Automation catalog and recent remediation activity"
+        description="The automation surface now reflects live project policy, repo connectivity, and recent autonomous run activity."
         action={
           <Link
             href="/chat"
@@ -41,27 +74,27 @@ export default function AutomationsPage() {
 
       <section className="grid gap-4 md:grid-cols-3">
         <StatCard
-          label="Playbooks visible"
+          label="Catalog entries"
           value={String(playbooks.length)}
-          detail="Automation templates shown in the dashboard preview."
+          detail="Operational automations currently surfaced by the control plane."
         />
         <StatCard
           label="Approval path"
-          value="Human-in-loop"
-          detail="Operator approvals remain central to high-risk changes."
+          value={policy?.require_human_approval ? "Human-in-loop" : "Automatic"}
+          detail="Current approval mode taken from the persisted project policy."
           tone="yellow"
         />
         <StatCard
-          label="Execution state"
-          value="Preview"
-          detail="Automation execution and outcomes will be wired later."
+          label="Connected repos"
+          value={String(repoProfiles.length)}
+          detail="Repo profiles available for sandbox and repair execution."
         />
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
         <SectionCard
           title="Automation catalog"
-          description="Representative automations the production product will eventually support."
+          description="Live automation availability based on policy and repo connectivity."
         >
           <div className="space-y-4">
             {playbooks.map((playbook) => (
@@ -76,8 +109,14 @@ export default function AutomationsPage() {
                       {playbook.summary}
                     </p>
                   </div>
-                  <span className="vault-kicker rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]">
-                    Planned
+                  <span
+                    className={`vault-kicker rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                      playbook.status === "available"
+                        ? "bg-[rgba(67,160,71,0.12)] text-[#2f6f35]"
+                        : "bg-[rgba(255,178,83,0.18)] text-[#8f5b09]"
+                    }`}
+                  >
+                    {playbook.status}
                   </span>
                 </div>
               </div>
@@ -85,14 +124,36 @@ export default function AutomationsPage() {
           </div>
         </SectionCard>
 
-        <PreviewNotice
-          title="Automation capabilities still unconfigured"
-          items={[
-            "Actual playbook execution, dry runs, and rollback orchestration are not connected yet.",
-            "Guardrails, approval policy engines, and blast-radius simulation remain roadmap UI.",
-            "Execution histories and post-action verification loops will be implemented in later phases.",
-          ]}
-        />
+        <SectionCard
+          title="Recent execution history"
+          description="Latest autonomous remediation activity for the active incident sample."
+        >
+          <div className="space-y-3">
+            {latestRuns.map(({ incident, run }) => (
+              <div
+                key={incident.id}
+                className="rounded-[22px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-semibold text-[#171717]">{incident.title}</p>
+                    <p className="mt-1 text-sm text-[#746d66]">
+                      {run
+                        ? `Latest autonomous run is ${run.status} in phase ${run.phase}.`
+                        : "No autonomous execution has been queued for this incident yet."}
+                    </p>
+                  </div>
+                  <Link
+                    href={`/incidents/${incident.id}`}
+                    className="text-sm font-semibold text-[#35547d] hover:underline"
+                  >
+                    Open incident
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
       </div>
     </main>
   );

@@ -5,7 +5,7 @@ import logging
 import asyncpg
 from fastapi import FastAPI, Request
 
-from api.core.config import get_bool_env, get_database_url, is_valid_database_url
+from api.core.config import get_database_url, is_valid_database_url, should_run_migrations_on_startup
 from api.db.migrations import apply_pending_migrations
 
 logger = logging.getLogger(__name__)
@@ -14,12 +14,16 @@ logger = logging.getLogger(__name__)
 class PostgresConnectionManager:
     def __init__(self, database_url: str | None = None) -> None:
         self._database_url = database_url or get_database_url()
-        self._run_migrations = get_bool_env("AGENT_PLATFORM_RUN_MIGRATIONS", True)
+        self._run_migrations = should_run_migrations_on_startup()
         self._pool: asyncpg.Pool | None = None
 
     @property
     def pool(self) -> asyncpg.Pool | None:
         return self._pool
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self._database_url)
 
     async def connect(self) -> None:
         if not self._database_url:
@@ -48,6 +52,16 @@ class PostgresConnectionManager:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    async def ping(self) -> bool:
+        if self._pool is None:
+            return False
+        try:
+            async with self._pool.acquire() as connection:
+                await connection.execute("SELECT 1")
+        except asyncpg.PostgresError:
+            return False
+        return True
 
 
 def install_postgres(app: FastAPI) -> PostgresConnectionManager:

@@ -1,23 +1,30 @@
-import {
-  PageHeader,
-  PreviewNotice,
-  SectionCard,
-  StatCard,
-} from "@/components/dashboard-ui";
+import Link from "next/link";
+
+import { PageHeader, SectionCard, StatCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
-import { getIncidents } from "@/lib/agent-platform";
+import { getHealthReadiness, getIncidents, getLatestIncidentAutonomousRunDetail } from "@/lib/agent-platform";
 import { countOpenIncidents, formatTimestamp } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
 
-const handoffItems = [
-  "Primary on-call handoff notes",
-  "Stakeholder update timeline",
-  "Incident commander checklist",
-];
-
 export default async function OperationsPage() {
   const incidentList = await getIncidents({ limit: 10, offset: 0 });
+  const readiness = await getHealthReadiness().catch(() => null);
+  const autonomousPairs = await Promise.all(
+    incidentList.items.slice(0, 6).map(async (incident) => {
+      try {
+        const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
+        return [incident.id, detail.run] as const;
+      } catch {
+        return [incident.id, null] as const;
+      }
+    }),
+  );
+  const autonomousLookup = Object.fromEntries(autonomousPairs);
+  const activeRepairs = Object.values(autonomousLookup).filter(
+    (run) => run && (run.status === "queued" || run.status === "running"),
+  ).length;
+  const handoffItems = buildHandoffItems(incidentList.items);
 
   return (
     <main className="space-y-6">
@@ -34,22 +41,22 @@ export default async function OperationsPage() {
           detail="Open incidents currently in response."
         />
         <StatCard
-          label="Escalation path"
-          value="3 layers"
-          detail="Ops, engineering, and leadership response lanes."
+          label="Active repairs"
+          value={String(activeRepairs)}
+          detail="Autonomous or queued remediation attempts currently in flight."
           tone="yellow"
         />
         <StatCard
-          label="Response modules"
-          value="Preview"
-          detail="Core operational workflows are rendered ahead of backend support."
+          label="Backend readiness"
+          value={readiness?.status ?? "unknown"}
+          detail="Operational view of the platform health check."
         />
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
         <SectionCard
           title="Active response board"
-          description="A forward-looking live board using the current incident set as seed data."
+          description="Incident response now includes live autonomous-repair status when available."
         >
           <div className="space-y-3">
             {incidentList.items.slice(0, 6).map((incident) => (
@@ -59,9 +66,17 @@ export default async function OperationsPage() {
               >
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <p className="font-semibold text-[#17385d]">{incident.title}</p>
+                    <Link
+                      href={`/incidents/${incident.id}`}
+                      className="font-semibold text-[#17385d] hover:underline"
+                    >
+                      {incident.title}
+                    </Link>
                     <p className="mt-1 text-sm text-[#67819f]">
                       {incident.service} • last seen {formatTimestamp(incident.last_seen_at)}
+                    </p>
+                    <p className="mt-2 text-sm text-[#35547d]">
+                      {describeAutonomousStatus(autonomousLookup[incident.id]?.status)}
                     </p>
                   </div>
                   <SeverityBadge severity={incident.severity} />
@@ -74,7 +89,7 @@ export default async function OperationsPage() {
         <div className="space-y-6">
           <SectionCard
             title="Operator handoff"
-            description="Planned response-management modules."
+            description="Suggested next actions based on the current incident queue."
           >
             <div className="space-y-3">
               {handoffItems.map((item) => (
@@ -87,17 +102,37 @@ export default async function OperationsPage() {
               ))}
             </div>
           </SectionCard>
-
-          <PreviewNotice
-            title="Operations features not yet configured"
-            items={[
-              "Shift handoffs, war-room communications, and approval workflows are still UI-only.",
-              "Real escalation routing, paging acknowledgements, and stakeholder comms will be connected later.",
-              "Runbook checkpoints and incident command timelines are visual placeholders for now.",
-            ]}
-          />
         </div>
       </div>
     </main>
   );
+}
+
+function describeAutonomousStatus(status: string | undefined): string {
+  if (status === "running" || status === "queued") {
+    return "Autonomous repair is actively working this incident.";
+  }
+  if (status === "failed") {
+    return "Latest autonomous repair attempt failed and needs operator follow-up.";
+  }
+  if (status === "succeeded") {
+    return "Latest autonomous repair attempt completed successfully.";
+  }
+  return "No autonomous repair has been queued for this incident yet.";
+}
+
+function buildHandoffItems(incidents: Awaited<ReturnType<typeof getIncidents>>["items"]): string[] {
+  const topIncident = incidents[0];
+  if (!topIncident) {
+    return [
+      "No open incident handoff required right now.",
+      "Backend health is stable enough for routine monitoring.",
+      "Keep provider integrations and repo profiles current for the next incident.",
+    ];
+  }
+  return [
+    `Review ${topIncident.service} incident ownership and confirm the current responder.`,
+    `Share the latest event count (${topIncident.event_count}) and environment (${topIncident.environment}) with stakeholders.`,
+    `Open the incident detail view to approve or reject the next remediation step.`,
+  ];
 }

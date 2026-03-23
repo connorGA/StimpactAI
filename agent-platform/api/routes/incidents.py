@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -10,6 +12,7 @@ from openai import AsyncOpenAI
 
 from api.core.config import get_openai_api_key, get_openai_patch_model, get_openai_rca_model
 from api.core.errors import APIError
+from api.core.security import require_project_list_access, require_project_read_access
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
@@ -28,10 +31,13 @@ from api.schemas.autonomous import (
 from api.schemas.incidents import (
     ArtifactResponse,
     IncidentClassificationResponse,
+    IncidentCountBreakdownResponse,
     IncidentDetailResponse,
     IncidentEventResponse,
     IncidentPatchResponse,
+    IncidentReportingOverviewResponse,
     IncidentRootCauseResponse,
+    IncidentActivityPointResponse,
     IncidentSandboxRunDetailResponse,
     IncidentSandboxRunResponse,
     IncidentListResponse,
@@ -41,7 +47,6 @@ from api.schemas.incidents import (
     IncidentSummaryResponse,
 )
 from harness.schemas.autonomous import AutonomousRepairRunRecord
-from models.async_job import AsyncJobStatus
 from models.incident import IncidentStatus
 from services.autonomous_runs import AutonomousRunService
 from services.code_context import CodeContextService
@@ -201,14 +206,35 @@ def get_autonomous_run_service(
     return service
 
 
+async def _require_incident_access(
+    *,
+    request: Request,
+    incident_id: str,
+    incident_repository: IncidentRepository,
+    security_repository: ControlPlaneRepository,
+):
+    incident = await incident_repository.get_incident(incident_id)
+    if incident is None:
+        raise APIError(
+            f"Incident {incident_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="incident_not_found",
+        )
+    await require_project_read_access(request, incident.project_id, repository=security_repository)
+    return incident
+
+
 @router.get("", response_model=IncidentListResponse, status_code=status.HTTP_200_OK)
 async def list_incidents(
+    request: Request,
     repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     project_id: str | None = Query(default=None, min_length=1, max_length=128),
     status_filter: Annotated[IncidentStatus | None, Query(alias="status")] = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> IncidentListResponse:
+    await require_project_list_access(request, project_id, repository=security_repository)
     incidents, total = await repository.list_incidents(
         project_id=project_id,
         status=status_filter.value if status_filter is not None else None,
@@ -224,20 +250,56 @@ async def list_incidents(
     )
 
 
+@router.get(
+    "/reporting/overview",
+    response_model=IncidentReportingOverviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_incident_reporting_overview(
+    request: Request,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    project_id: str | None = Query(default=None, min_length=1, max_length=128),
+) -> IncidentReportingOverviewResponse:
+    await require_project_list_access(request, project_id, repository=security_repository)
+    incidents, _total = await repository.list_incidents(
+        project_id=project_id,
+        status=None,
+        limit=500,
+        offset=0,
+    )
+    return IncidentReportingOverviewResponse(
+        project_id=project_id,
+        total_visible_incidents=len(incidents),
+        open_incidents=sum(1 for incident in incidents if incident.status == IncidentStatus.OPEN),
+        critical_incidents=sum(1 for incident in incidents if incident.severity.value == "critical"),
+        total_event_volume=sum(incident.event_count for incident in incidents),
+        latest_incident_at=max((incident.last_seen_at for incident in incidents), default=None),
+        service_counts=_build_count_breakdown(incident.service for incident in incidents),
+        environment_counts=_build_count_breakdown(incident.environment.value for incident in incidents),
+        severity_counts=_build_count_breakdown(
+            (incident.severity.value for incident in incidents),
+            preferred_order=["critical", "high", "medium", "low"],
+        ),
+        recent_incident_activity=_build_recent_activity(incidents),
+        daily_incident_activity=_build_daily_activity(incidents),
+    )
+
+
 @router.get("/{incident_id}", response_model=IncidentDetailResponse, status_code=status.HTTP_200_OK)
 async def get_incident(
+    request: Request,
     incident_id: str,
     repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     event_limit: int = Query(default=100, ge=1, le=500),
 ) -> IncidentDetailResponse:
-    incident = await repository.get_incident(incident_id)
-    if incident is None:
-        raise APIError(
-            f"Incident {incident_id} was not found.",
-            status_code=status.HTTP_404_NOT_FOUND,
-            code="incident_not_found",
-        )
-
+    incident = await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     events = await repository.list_incident_events(incident_id, limit=event_limit)
     return IncidentDetailResponse(
         incident=IncidentSummaryResponse.from_record(incident),
@@ -251,19 +313,19 @@ async def get_incident(
     status_code=status.HTTP_200_OK,
 )
 async def classify_incident(
+    request: Request,
     incident_id: str,
     repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     classifier: FailureClassifier = Depends(get_failure_classifier),
     event_limit: int = Query(default=50, ge=1, le=200),
 ) -> IncidentClassificationResponse:
-    incident = await repository.get_incident(incident_id)
-    if incident is None:
-        raise APIError(
-            f"Incident {incident_id} was not found.",
-            status_code=status.HTTP_404_NOT_FOUND,
-            code="incident_not_found",
-        )
-
+    incident = await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     events = await repository.list_incident_events(incident_id, limit=event_limit)
     classification = classifier.classify(incident, events)
     return IncidentClassificationResponse.from_classification(
@@ -278,10 +340,19 @@ async def classify_incident(
     status_code=status.HTTP_200_OK,
 )
 async def analyze_root_cause(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: RootCauseAnalysisService = Depends(get_root_cause_analysis_service),
     event_limit: int = Query(default=50, ge=1, le=200),
 ) -> IncidentRootCauseResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     analysis = await service.analyze_incident(incident_id, event_limit=event_limit)
     return IncidentRootCauseResponse.from_analysis(analysis)
 
@@ -292,11 +363,20 @@ async def analyze_root_cause(
     status_code=status.HTTP_200_OK,
 )
 async def get_or_generate_patch(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: PatchGenerationService = Depends(get_patch_generation_service),
     event_limit: int = Query(default=50, ge=1, le=200),
     refresh: bool = Query(default=False),
 ) -> IncidentPatchResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     patch_run = await service.get_or_generate_patch(
         incident_id,
         refresh=refresh,
@@ -311,9 +391,18 @@ async def get_or_generate_patch(
     status_code=status.HTTP_200_OK,
 )
 async def get_latest_sandbox_run(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: SandboxVerificationService = Depends(get_sandbox_verification_service),
 ) -> IncidentSandboxRunResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     run = await service.get_latest_run(incident_id)
     if run is None:
         raise APIError(
@@ -330,11 +419,20 @@ async def get_latest_sandbox_run(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def execute_sandbox_run(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: SandboxVerificationService = Depends(get_sandbox_verification_service),
     event_limit: int = Query(default=50, ge=1, le=200),
     refresh_patch: bool = Query(default=False),
 ) -> SandboxRunQueuedResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     run, job = await service.queue_sandbox_run(
         incident_id,
         event_limit=event_limit,
@@ -353,10 +451,19 @@ async def execute_sandbox_run(
     status_code=status.HTTP_200_OK,
 )
 async def list_sandbox_runs(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: SandboxVerificationService = Depends(get_sandbox_verification_service),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[IncidentSandboxRunResponse]:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     runs = await service.list_runs(incident_id, limit=limit)
     return [IncidentSandboxRunResponse.from_record(run) for run in runs]
 
@@ -367,12 +474,21 @@ async def list_sandbox_runs(
     status_code=status.HTTP_200_OK,
 )
 async def get_sandbox_run_detail(
+    request: Request,
     incident_id: str,
     sandbox_run_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: SandboxVerificationService = Depends(get_sandbox_verification_service),
     sandbox_repository: SandboxRepository = Depends(get_sandbox_repository),
     artifact_repository: ArtifactRepository = Depends(get_artifact_repository),
 ) -> IncidentSandboxRunDetailResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     run = await service.get_run(incident_id, sandbox_run_id)
     steps = await sandbox_repository.list_sandbox_run_steps(sandbox_run_id)
     attempts = await sandbox_repository.list_sandbox_run_attempts(sandbox_run_id)
@@ -391,10 +507,19 @@ async def get_sandbox_run_detail(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_autonomous_run(
+    request: Request,
     incident_id: str,
     body: AutonomousRunCreateRequest,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunQueuedResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     detail = await service.start_run(incident_id, body)
     return AutonomousRunQueuedResponse(run=detail.run, async_job_id=detail.run.async_job_id)
 
@@ -405,9 +530,18 @@ async def create_autonomous_run(
     status_code=status.HTTP_200_OK,
 )
 async def list_autonomous_runs(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> list[AutonomousRepairRunRecord]:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     return await service.list_runs(incident_id)
 
 
@@ -417,9 +551,18 @@ async def list_autonomous_runs(
     status_code=status.HTTP_200_OK,
 )
 async def get_latest_autonomous_run(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunDetailResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     return await service.get_latest_run_detail(incident_id)
 
 
@@ -429,10 +572,19 @@ async def get_latest_autonomous_run(
     status_code=status.HTTP_200_OK,
 )
 async def get_autonomous_run_detail(
+    request: Request,
     incident_id: str,
     run_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunDetailResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     return await service.get_run_detail(incident_id, run_id)
 
 
@@ -442,11 +594,20 @@ async def get_autonomous_run_detail(
     status_code=status.HTTP_200_OK,
 )
 async def approve_autonomous_run(
+    request: Request,
     incident_id: str,
     run_id: str,
     body: AutonomousRunApprovalRequest,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunDetailResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     return await service.approve_run(incident_id, run_id, body)
 
 
@@ -456,10 +617,19 @@ async def approve_autonomous_run(
     status_code=status.HTTP_200_OK,
 )
 async def promote_autonomous_run(
+    request: Request,
     incident_id: str,
     run_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> AutonomousRunDetailResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     return await service.promote_run(incident_id, run_id)
 
 
@@ -471,8 +641,16 @@ async def stream_autonomous_run_events(
     incident_id: str,
     run_id: str,
     request: Request,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: AutonomousRunService = Depends(get_autonomous_run_service),
 ) -> StreamingResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     initial_detail = await service.get_run_detail(incident_id, run_id)
 
     async def event_generator():
@@ -515,11 +693,20 @@ async def stream_autonomous_run_events(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_sandbox_run(
+    request: Request,
     incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
     service: SandboxVerificationService = Depends(get_sandbox_verification_service),
     event_limit: int = Query(default=50, ge=1, le=200),
     refresh_patch: bool = Query(default=False),
 ) -> SandboxRunQueuedResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
     run, job = await service.queue_sandbox_run(
         incident_id,
         event_limit=event_limit,
@@ -534,3 +721,47 @@ async def create_sandbox_run(
 
 def _format_sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, sort_keys=True)}\n\n"
+
+
+def _build_count_breakdown(
+    values,
+    *,
+    preferred_order: list[str] | None = None,
+) -> list[IncidentCountBreakdownResponse]:
+    counts = Counter(values)
+    if preferred_order is not None:
+        return [
+            IncidentCountBreakdownResponse(label=label, count=counts.get(label, 0))
+            for label in preferred_order
+        ]
+    return [
+        IncidentCountBreakdownResponse(label=label, count=count)
+        for label, count in counts.most_common()
+    ]
+
+
+def _build_recent_activity(incidents: list) -> list[IncidentActivityPointResponse]:
+    now = datetime.now(UTC)
+    buckets: list[IncidentActivityPointResponse] = []
+    for hour_offset in range(20, -1, -4):
+        bucket_start = now - timedelta(hours=hour_offset)
+        bucket_end = bucket_start + timedelta(hours=4)
+        label = bucket_start.strftime("%H:%M")
+        count = sum(
+            1
+            for incident in incidents
+            if bucket_start <= incident.last_seen_at < bucket_end
+        )
+        buckets.append(IncidentActivityPointResponse(label=label, count=count))
+    return buckets
+
+
+def _build_daily_activity(incidents: list) -> list[IncidentActivityPointResponse]:
+    now = datetime.now(UTC)
+    buckets: list[IncidentActivityPointResponse] = []
+    for day_offset in range(6, -1, -1):
+        day = (now - timedelta(days=day_offset)).date()
+        label = day.strftime("%a")
+        count = sum(1 for incident in incidents if incident.last_seen_at.date() == day)
+        buckets.append(IncidentActivityPointResponse(label=label, count=count))
+    return buckets

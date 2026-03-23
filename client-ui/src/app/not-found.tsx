@@ -19,7 +19,7 @@ export default function NotFound() {
           href="/"
           className="vault-button-primary mt-8 inline-flex rounded-2xl px-4 py-2 text-sm font-semibold text-white transition"
         >
-          Return to dashboard
+          Return home
         </Link>
       </section>
     </main>

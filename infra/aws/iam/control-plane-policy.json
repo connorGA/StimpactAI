@@ -11,8 +11,8 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::stimpactai-artifacts-dev",
-        "arn:aws:s3:::stimpactai-artifacts-dev/*"
+        "arn:aws:s3:::${ARTIFACT_BUCKET_NAME}",
+        "arn:aws:s3:::${ARTIFACT_BUCKET_NAME}/*"
       ]
     },
     {
@@ -26,7 +26,7 @@
         "secretsmanager:GetSecretValue",
         "secretsmanager:TagResource"
       ],
-      "Resource": "arn:aws:secretsmanager:us-west-2:*:secret:stimpactai/*"
+      "Resource": "arn:aws:secretsmanager:${AWS_REGION}:*:secret:${SECRETS_PREFIX}/*"
     },
     {
       "Sid": "SubmitAndInspectSandboxJobs",

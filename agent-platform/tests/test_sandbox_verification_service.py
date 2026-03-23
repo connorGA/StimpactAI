@@ -15,6 +15,7 @@ from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus
 from models.patch import PatchRunRecord, PatchRunStatus
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from sandbox.kubernetes_runner import KubernetesJobStatus
+from sandbox.runner import SecretBindingRef
 from services.sandbox_verification import SandboxVerificationService
 from shared.types.telemetry import Environment
 
@@ -211,6 +212,8 @@ class StubLocalRunner:
         baseline_ref=None,
         secret_env=None,
         secret_files=None,
+        secret_bindings=None,
+        secrets_reader=None,
     ):
         self.calls.append(
             {
@@ -222,6 +225,8 @@ class StubLocalRunner:
                 "baseline_ref": baseline_ref,
                 "secret_env": secret_env or {},
                 "secret_files": secret_files or {},
+                "secret_bindings": secret_bindings or [],
+                "secrets_reader": secrets_reader,
             }
         )
         return SimpleNamespace(
@@ -523,8 +528,15 @@ async def test_process_async_job_resolves_repo_profile_secrets_for_local_runner(
     )
     await service.process_async_job(job)
 
-    assert local_runner.calls[0]["secret_env"] == {"OPENAI_API_KEY": "super-secret-value"}
+    assert local_runner.calls[0]["secret_env"] == {}
     assert local_runner.calls[0]["secret_files"] == {}
+    assert local_runner.calls[0]["secret_bindings"] == [
+        SecretBindingRef(
+            mount_as="OPENAI_API_KEY",
+            external_ref="arn:aws:secretsmanager:us-west-2:123:secret:openai",
+        )
+    ]
+    assert local_runner.calls[0]["secrets_reader"] is not None
 
 
 async def test_process_async_job_materializes_relative_secret_file_mounts(monkeypatch) -> None:
@@ -573,10 +585,16 @@ async def test_process_async_job_materializes_relative_secret_file_mounts(monkey
     await service.process_async_job(job)
 
     assert local_runner.calls[0]["secret_env"] == {}
-    assert local_runner.calls[0]["secret_files"] == {".stimpact/secrets/openai.key": "super-secret-value"}
+    assert local_runner.calls[0]["secret_files"] == {}
+    assert local_runner.calls[0]["secret_bindings"] == [
+        SecretBindingRef(
+            mount_as=".stimpact/secrets/openai.key",
+            external_ref="arn:aws:secretsmanager:us-west-2:123:secret:openai",
+        )
+    ]
 
 
-def test_redact_manifest_masks_runtime_secret_values() -> None:
+def test_redact_manifest_masks_secret_references() -> None:
     explicit_patch_run = _build_patch_run(
         patch_run_id="patch-autonomous",
         diff_text="diff --git a/app.py b/app.py\n+VALUE = 'autonomous'\n",
@@ -598,7 +616,10 @@ def test_redact_manifest_masks_runtime_secret_values() -> None:
                         {
                             "name": "sandbox",
                             "env": [
-                                {"name": "OPENAI_API_KEY", "value": "super-secret-value"},
+                                {
+                                    "name": "STIMPACT_SECRET_BINDING_0_EXTERNAL_REF",
+                                    "value": "arn:aws:secretsmanager:us-west-2:123:secret:openai",
+                                },
                                 {"name": "SAFE_VALUE", "value": "ok"},
                             ],
                         }
@@ -610,12 +631,27 @@ def test_redact_manifest_masks_runtime_secret_values() -> None:
 
     rendered = service._redact_manifest(  # noqa: SLF001
         manifest,
-        secret_env={"OPENAI_API_KEY": "super-secret-value"},
-        secret_files={},
+        secret_bindings=[
+            RepoProfileSecretBindingRecord(
+                repo_profile_id="profile-1",
+                mount_as="OPENAI_API_KEY",
+                secret_ref=SecretRefRecord(
+                    id="secret-1",
+                    project_id="project-1",
+                    label="OPENAI_API_KEY",
+                    description="OpenAI key",
+                    backend=SecretBackend.AWS_SECRETS_MANAGER,
+                    external_ref="arn:aws:secretsmanager:us-west-2:123:secret:openai",
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                ),
+                created_at=datetime.now(UTC),
+            )
+        ],
     )
 
     assert "***REDACTED***" in rendered
-    assert "super-secret-value" not in rendered
+    assert "arn:aws:secretsmanager:us-west-2:123:secret:openai" not in rendered
     assert "SAFE_VALUE" in rendered
 
 

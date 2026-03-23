@@ -51,6 +51,30 @@ export type IncidentListResponse = {
   offset: number;
 };
 
+export type IncidentCountBreakdown = {
+  label: string;
+  count: number;
+};
+
+export type IncidentActivityPoint = {
+  label: string;
+  count: number;
+};
+
+export type IncidentReportingOverview = {
+  project_id: string | null;
+  total_visible_incidents: number;
+  open_incidents: number;
+  critical_incidents: number;
+  total_event_volume: number;
+  latest_incident_at: string | null;
+  service_counts: IncidentCountBreakdown[];
+  environment_counts: IncidentCountBreakdown[];
+  severity_counts: IncidentCountBreakdown[];
+  recent_incident_activity: IncidentActivityPoint[];
+  daily_incident_activity: IncidentActivityPoint[];
+};
+
 export type IncidentDetailResponse = {
   incident: IncidentSummary;
   events: IncidentEvent[];
@@ -377,4 +401,137 @@ export type ChatMessage = {
 export type IncidentChatResponse = {
   answer: string;
   referenced_incident_ids: string[];
+};
+
+export type AutonomyMode =
+  | "observe"
+  | "recommend"
+  | "supervised_execute"
+  | "autonomous";
+
+export type ProjectPolicy = {
+  project_id: string;
+  autonomy_mode: AutonomyMode;
+  require_human_approval: boolean;
+  allow_production_writes: boolean;
+  allow_low_risk_autonomy: boolean;
+  block_during_active_deploys: boolean;
+  restrict_to_approved_services: boolean;
+  require_rollback_plan: boolean;
+  require_post_action_verification: boolean;
+  approved_services: string[];
+  failure_classifier_enabled: boolean;
+  root_cause_enabled: boolean;
+  patch_planner_enabled: boolean;
+  runbook_executor_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectApiKey = {
+  id: string;
+  project_id: string;
+  name: string;
+  key_prefix: string;
+  status: "active" | "revoked";
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectApiKeyCreateResponse = {
+  api_key: ProjectApiKey;
+  plaintext_key: string;
+};
+
+export type ProviderIntegration = {
+  id: string;
+  provider: "github" | "gitlab";
+  name: string;
+  status: "active" | "disabled";
+  credentials_secret_ref_id: string | null;
+  webhook_secret_ref_id: string | null;
+  aws_region: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProviderRepository = {
+  id: string;
+  provider_integration_id: string;
+  provider: "github" | "gitlab";
+  external_repository_id: string;
+  owner: string;
+  name: string;
+  default_branch: string;
+  clone_url: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProviderIntegrationOnboarding = {
+  integration: ProviderIntegration;
+  repositories: ProviderRepository[];
+};
+
+export type GitLabOAuthStartResponse = {
+  integration: ProviderIntegration;
+  authorization_url: string;
+};
+
+export type SecretRef = {
+  id: string;
+  project_id: string;
+  label: string;
+  description: string | null;
+  backend: "aws_secrets_manager";
+  external_ref: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RepoProfileSecretMount = {
+  mount_as: string;
+  secret_ref: SecretRef;
+};
+
+export type RepoProfile = {
+  id: string;
+  project_id: string;
+  provider_repository_id: string;
+  runtime_kind: "generic" | "python" | "node" | "container";
+  base_image: string | null;
+  install_command: string | null;
+  startup_commands: string[];
+  reproduce_command: string;
+  verify_command: string;
+  success_criteria: string | null;
+  network_allowlist: string[];
+  secret_refs: SecretRef[];
+  secret_mounts: RepoProfileSecretMount[];
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HealthReadiness = {
+  status: string;
+  checks: {
+    database: {
+      configured: boolean;
+      ready: boolean;
+    };
+  };
+};
+
+export type ProjectOnboarding = {
+  project_id: string;
+  policy: ProjectPolicy;
+  secret_refs: SecretRef[];
+  api_keys: ProjectApiKey[];
+  integrations: ProviderIntegrationOnboarding[];
+  repo_profiles: RepoProfile[];
+  suggested_next_steps: string[];
 };

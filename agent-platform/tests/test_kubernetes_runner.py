@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from models.control_plane import ProviderKind, RepoProfileRecord, RuntimeKind
+from models.control_plane import (
+    ProviderKind,
+    RepoProfileRecord,
+    RepoProfileSecretBindingRecord,
+    RuntimeKind,
+    SecretBackend,
+    SecretRefRecord,
+)
 from sandbox.kubernetes_runner import (
     KubernetesJobLauncher,
     KubernetesJobMonitor,
@@ -44,6 +51,44 @@ def build_snapshot() -> RepositorySnapshot:
     )
 
 
+def build_secret_bindings() -> list[RepoProfileSecretBindingRecord]:
+    now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
+    secret_ref = SecretRefRecord(
+        id="secret-1",
+        project_id="project-1",
+        label="OPENAI_API_KEY",
+        description="Runtime secret",
+        backend=SecretBackend.AWS_SECRETS_MANAGER,
+        external_ref="arn:aws:secretsmanager:us-west-2:123456789012:secret:project/runtime-openai",
+        created_at=now,
+        updated_at=now,
+    )
+    file_secret_ref = SecretRefRecord(
+        id="secret-2",
+        project_id="project-1",
+        label="RUNTIME_KEY_FILE",
+        description="Runtime file secret",
+        backend=SecretBackend.AWS_SECRETS_MANAGER,
+        external_ref="arn:aws:secretsmanager:us-west-2:123456789012:secret:project/runtime-file",
+        created_at=now,
+        updated_at=now,
+    )
+    return [
+        RepoProfileSecretBindingRecord(
+            repo_profile_id="profile-1",
+            mount_as="OPENAI_API_KEY",
+            secret_ref=secret_ref,
+            created_at=now,
+        ),
+        RepoProfileSecretBindingRecord(
+            repo_profile_id="profile-1",
+            mount_as="/var/run/secrets/runtime/openai.key",
+            secret_ref=file_secret_ref,
+            created_at=now,
+        ),
+    ]
+
+
 class FakeKubernetesClusterClient:
     def __init__(self) -> None:
         self.applied_manifest = None
@@ -78,13 +123,9 @@ def test_kubernetes_job_launcher_builds_manifest() -> None:
         patch_diff_content="diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n",
         network_allowlist=["pypi.org"],
         network_allowlist_cidrs=["151.101.0.223/32"],
-        secret_env_refs=["OPENAI_API_KEY"],
-        secret_env={"OPENAI_API_KEY": "super-secret"},
-        secret_files={"/var/run/secrets/runtime/openai.key": "file-secret"},
-        authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        secret_bindings=build_secret_bindings(),
         repository_archive_url=None,
         provider_access_secret_arn="arn:aws:secretsmanager:us-west-2:123456789012:secret:provider-access",
-        provider_access_secret_format="json",
     )
 
     assert manifest["kind"] == "List"
@@ -104,7 +145,7 @@ def test_kubernetes_job_launcher_builds_manifest() -> None:
     assert pod_spec["serviceAccountName"] == "sandbox-sa"
     assert pod_spec["nodeSelector"] == {"stimpact.ai/workload": "sandbox"}
     assert pod_spec["enableServiceLinks"] is False
-    assert len(pod_spec["initContainers"]) == 1
+    assert len(pod_spec["initContainers"]) == 2
     containers = pod_spec["containers"]
     assert isinstance(containers, list)
     container = containers[0]
@@ -120,23 +161,31 @@ def test_kubernetes_job_launcher_builds_manifest() -> None:
         if isinstance(entry, dict)
     )
     assert any(
-        entry["name"] == "OPENAI_API_KEY" and entry["value"] == "super-secret"
+        entry["name"] == "STIMPACT_CLONE_URL" and entry["value"] == "https://github.com/acme/billing-api.git"
         for entry in env
+        if isinstance(entry, dict)
+    )
+    secrets_init = pod_spec["initContainers"][0]
+    clone_init = pod_spec["initContainers"][1]
+    assert any(
+        entry["name"] == "STIMPACT_SECRET_BINDING_COUNT" and entry["value"] == "2"
+        for entry in secrets_init["env"]
         if isinstance(entry, dict)
     )
     assert any(
-        entry["name"] == "STIMPACT_SECRET_FILE_0" and entry["value"] == "file-secret"
-        for entry in env
+        entry["name"] == "STIMPACT_SECRET_BINDING_0_EXTERNAL_REF"
+        and entry["value"].startswith("arn:aws:secretsmanager:")
+        for entry in secrets_init["env"]
         if isinstance(entry, dict)
     )
-    init_container = pod_spec["initContainers"][0]
-    assert init_container["env"][0]["name"] == "STIMPACT_AUTHENTICATED_CLONE_URL"
-    assert "/workspace/.stimpact/patch.diff" in init_container["args"][0]
-    assert "printf '%s\\n' \"$STIMPACT_PATCH_DIFF_CONTENT\"" in init_container["args"][0]
-    assert "STIMPACT_REPOSITORY_ARCHIVE_URL" in init_container["args"][0]
-    assert "git checkout --quiet \"$STIMPACT_TARGET_COMMIT_SHA\"" in init_container["args"][0]
-    assert "git apply /workspace/.stimpact/patch.diff" not in init_container["args"][0]
-    assert "/var/run/secrets/runtime/openai.key" in container["args"][0]
+    assert "aws secretsmanager get-secret-value" in secrets_init["args"][0]
+    assert "/workspace/.stimpact/provider-clone-url" in secrets_init["args"][0]
+    assert "/workspace/.stimpact/patch.diff" in clone_init["args"][0]
+    assert "printf '%s\\n' \"$STIMPACT_PATCH_DIFF_CONTENT\"" in clone_init["args"][0]
+    assert "STIMPACT_REPOSITORY_ARCHIVE_URL" in clone_init["args"][0]
+    assert "git checkout --quiet \"$STIMPACT_TARGET_COMMIT_SHA\"" in clone_init["args"][0]
+    assert "git apply /workspace/.stimpact/patch.diff" not in clone_init["args"][0]
+    assert "file-mounts.tsv" in container["args"][0]
     assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=observed exit_code=%s\\n' reproduce \"$code\"" in container["args"][0]
     assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' patch-apply" in container["args"][0]
     assert "printf 'STIMPACT_PHASE_RESULT phase=%s status=passed\\n' verify" in container["args"][0]
@@ -156,13 +205,9 @@ def test_kubernetes_sandbox_runner_returns_submission() -> None:
         patch_diff_content="diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n",
         network_allowlist=["pypi.org"],
         network_allowlist_cidrs=["151.101.0.223/32"],
-        secret_env_refs=["OPENAI_API_KEY"],
-        secret_env={"OPENAI_API_KEY": "super-secret"},
-        secret_files={"/var/run/secrets/runtime/openai.key": "file-secret"},
-        authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        secret_bindings=build_secret_bindings(),
         repository_archive_url=None,
         provider_access_secret_arn="arn:aws:secretsmanager:us-west-2:123456789012:secret:provider-access",
-        provider_access_secret_format="json",
     )
 
     assert submission.external_job_id == "stimpact-sandbox-sandbox-1:uid-123"
@@ -186,18 +231,14 @@ def test_kubernetes_job_launcher_uses_repository_archive_when_provided() -> None
         patch_diff_content="diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n",
         network_allowlist=["pypi.org"],
         network_allowlist_cidrs=["151.101.0.223/32"],
-        secret_env_refs=[],
-        secret_env=None,
-        secret_files=None,
-        authenticated_clone_url="https://token@github.com/acme/billing-api.git",
+        secret_bindings=[],
         repository_archive_url="https://example.com/repo.tar.gz?signature=test",
         provider_access_secret_arn=None,
-        provider_access_secret_format=None,
     )
 
     job = next(item for item in manifest["items"] if item["kind"] == "Job")
     pod_spec = job["spec"]["template"]["spec"]
-    init_container = pod_spec["initContainers"][0]
+    init_container = pod_spec["initContainers"][1]
 
     assert "wget -q -O /workspace/.stimpact/repo.tar.gz \"$STIMPACT_REPOSITORY_ARCHIVE_URL\"" in init_container["args"][0]
     assert "tar -xzf /workspace/.stimpact/repo.tar.gz -C /workspace/repo" in init_container["args"][0]

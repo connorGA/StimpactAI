@@ -104,7 +104,7 @@ export function PreviewNotice({
       <div className="flex items-start justify-between gap-3">
         <div>
           <span className="inline-flex rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
-            Preview module
+            Operational note
           </span>
           <h3 className="mt-3 text-base font-semibold text-[#171717]">{title}</h3>
         </div>

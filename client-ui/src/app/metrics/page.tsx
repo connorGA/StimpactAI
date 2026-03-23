@@ -1,30 +1,47 @@
-import { PageHeader, PreviewNotice } from "@/components/dashboard-ui";
-import { getIncidents } from "@/lib/agent-platform";
+import { PageHeader, SectionCard } from "@/components/dashboard-ui";
 import {
-  buildIncidentTrendSeries,
-  buildLatencySeries,
-  buildUptimeSeries,
+  getHealthReadiness,
+  getIncidentReportingOverview,
+  getIncidents,
+  getLatestIncidentAutonomousRunDetail,
+} from "@/lib/agent-platform";
+import {
   calculateLinePath,
-  calculateUptimePreview,
-  countOpenIncidents,
-  getEnvironmentBreakdown,
-  getSeverityBreakdown,
-  getTopServices,
-  totalEventVolume,
 } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
 
 export default async function MetricsPage() {
   const incidentList = await getIncidents({ limit: 100, offset: 0 });
+  const reporting = await getIncidentReportingOverview();
   const incidents = incidentList.items;
-  const uptimeSeries = buildUptimeSeries(incidents);
-  const volumeSeries = buildIncidentTrendSeries(incidents);
-  const latencySeries = buildLatencySeries(incidents);
-  const severity = getSeverityBreakdown(incidents);
-  const services = getTopServices(incidents, 5);
-  const environments = getEnvironmentBreakdown(incidents, 4);
-  const uptimePath = calculateLinePath(uptimeSeries, 180, 540);
+  const readiness = await getHealthReadiness().catch(() => null);
+  const latestRuns = await Promise.all(
+    incidents.slice(0, 12).map(async (incident) => {
+      try {
+        const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
+        return detail.run;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const successfulRuns = latestRuns.filter((run) => run?.status === "succeeded").length;
+  const activeRuns = latestRuns.filter(
+    (run) => run && (run.status === "queued" || run.status === "running"),
+  ).length;
+  const dailySeries = reporting.daily_incident_activity.map((point) => ({
+    label: point.label,
+    value: point.count,
+  }));
+  const volumeSeries = reporting.recent_incident_activity.map((point) => ({
+    label: point.label,
+    value: point.count,
+  }));
+  const severity = reporting.severity_counts;
+  const services = reporting.service_counts.slice(0, 5);
+  const environments = reporting.environment_counts.slice(0, 4);
+  const dailyPath = calculateLinePath(dailySeries, 180, 540);
   const volumePath = calculateLinePath(volumeSeries, 180, 540);
   const maxServiceCount = Math.max(...services.map((item) => item.count), 1);
 
@@ -41,20 +58,20 @@ export default async function MetricsPage() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/50">
-                Uptime trend
+                Incident activity
               </p>
-              <h2 className="mt-2 text-2xl font-semibold">Seven-day reliability</h2>
+              <h2 className="mt-2 text-2xl font-semibold">Seven-day incident volume</h2>
               <p className="mt-2 text-sm leading-6 text-white/70">
-                A high-signal view of stability before the user drills into more
-                detailed reporting modules.
+                Real backend aggregates of recent incident visibility across the last
+                seven days.
               </p>
             </div>
             <div className="ops-dark-block rounded-[18px] px-4 py-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/50">
-                Current uptime
+                Visible incidents
               </p>
               <p className="mt-2 text-3xl font-semibold">
-                {calculateUptimePreview(incidents)}
+                {reporting.total_visible_incidents}
               </p>
             </div>
           </div>
@@ -62,7 +79,7 @@ export default async function MetricsPage() {
           <div className="ops-grid-chart mt-6 rounded-[22px] border border-white/10 bg-black/10 px-4 py-4">
             <svg viewBox="0 0 540 180" className="h-64 w-full">
               <path
-                d={uptimePath}
+                d={dailyPath}
                 fill="none"
                 stroke="url(#metricsUptime)"
                 strokeWidth="5"
@@ -76,7 +93,7 @@ export default async function MetricsPage() {
               </defs>
             </svg>
             <div className="mt-4 grid grid-cols-7 text-xs text-white/48">
-              {uptimeSeries.map((point) => (
+              {dailySeries.map((point) => (
                 <span key={point.label}>{point.label}</span>
               ))}
             </div>
@@ -95,11 +112,11 @@ export default async function MetricsPage() {
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <MetricTile
               label="Open rate"
-              value={`${Math.round((countOpenIncidents(incidents) / Math.max(incidents.length, 1)) * 100)}%`}
+              value={`${Math.round((reporting.open_incidents / Math.max(reporting.total_visible_incidents, 1)) * 100)}%`}
             />
             <MetricTile
               label="Event volume"
-              value={String(totalEventVolume(incidents))}
+              value={String(reporting.total_event_volume)}
             />
             <MetricTile
               label="Services"
@@ -144,20 +161,22 @@ export default async function MetricsPage() {
         </ChartPanel>
 
         <ChartPanel
-          title="Latency profile"
-          description="Representative latency bands across major platform areas."
+          title="Environment coverage"
+          description="Real environment distribution across the visible incident set."
         >
           <div className="space-y-4">
-            {latencySeries.map((item) => (
+            {environments.map((item) => (
               <div key={item.label}>
                 <div className="mb-2 flex items-center justify-between text-sm">
                   <span className="font-medium text-[#111827]">{item.label}</span>
-                  <span className="text-[#667085]">{item.value} ms</span>
+                  <span className="text-[#667085]">{item.count} incidents</span>
                 </div>
                 <div className="vault-bar-track h-3 rounded-full">
                   <div
                     className="h-3 rounded-full bg-[linear-gradient(90deg,#4b6bfb,#3451d1)]"
-                    style={{ width: `${Math.min(item.value / 4, 100)}%` }}
+                    style={{
+                      width: `${Math.max(12, Math.round((item.count / Math.max(reporting.total_visible_incidents, 1)) * 100))}%`,
+                    }}
                   />
                 </div>
               </div>
@@ -205,14 +224,19 @@ export default async function MetricsPage() {
           </div>
         </ChartPanel>
 
-        <PreviewNotice
-          title="Metrics still awaiting backend wiring"
-          items={[
-            "Historical MTTA, MTTR, error-budget burn, and deploy overlays are not connected yet.",
-            "Scheduled reports and exports are product placeholders for now.",
-            "These visual graphs are ready for time-series data once those APIs exist.",
-          ]}
-        />
+        <SectionCard
+          title="Automation health"
+          description="Live execution counters pulled from the current autonomous incident sample."
+        >
+          <div className="space-y-4">
+            <MetricSummaryRow label="Sampled autonomous successes" value={String(successfulRuns)} />
+            <MetricSummaryRow label="Sampled autonomous active runs" value={String(activeRuns)} />
+            <MetricSummaryRow
+              label="Backend readiness"
+              value={readiness?.checks.database.ready ? "healthy" : "degraded"}
+            />
+          </div>
+        </SectionCard>
       </section>
     </main>
   );
@@ -275,5 +299,14 @@ function DonutPanel({
       </div>
       <p className="mt-5 text-sm leading-6 text-[#667085]">{detail}</p>
     </section>
+  );
+}
+
+function MetricSummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-[rgba(17,24,39,0.08)] pb-3 last:border-b-0 last:pb-0">
+      <span className="text-sm text-[#667085]">{label}</span>
+      <span className="text-sm font-semibold text-[#111827]">{value}</span>
+    </div>
   );
 }

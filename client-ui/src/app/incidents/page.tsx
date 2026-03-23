@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { PaginationControls } from "@/components/pagination-controls";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -10,7 +11,6 @@ import {
   countCriticalIncidents,
   countOpenIncidents,
   formatTimestamp,
-  totalEventVolume,
 } from "@/lib/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +19,8 @@ type IncidentsPageProps = {
   searchParams: Promise<{
     project_id?: string;
     status?: string;
+    page?: string;
+    page_size?: string;
   }>;
 };
 
@@ -26,19 +28,38 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
   const params = await searchParams;
   const projectId = params.project_id?.trim() || undefined;
   const status = params.status?.trim() || undefined;
+  const pageSize = parsePageSize(params.page_size);
+  const requestedPage = parsePage(params.page);
 
-  const incidentList = await getIncidents({
+  let incidentList = await getIncidents({
     projectId,
     status,
-    limit: 50,
-    offset: 0,
+    limit: pageSize,
+    offset: (requestedPage - 1) * pageSize,
   });
+
+  const totalPages = Math.max(1, Math.ceil(incidentList.total / pageSize));
+  const currentPage = Math.min(requestedPage, totalPages);
+
+  if (currentPage !== requestedPage) {
+    incidentList = await getIncidents({
+      projectId,
+      status,
+      limit: pageSize,
+      offset: (currentPage - 1) * pageSize,
+    });
+  }
 
   const incidents = incidentList.items;
   const featured = incidents[0];
   const featuredAutonomousRun = featured
     ? await getLatestIncidentAutonomousRunDetail(featured.id).catch(() => null)
     : null;
+  const rangeLabel = buildRangeLabel(currentPage, pageSize, incidentList.total);
+  const paginationQuery = {
+    project_id: projectId,
+    status,
+  };
 
   return (
     <main className="space-y-8">
@@ -59,10 +80,10 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
           </div>
 
           <div className="ops-sheet-muted grid min-w-[300px] grid-cols-2 gap-4 rounded-[24px] p-5">
-            <IncidentStat label="Visible" value={String(incidentList.total)} />
+            <IncidentStat label="Showing" value={rangeLabel} />
+            <IncidentStat label="Total" value={String(incidentList.total)} />
             <IncidentStat label="Open" value={String(countOpenIncidents(incidents))} />
             <IncidentStat label="Critical" value={String(countCriticalIncidents(incidents))} />
-            <IncidentStat label="Events" value={String(totalEventVolume(incidents))} />
           </div>
         </div>
       </section>
@@ -97,9 +118,22 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
                   <option value="resolved">Resolved</option>
                 </select>
               </label>
+              <label className="w-full xl:w-[180px]">
+                <span className="mb-2 block text-sm font-medium text-[#111827]">Page size</span>
+                <select
+                  name="page_size"
+                  defaultValue={String(pageSize)}
+                  className="vault-input w-full rounded-[18px] px-3 py-2.5 text-sm text-[#111827]"
+                >
+                  <option value="10">10 per page</option>
+                  <option value="25">25 per page</option>
+                  <option value="50">50 per page</option>
+                </select>
+              </label>
             </div>
 
             <div className="mt-3 flex items-center gap-2">
+              <input type="hidden" name="page" value="1" />
               <button
                 type="submit"
                 className="ops-button rounded-full px-4 py-2 text-sm font-semibold"
@@ -115,7 +149,18 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
             </div>
           </form>
 
-          <div className="mt-2">
+          <div className="mt-6">
+            <PaginationControls
+              pathname="/incidents"
+              query={paginationQuery}
+              currentPage={currentPage}
+              pageSize={pageSize}
+              totalItems={incidentList.total}
+              itemLabel="incidents"
+            />
+          </div>
+
+          <div className="mt-4">
             {incidents.length === 0 ? (
               <div className="py-10 text-sm text-[#5f6470]">
                 No incidents match the current filters.
@@ -157,6 +202,19 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
               ))
             )}
           </div>
+
+          {incidents.length > 0 ? (
+            <div className="mt-6 border-t border-[rgba(24,24,27,0.08)] pt-6">
+              <PaginationControls
+                pathname="/incidents"
+                query={paginationQuery}
+                currentPage={currentPage}
+                pageSize={pageSize}
+                totalItems={incidentList.total}
+                itemLabel="incidents"
+              />
+            </div>
+          ) : null}
         </section>
 
         <div className="space-y-6">
@@ -256,6 +314,26 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
       </section>
     </main>
   );
+}
+
+function parsePage(value?: string): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function parsePageSize(value?: string): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return parsed === 10 || parsed === 25 || parsed === 50 ? parsed : 25;
+}
+
+function buildRangeLabel(currentPage: number, pageSize: number, totalItems: number): string {
+  if (totalItems === 0) {
+    return "0";
+  }
+
+  const start = (currentPage - 1) * pageSize + 1;
+  const end = Math.min(totalItems, currentPage * pageSize);
+  return `${start}-${end}`;
 }
 
 function IncidentStat({ label, value }: { label: string; value: string }) {

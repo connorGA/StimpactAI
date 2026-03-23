@@ -6,6 +6,30 @@ import asyncpg
 
 from api.core.errors import PersistenceError
 
+RECLAIM_STALE_OUTBOX_EVENTS_SQL = """
+UPDATE outbox_events
+SET status = 'pending',
+    locked_at = NULL,
+    available_at = NOW(),
+    last_error = COALESCE(last_error, 'Recovered after stale outbox lease expired.')
+WHERE status = 'processing'
+  AND locked_at IS NOT NULL
+  AND locked_at <= NOW() - ($1 * INTERVAL '1 second')
+RETURNING
+    id,
+    aggregate_type,
+    aggregate_id,
+    event_type,
+    payload,
+    status,
+    attempts,
+    available_at,
+    locked_at,
+    processed_at,
+    last_error,
+    created_at;
+"""
+
 LEASE_OUTBOX_EVENTS_SQL = """
 WITH candidates AS (
     SELECT id
@@ -70,6 +94,16 @@ class OutboxRepository:
         except asyncpg.PostgresError as exc:
             raise PersistenceError("Failed to lease outbox events.") from exc
 
+        return [dict(row) for row in rows]
+
+    async def reclaim_stale_events(self, *, stale_after_seconds: int = 300) -> list[dict[str, Any]]:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for outbox processing.")
+        try:
+            async with self._pool.acquire() as connection:
+                rows = await connection.fetch(RECLAIM_STALE_OUTBOX_EVENTS_SQL, stale_after_seconds)
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to reclaim stale outbox events.") from exc
         return [dict(row) for row in rows]
 
     async def mark_processed(self, event_id: str) -> None:

@@ -1,2 +1,5 @@
 pytest
 pytest-asyncio
+mypy
+pytest-cov
+ruff

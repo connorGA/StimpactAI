@@ -17,10 +17,12 @@ from api.core.config import (
     get_openai_api_key,
     get_openai_patch_model,
     get_worker_idle_seconds,
+    validate_runtime_configuration,
 )
 from api.core.errors import APIError
 from api.db.postgres import PostgresConnectionManager
 from api.events.redis_bus import build_outbox_signal_bus
+from api.observability import configure_logging, get_metrics_registry
 from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.autonomous_repository import AutonomousRunRepository
@@ -112,9 +114,33 @@ async def _run_loop(
     process_once: Callable[[], Awaitable[int]],
     idle_seconds: float,
     stop_event: asyncio.Event,
+    worker_name: str,
 ) -> None:
     while not stop_event.is_set():
-        processed = await process_once()
+        started_at = asyncio.get_running_loop().time()
+        try:
+            processed = await process_once()
+        except Exception:
+            get_metrics_registry().increment(
+                "stimpact_worker_errors_total",
+                labels={"worker": worker_name},
+            )
+            logger.exception("Worker loop iteration failed.", extra={"worker": worker_name})
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=idle_seconds)
+            except asyncio.TimeoutError:
+                continue
+            continue
+        get_metrics_registry().increment(
+            "stimpact_worker_iterations_total",
+            value=max(1, processed),
+            labels={"worker": worker_name},
+        )
+        get_metrics_registry().observe(
+            "stimpact_worker_iteration_latency_seconds",
+            asyncio.get_running_loop().time() - started_at,
+            labels={"worker": worker_name},
+        )
         if processed == 0:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=idle_seconds)
@@ -141,6 +167,7 @@ async def _run_outbox_worker(stop_event: asyncio.Event) -> None:
                 process_once=_process,
                 idle_seconds=get_worker_idle_seconds(),
                 stop_event=stop_event,
+                worker_name="outbox",
             )
         finally:
             await outbox_signal_bus.close()
@@ -196,6 +223,7 @@ async def _run_autonomous_worker(stop_event: asyncio.Event) -> None:
             process_once=dispatcher.run_once,
             idle_seconds=get_worker_idle_seconds(),
             stop_event=stop_event,
+            worker_name="autonomous",
         )
     finally:
         await manager.close()
@@ -213,6 +241,7 @@ async def _run_sandbox_worker(stop_event: asyncio.Event) -> None:
             process_once=dispatcher.run_once,
             idle_seconds=get_worker_idle_seconds(),
             stop_event=stop_event,
+            worker_name="sandbox",
         )
     finally:
         await manager.close()
@@ -229,6 +258,7 @@ async def _run_kubernetes_monitor_worker(stop_event: asyncio.Event) -> None:
             process_once=dispatcher.run_once,
             idle_seconds=get_kubernetes_monitor_interval_seconds(),
             stop_event=stop_event,
+            worker_name="kubernetes-monitor",
         )
     finally:
         await manager.close()
@@ -259,7 +289,8 @@ async def _main_async(worker_name: str) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    configure_logging()
+    validate_runtime_configuration(runtime="worker")
     parser = argparse.ArgumentParser(description="Run a Stimpact worker loop.")
     parser.add_argument(
         "worker",

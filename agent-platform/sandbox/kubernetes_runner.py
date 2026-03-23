@@ -6,6 +6,7 @@ import shlex
 from typing import Any
 
 from api.core.config import (
+    get_aws_region,
     get_kubeconfig_context,
     get_kubeconfig_path,
     get_sandbox_base_image,
@@ -13,7 +14,7 @@ from api.core.config import (
     get_sandbox_service_account,
 )
 from api.core.errors import APIError
-from models.control_plane import RepoProfileRecord
+from models.control_plane import RepoProfileRecord, RepoProfileSecretBindingRecord
 from services.repository_provider import RepositorySnapshot
 
 
@@ -234,15 +235,36 @@ class KubernetesJobLauncher:
         patch_diff_content: str | None,
         network_allowlist: list[str],
         network_allowlist_cidrs: list[str],
-        secret_env_refs: list[str],
-        secret_env: dict[str, str] | None,
-        secret_files: dict[str, str] | None,
-        authenticated_clone_url: str | None,
+        secret_bindings: list[RepoProfileSecretBindingRecord],
         repository_archive_url: str | None,
         provider_access_secret_arn: str | None,
-        provider_access_secret_format: str | None,
     ) -> dict[str, object]:
-        container_commands = ["set -euo pipefail", "cd /workspace/repo"]
+        container_commands = [
+            "set -euo pipefail",
+            (
+                "if [ -f /workspace/.stimpact/secrets/env-names.txt ]; then "
+                "while IFS= read -r name; do "
+                "[ -n \"$name\" ] || continue; "
+                "export \"$name=$(cat /workspace/.stimpact/secrets/env/$name)\"; "
+                "done < /workspace/.stimpact/secrets/env-names.txt; "
+                "fi"
+            ),
+            (
+                "if [ -f /workspace/.stimpact/secrets/file-mounts.tsv ]; then "
+                "while IFS=\"$(printf '\\t')\" read -r source target; do "
+                "[ -n \"$source\" ] || continue; "
+                "case \"$target\" in "
+                "/*) resolved_target=\"$target\" ;; "
+                "*) resolved_target=\"/workspace/repo/$target\" ;; "
+                "esac; "
+                "mkdir -p \"$(dirname \"$resolved_target\")\"; "
+                "cat \"$source\" > \"$resolved_target\"; "
+                "chmod 600 \"$resolved_target\"; "
+                "done < /workspace/.stimpact/secrets/file-mounts.tsv; "
+                "fi"
+            ),
+            "cd /workspace/repo",
+        ]
         volume_mounts = [
             {"name": "workspace", "mountPath": "/workspace"},
             {"name": "tmp", "mountPath": "/tmp"},
@@ -253,14 +275,11 @@ class KubernetesJobLauncher:
             {"name": "tmp", "emptyDir": {}},
             {"name": "home", "emptyDir": {}},
         ]
-        secret_file_entries = sorted((secret_files or {}).items())
-        secret_file_env: list[dict[str, str]] = []
-        container_setup_commands = ["set -euo pipefail"]
         mounted_parents: dict[str, str] = {}
-        for index, (mount_as, value) in enumerate(secret_file_entries):
-            target = PurePosixPath(mount_as)
+        for binding in secret_bindings:
+            target = PurePosixPath(binding.mount_as)
             if not target.is_absolute():
-                target = PurePosixPath("/workspace/repo") / target
+                continue
             parent = str(target.parent)
             volume_name = mounted_parents.get(parent)
             if volume_name is None:
@@ -268,19 +287,78 @@ class KubernetesJobLauncher:
                 mounted_parents[parent] = volume_name
                 volumes.append({"name": volume_name, "emptyDir": {}})
                 volume_mounts.append({"name": volume_name, "mountPath": parent})
-            env_name = f"STIMPACT_SECRET_FILE_{index}"
-            secret_file_env.append({"name": env_name, "value": value})
-            container_setup_commands.append(f"mkdir -p {shlex.quote(parent)}")
-            container_setup_commands.append(
-                f"printf '%s' \"${env_name}\" > {shlex.quote(str(target))} && chmod 600 {shlex.quote(str(target))}"
-            )
-        container_commands.extend(container_setup_commands[1:])
         if repo_profile.install_command:
             container_commands.append(_phase_command("install", repo_profile.install_command))
         container_commands.append(_phase_command("reproduce", repo_profile.reproduce_command))
         container_commands.append(_phase_command("patch-apply", "git apply /workspace/.stimpact/patch.diff"))
         container_commands.append(_phase_command("verify", repo_profile.verify_command))
+        secret_binding_env: list[dict[str, str]] = [
+            {"name": "STIMPACT_SECRET_BINDING_COUNT", "value": str(len(secret_bindings))}
+        ]
+        for index, binding in enumerate(secret_bindings):
+            secret_binding_env.extend(
+                [
+                    {"name": f"STIMPACT_SECRET_BINDING_{index}_MOUNT_AS", "value": binding.mount_as},
+                    {
+                        "name": f"STIMPACT_SECRET_BINDING_{index}_EXTERNAL_REF",
+                        "value": binding.secret_ref.external_ref,
+                    },
+                ]
+            )
+        aws_region = get_aws_region()
         init_containers = [
+            {
+                "name": "fetch-secrets",
+                "image": "public.ecr.aws/aws-cli/aws-cli:latest",
+                "workingDir": "/workspace",
+                "command": ["/bin/sh", "-lc"],
+                "args": [
+                    "\n".join(
+                        [
+                            "set -euo pipefail",
+                            "mkdir -p /workspace/.stimpact/secrets/env /workspace/.stimpact/secrets/files",
+                            ": > /workspace/.stimpact/secrets/env-names.txt",
+                            ": > /workspace/.stimpact/secrets/file-mounts.tsv",
+                            "count=\"${STIMPACT_SECRET_BINDING_COUNT:-0}\"",
+                            "index=0",
+                            "while [ \"$index\" -lt \"$count\" ]; do",
+                            "  mount_var=\"STIMPACT_SECRET_BINDING_${index}_MOUNT_AS\"",
+                            "  ref_var=\"STIMPACT_SECRET_BINDING_${index}_EXTERNAL_REF\"",
+                            "  eval \"mount_as=\\${$mount_var}\"",
+                            "  eval \"external_ref=\\${$ref_var}\"",
+                            "  value=\"$(aws secretsmanager get-secret-value --secret-id \"$external_ref\" --query SecretString --output text)\"",
+                            "  if printf '%s' \"$mount_as\" | grep -q '/'; then",
+                            "    secret_path=\"/workspace/.stimpact/secrets/files/${index}\"",
+                            "    printf '%s' \"$value\" > \"$secret_path\"",
+                            "    chmod 600 \"$secret_path\"",
+                            "    printf '%s\\t%s\\n' \"$secret_path\" \"$mount_as\" >> /workspace/.stimpact/secrets/file-mounts.tsv",
+                            "  else",
+                            "    env_path=\"/workspace/.stimpact/secrets/env/$mount_as\"",
+                            "    printf '%s' \"$value\" > \"$env_path\"",
+                            "    chmod 600 \"$env_path\"",
+                            "    printf '%s\\n' \"$mount_as\" >> /workspace/.stimpact/secrets/env-names.txt",
+                            "  fi",
+                            "  index=$((index + 1))",
+                            "done",
+                            "if [ -n \"${STIMPACT_PROVIDER_ACCESS_SECRET_ARN:-}\" ]; then",
+                            "  aws secretsmanager get-secret-value --secret-id \"$STIMPACT_PROVIDER_ACCESS_SECRET_ARN\" --query SecretString --output text > /workspace/.stimpact/provider-clone-url",
+                            "  chmod 600 /workspace/.stimpact/provider-clone-url",
+                            "fi",
+                        ]
+                    )
+                ],
+                "env": [
+                    *secret_binding_env,
+                    {"name": "STIMPACT_PROVIDER_ACCESS_SECRET_ARN", "value": provider_access_secret_arn or ""},
+                    *([{"name": "AWS_REGION", "value": aws_region}] if aws_region else []),
+                ],
+                "volumeMounts": [{"name": "workspace", "mountPath": "/workspace"}],
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "capabilities": {"drop": ["ALL"]},
+                    "readOnlyRootFilesystem": True,
+                },
+            },
             {
                 "name": "clone-and-apply",
                 "image": "docker.io/alpine/git:latest",
@@ -293,6 +371,8 @@ class KubernetesJobLauncher:
                             "mkdir -p /workspace/.stimpact",
                             "printf '%s\\n' \"$STIMPACT_PATCH_DIFF_CONTENT\" > /workspace/.stimpact/patch.diff",
                             "rm -rf /workspace/repo",
+                            "clone_url=\"$STIMPACT_CLONE_URL\"",
+                            "if [ -f /workspace/.stimpact/provider-clone-url ]; then clone_url=\"$(cat /workspace/.stimpact/provider-clone-url)\"; fi",
                             (
                                 "if [ -n \"$STIMPACT_REPOSITORY_ARCHIVE_URL\" ]; then "
                                 "wget -q -O /workspace/.stimpact/repo.tar.gz \"$STIMPACT_REPOSITORY_ARCHIVE_URL\" && "
@@ -302,7 +382,7 @@ class KubernetesJobLauncher:
                                 "else "
                                 "git clone --quiet "
                                 "--branch \"$STIMPACT_DEFAULT_BRANCH\" "
-                                "\"$STIMPACT_AUTHENTICATED_CLONE_URL\" /workspace/repo && "
+                                "\"$clone_url\" /workspace/repo && "
                                 "cd /workspace/repo && "
                                 "if [ -n \"$STIMPACT_TARGET_COMMIT_SHA\" ]; then git checkout --quiet \"$STIMPACT_TARGET_COMMIT_SHA\"; fi; "
                                 "fi"
@@ -311,10 +391,7 @@ class KubernetesJobLauncher:
                     )
                 ],
                 "env": [
-                    {
-                        "name": "STIMPACT_AUTHENTICATED_CLONE_URL",
-                        "value": authenticated_clone_url or snapshot.clone_url,
-                    },
+                    {"name": "STIMPACT_CLONE_URL", "value": snapshot.clone_url},
                     {
                         "name": "STIMPACT_PATCH_DIFF_CONTENT",
                         "value": patch_diff_content or "",
@@ -353,7 +430,7 @@ class KubernetesJobLauncher:
                     "stimpact/target-commit-sha": snapshot.target_commit_sha or "",
                     "stimpact/network-allowlist": ",".join(network_allowlist),
                     "stimpact/patch-diff-s3-uri": patch_diff_s3_uri or "",
-                    "stimpact/secret-env-refs": ",".join(secret_env_refs),
+                    "stimpact/secret-env-refs": ",".join(binding.secret_ref.label for binding in secret_bindings),
                     "stimpact/provider-access-secret-arn": provider_access_secret_arn or "",
                     "stimpact/network-policy-mode": "default-deny-allowlist",
                 },
@@ -413,15 +490,6 @@ class KubernetesJobLauncher:
                                         "name": "STIMPACT_PROVIDER_ACCESS_SECRET_ARN",
                                         "value": provider_access_secret_arn or "",
                                     },
-                                    {
-                                        "name": "STIMPACT_PROVIDER_ACCESS_SECRET_FORMAT",
-                                        "value": provider_access_secret_format or "",
-                                    },
-                                    *[
-                                        {"name": name, "value": value}
-                                        for name, value in sorted((secret_env or {}).items())
-                                    ],
-                                    *secret_file_env,
                                 ],
                                 "resources": {
                                     "requests": {"cpu": "500m", "memory": "1Gi"},
@@ -530,13 +598,9 @@ class KubernetesSandboxRunner:
         patch_diff_content: str | None,
         network_allowlist: list[str],
         network_allowlist_cidrs: list[str],
-        secret_env_refs: list[str],
-        secret_env: dict[str, str] | None,
-        secret_files: dict[str, str] | None,
-        authenticated_clone_url: str | None,
+        secret_bindings: list[RepoProfileSecretBindingRecord],
         repository_archive_url: str | None,
         provider_access_secret_arn: str | None,
-        provider_access_secret_format: str | None,
     ) -> KubernetesSandboxSubmission:
         manifest = self._launcher.build_job_manifest(
             incident_id=incident_id,
@@ -547,13 +611,9 @@ class KubernetesSandboxRunner:
             patch_diff_content=patch_diff_content,
             network_allowlist=network_allowlist,
             network_allowlist_cidrs=network_allowlist_cidrs,
-            secret_env_refs=secret_env_refs,
-            secret_env=secret_env,
-            secret_files=secret_files,
-            authenticated_clone_url=authenticated_clone_url,
+            secret_bindings=secret_bindings,
             repository_archive_url=repository_archive_url,
             provider_access_secret_arn=provider_access_secret_arn,
-            provider_access_secret_format=provider_access_secret_format,
         )
         return self._launcher.submit_job(manifest)
 

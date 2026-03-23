@@ -2410,6 +2410,220 @@
       "phase": "verification",
       "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
       "summary": "Feature verification status is now failed_verification."
+    },
+    {
+      "created_at": "2026-03-20T15:25:47.818327Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {
+          "timeout_ms": 20000,
+          "url": "http://127.0.0.1:3000/frontend-drill"
+        },
+        "arguments_summary": "Open the frontend drill route on the already-occupied port 3000 to verify whether an existing app instance is serving the repaired page.",
+        "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
+        "rationale": "The code fix is in place, and diagnostics show repeated verification failures are caused by `EADDRINUSE` when the verifier tries to start its own dev server on port 3000. Before attempting any further edits or recovery, the disciplined next step is to inspect the existing service on `http://127.0.0.1:3000/frontend-drill` with the browser tools. If the page loads and shows the repaired copy, we can complete the required browser verification path using the already-running app instead of the blocked startup command.",
+        "selected_tool": "browser_open",
+        "summary": "Probe the already-bound port 3000 directly in a browser to see whether the frontend drill page is actually being served and can satisfy the required browser verification without restarting the dev server.",
+        "verification_kind": "browser"
+      },
+      "event_type": "decision_made",
+      "id": "967838c5-a986-4b44-80f4-b2d1b24d87ce",
+      "payload": {
+        "step_index": 19
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Probe the already-bound port 3000 directly in a browser to see whether the frontend drill page is actually being served and can satisfy the required browser verification without restarting the dev server."
+    },
+    {
+      "created_at": "2026-03-20T15:25:47.824326Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {
+          "timeout_ms": 20000,
+          "url": "http://127.0.0.1:3000/frontend-drill"
+        },
+        "arguments_summary": "Open the frontend drill route on the already-occupied port 3000 to verify whether an existing app instance is serving the repaired page.",
+        "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
+        "rationale": "The code fix is in place, and diagnostics show repeated verification failures are caused by `EADDRINUSE` when the verifier tries to start its own dev server on port 3000. Before attempting any further edits or recovery, the disciplined next step is to inspect the existing service on `http://127.0.0.1:3000/frontend-drill` with the browser tools. If the page loads and shows the repaired copy, we can complete the required browser verification path using the already-running app instead of the blocked startup command.",
+        "selected_tool": "browser_open",
+        "summary": "Probe the already-bound port 3000 directly in a browser to see whether the frontend drill page is actually being served and can satisfy the required browser verification without restarting the dev server.",
+        "verification_kind": "browser"
+      },
+      "event_type": "tool_call_started",
+      "id": "06a23bae-ae39-4c51-82d8-58bfa989d442",
+      "payload": {
+        "arguments": {
+          "timeout_ms": 20000,
+          "url": "http://127.0.0.1:3000/frontend-drill"
+        },
+        "tool_name": "browser_open"
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Starting tool call browser_open."
+    },
+    {
+      "created_at": "2026-03-20T15:26:00.865584Z",
+      "decision": null,
+      "event_type": "tool_call_completed",
+      "id": "b9ff94dc-a8c3-4f5d-b52a-bbbb1d3560e5",
+      "payload": {
+        "ok": false,
+        "result": {
+          "action": "browser_open",
+          "console_logs": [],
+          "current_url": null,
+          "dom_snapshot": null,
+          "elapsed_ms": 0,
+          "error": "Error: Navigating frame was detached\n    at <instance_members_initializer> (file:///Users/connor/Desktop/StimpactAi/node_modules/puppeteer-core/lib/esm/puppeteer/cdp/LifecycleWatcher.js:33:14)\n    at new LifecycleWatcher (file:///Users/connor/Desktop/StimpactAi/node_modules/puppeteer-core/lib/esm/puppeteer/cdp/LifecycleWatcher.js:37:16)\n    at CdpFrame.goto (file:///Users/connor/Desktop/StimpactAi/node_modules/puppeteer-core/lib/esm/puppeteer/cdp/Frame.js:145:29)\n    at CdpFrame.<anonymous> (file:///Users/connor/Desktop/StimpactAi/node_modules/puppeteer-core/lib/esm/puppeteer/util/decorators.js:101:27)\n    at CdpPage.goto (file:///Users/connor/Desktop/StimpactAi/node_modules/puppeteer-core/lib/esm/puppeteer/api/Page.js:576:43)\n    at handleOpen (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:96:14)\n    at async dispatch (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:357:16)\n    at async Interface.<anonymous> (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:428:16)",
+          "js_exceptions": [],
+          "matched_text": null,
+          "message": "Navigating frame was detached",
+          "network_summary": null,
+          "ok": false,
+          "page_state": null,
+          "provider": "puppeteer",
+          "screenshot_path": null,
+          "session_id": "unknown"
+        },
+        "tool_name": "browser_open"
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Completed tool call browser_open."
+    },
+    {
+      "created_at": "2026-03-20T15:26:00.891378Z",
+      "decision": null,
+      "event_type": "verification_state_updated",
+      "id": "d55a2e65-46f6-4a71-8a35-80c0b5233ee5",
+      "payload": {
+        "completion_blockers": [
+          "At least one verification attempt failed; rerun the required checks before marking complete."
+        ],
+        "feature_status": "failed_verification",
+        "tool_name": "browser_open",
+        "verification_evidence": {
+          "command": null,
+          "kind": "browser",
+          "metadata": {
+            "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
+            "tool_name": "browser_open",
+            "turn_id": 21
+          },
+          "passed": false,
+          "recorded_at": "2026-03-20T15:26:00.887947Z",
+          "source": "tool",
+          "summary": "Navigating frame was detached"
+        }
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Feature verification status is now failed_verification."
+    },
+    {
+      "created_at": "2026-03-20T15:26:05.123859Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": "Inspect the current browser page/session state after the detached-frame failure to diagnose whether the browser context is stale or broken.",
+        "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
+        "rationale": "The code fix is already reapplied, and the latest blocker is a browser-tool error (`Navigating frame was detached`) rather than new evidence of a code defect. Per the disciplined workflow, the next step is to inspect the browser environment before retrying verification or making further edits. A page-state probe can clarify whether the current browser context is invalid and help determine whether to close/reopen the browser for a clean verification attempt.",
+        "selected_tool": "current_page_state",
+        "summary": "Investigate the browser-tool failure separately by checking the current page state, which may reveal whether the browser session is broken and whether a fresh browser verification attempt can proceed.",
+        "verification_kind": null
+      },
+      "event_type": "decision_made",
+      "id": "8e32c675-d9c5-4355-b21c-cf7c4e54b888",
+      "payload": {
+        "step_index": 20
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Investigate the browser-tool failure separately by checking the current page state, which may reveal whether the browser session is broken and whether a fresh browser verification attempt can proceed."
+    },
+    {
+      "created_at": "2026-03-20T15:26:05.129216Z",
+      "decision": {
+        "action": "invoke_tool",
+        "arguments": {},
+        "arguments_summary": "Inspect the current browser page/session state after the detached-frame failure to diagnose whether the browser context is stale or broken.",
+        "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
+        "rationale": "The code fix is already reapplied, and the latest blocker is a browser-tool error (`Navigating frame was detached`) rather than new evidence of a code defect. Per the disciplined workflow, the next step is to inspect the browser environment before retrying verification or making further edits. A page-state probe can clarify whether the current browser context is invalid and help determine whether to close/reopen the browser for a clean verification attempt.",
+        "selected_tool": "current_page_state",
+        "summary": "Investigate the browser-tool failure separately by checking the current page state, which may reveal whether the browser session is broken and whether a fresh browser verification attempt can proceed.",
+        "verification_kind": null
+      },
+      "event_type": "tool_call_started",
+      "id": "2d18ab65-73b7-4b24-a556-aea7f6920ff6",
+      "payload": {
+        "arguments": {},
+        "tool_name": "current_page_state"
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Starting tool call current_page_state."
+    },
+    {
+      "created_at": "2026-03-20T15:26:05.135514Z",
+      "decision": null,
+      "event_type": "tool_call_completed",
+      "id": "58bc6c85-8244-4422-92fa-74e3f7f4b766",
+      "payload": {
+        "ok": false,
+        "result": {
+          "action": "current_page_state",
+          "console_logs": [],
+          "current_url": null,
+          "dom_snapshot": null,
+          "elapsed_ms": 0,
+          "error": "Error: Unknown browser session: unknown\n    at handleCurrentPageState (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:251:11)\n    at dispatch (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:384:22)\n    at Interface.<anonymous> (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:428:22)\n    at Interface.emit (node:events:507:28)\n    at [_onLine] [as _onLine] (node:internal/readline/interface:416:12)\n    at [_normalWrite] [as _normalWrite] (node:internal/readline/interface:610:22)\n    at Socket.ondata (node:internal/readline/interface:243:23)\n    at Socket.emit (node:events:507:28)\n    at addChunk (node:internal/streams/readable:559:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)",
+          "js_exceptions": [],
+          "matched_text": null,
+          "message": "Unknown browser session: unknown",
+          "network_summary": null,
+          "ok": false,
+          "page_state": null,
+          "provider": "puppeteer",
+          "screenshot_path": null,
+          "session_id": "unknown"
+        },
+        "tool_name": "current_page_state"
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Completed tool call current_page_state."
+    },
+    {
+      "created_at": "2026-03-20T15:26:05.147251Z",
+      "decision": null,
+      "event_type": "verification_state_updated",
+      "id": "d04a513e-56d6-4917-834d-aaf5ebe118c0",
+      "payload": {
+        "completion_blockers": [
+          "At least one verification attempt failed; rerun the required checks before marking complete."
+        ],
+        "feature_status": "failed_verification",
+        "tool_name": "current_page_state",
+        "verification_evidence": null
+      },
+      "phase": "verification",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Feature verification status is now failed_verification."
+    },
+    {
+      "created_at": "2026-03-20T15:26:05.162229Z",
+      "decision": null,
+      "event_type": "run_failed",
+      "id": "d0d9f4bc-88ac-4625-8923-66833ea0f85e",
+      "payload": {
+        "error": "Unknown browser session: unknown",
+        "status": "failed"
+      },
+      "phase": "failed",
+      "run_id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
+      "summary": "Unknown browser session: unknown"
     }
   ],
   "run": {
@@ -2423,47 +2637,109 @@
     "id": "3edc9c2c-1120-423c-b186-1d16b220c5c5",
     "incident_id": "5ada06bc-8b15-4420-9c7e-d3ab5cc6d3fd",
     "initializer_session_id": "562b942c-a210-4d83-80b9-eeb028e77b78",
-    "last_error": null,
+    "last_error": "Unknown browser session: unknown",
     "latest_verification": {
-      "command": "node frontend_drill_verify.mjs",
+      "command": null,
       "kind": "browser",
       "metadata": {
         "feature_id": "billing-api-frontend-live-status-summary-reported-healthy-state-while-an-open-incident-was-visible-20260320151642",
-        "tool_name": "run_command",
-        "turn_id": 18
+        "tool_name": "browser_open",
+        "turn_id": 21
       },
       "passed": false,
-      "recorded_at": "2026-03-20T15:24:39.834573Z",
+      "recorded_at": "2026-03-20T15:26:00.887947Z",
       "source": "tool",
-      "summary": "Command timed out after 120 seconds."
+      "summary": "Navigating frame was detached"
     },
     "loop_state": {
       "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
-      "consecutive_failures": 0,
-      "last_failure": null,
-      "last_tool_name": "run_command",
-      "last_tool_ok": true,
+      "consecutive_failures": 2,
+      "last_failure": {
+        "details": {
+          "tool_result": {
+            "action": "current_page_state",
+            "console_logs": [],
+            "current_url": null,
+            "dom_snapshot": null,
+            "elapsed_ms": 0,
+            "error": "Error: Unknown browser session: unknown\n    at handleCurrentPageState (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:251:11)\n    at dispatch (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:384:22)\n    at Interface.<anonymous> (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:428:22)\n    at Interface.emit (node:events:507:28)\n    at [_onLine] [as _onLine] (node:internal/readline/interface:416:12)\n    at [_normalWrite] [as _normalWrite] (node:internal/readline/interface:610:22)\n    at Socket.ondata (node:internal/readline/interface:243:23)\n    at Socket.emit (node:events:507:28)\n    at addChunk (node:internal/streams/readable:559:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)",
+            "js_exceptions": [],
+            "matched_text": null,
+            "message": "Unknown browser session: unknown",
+            "network_summary": null,
+            "ok": false,
+            "page_state": null,
+            "provider": "puppeteer",
+            "screenshot_path": null,
+            "session_id": "unknown"
+          },
+          "verification_kind": null
+        },
+        "failure_class": "unknown",
+        "hint": "Inspect the tool output and adapt the next step.",
+        "message": "Unknown browser session: unknown",
+        "repeated_count": 1,
+        "signature": "current_page_state:unknown:unknown browser session: unknown",
+        "tool_name": "current_page_state"
+      },
+      "last_tool_name": "current_page_state",
+      "last_tool_ok": false,
       "last_tool_result": {
         "_tool_call": {
-          "ok": true,
-          "tool_name": "run_command",
-          "turn_id": 20
+          "ok": false,
+          "tool_name": "current_page_state",
+          "turn_id": 22
         },
-        "command": "python - <<'PY'\nimport subprocess, time, urllib.request, urllib.error, signal\ncmd = ['npm','--prefix','client-ui','run','dev','--','--hostname','127.0.0.1','--port','3000']\nproc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\nstart = time.time()\nlines = []\nready = False\nstatus = None\nbody = ''\ntry:\n    while time.time() - start < 45:\n        time.sleep(2)\n        try:\n            with urllib.request.urlopen('http://127.0.0.1:3000/frontend-drill', timeout=5) as resp:\n                status = resp.status\n                body = resp.read().decode('utf-8', errors='replace')\n                if 'data-drill-root=\"frontend-drill\"' in body:\n                    ready = True\n                    break\n        except Exception:\n            pass\n    time.sleep(1)\nfinally:\n    try:\n        proc.terminate()\n        proc.wait(timeout=10)\n    except Exception:\n        try:\n            proc.kill()\n        except Exception:\n            pass\noutput = ''\nif proc.stdout is not None:\n    output = proc.stdout.read()\nprint('READY=', ready)\nprint('STATUS=', status)\nprint('HAS_MARKER=', 'data-drill-root=\"frontend-drill\"' in body)\nprint('HAS_ATTENTION_TEXT=', '1 active incidents need attention' in body)\nprint('HAS_HEALTHY_TEXT=', 'All monitored services look healthy' in body)\nprint('---SERVER-OUTPUT---')\nprint(output[-12000:])\nPY",
-        "exit_code": 0,
-        "message": "Command completed successfully.",
-        "ok": true,
-        "output": "Retried command with python3 after `python` was not available on PATH.\n\nstdout:\nREADY= False\nSTATUS= None\nHAS_MARKER= False\nHAS_ATTENTION_TEXT= False\nHAS_HEALTHY_TEXT= False\n---SERVER-OUTPUT---\n\n> client-ui@0.1.0 dev\n> next dev --hostname 127.0.0.1 --port 3000\n\n\u2a2f Failed to start server\nError: listen EADDRINUSE: address already in use 127.0.0.1:3000\n    at <unknown> (Error: listen EADDRINUSE: address already in use 127.0.0.1:3000) {\n  code: 'EADDRINUSE',\n  errno: -48,\n  syscall: 'listen',\n  address: '127.0.0.1',\n  port: 3000\n}\n\u001b[?25h",
-        "stderr": "",
-        "stdout": "READY= False\nSTATUS= None\nHAS_MARKER= False\nHAS_ATTENTION_TEXT= False\nHAS_HEALTHY_TEXT= False\n---SERVER-OUTPUT---\n\n> client-ui@0.1.0 dev\n> next dev --hostname 127.0.0.1 --port 3000\n\n\u2a2f Failed to start server\nError: listen EADDRINUSE: address already in use 127.0.0.1:3000\n    at <unknown> (Error: listen EADDRINUSE: address already in use 127.0.0.1:3000) {\n  code: 'EADDRINUSE',\n  errno: -48,\n  syscall: 'listen',\n  address: '127.0.0.1',\n  port: 3000\n}\n\u001b[?25h\n\n",
-        "timed_out": false,
-        "working_directory": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320f"
+        "action": "current_page_state",
+        "console_logs": [],
+        "current_url": null,
+        "dom_snapshot": null,
+        "elapsed_ms": 0,
+        "error": "Error: Unknown browser session: unknown\n    at handleCurrentPageState (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:251:11)\n    at dispatch (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:384:22)\n    at Interface.<anonymous> (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:428:22)\n    at Interface.emit (node:events:507:28)\n    at [_onLine] [as _onLine] (node:internal/readline/interface:416:12)\n    at [_normalWrite] [as _normalWrite] (node:internal/readline/interface:610:22)\n    at Socket.ondata (node:internal/readline/interface:243:23)\n    at Socket.emit (node:events:507:28)\n    at addChunk (node:internal/streams/readable:559:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)",
+        "failure": {
+          "details": {
+            "tool_result": {
+              "action": "current_page_state",
+              "console_logs": [],
+              "current_url": null,
+              "dom_snapshot": null,
+              "elapsed_ms": 0,
+              "error": "Error: Unknown browser session: unknown\n    at handleCurrentPageState (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:251:11)\n    at dispatch (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:384:22)\n    at Interface.<anonymous> (file:///Users/connor/Desktop/StimpactAi/agent-platform/harness/browser/puppeteer_worker.mjs:428:22)\n    at Interface.emit (node:events:507:28)\n    at [_onLine] [as _onLine] (node:internal/readline/interface:416:12)\n    at [_normalWrite] [as _normalWrite] (node:internal/readline/interface:610:22)\n    at Socket.ondata (node:internal/readline/interface:243:23)\n    at Socket.emit (node:events:507:28)\n    at addChunk (node:internal/streams/readable:559:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)",
+              "js_exceptions": [],
+              "matched_text": null,
+              "message": "Unknown browser session: unknown",
+              "network_summary": null,
+              "ok": false,
+              "page_state": null,
+              "provider": "puppeteer",
+              "screenshot_path": null,
+              "session_id": "unknown"
+            },
+            "verification_kind": null
+          },
+          "failure_class": "unknown",
+          "hint": "Inspect the tool output and adapt the next step.",
+          "message": "Unknown browser session: unknown",
+          "repeated_count": 1,
+          "signature": "current_page_state:unknown:unknown browser session: unknown",
+          "tool_name": "current_page_state"
+        },
+        "js_exceptions": [],
+        "matched_text": null,
+        "message": "Unknown browser session: unknown",
+        "network_summary": null,
+        "ok": false,
+        "page_state": null,
+        "provider": "puppeteer",
+        "screenshot_path": null,
+        "session_id": "unknown"
       },
       "max_steps": 20,
-      "recent_failure_signatures": [],
+      "recent_failure_signatures": [
+        "browser_open:verification:navigating frame was detached",
+        "current_page_state:unknown:unknown browser session: unknown"
+      ],
       "recent_tool_names": [
-        "open_file",
-        "edit_file",
         "run_command",
         "run_command",
         "open_file",
@@ -2473,15 +2749,17 @@
         "edit_file",
         "run_command",
         "open_file",
-        "run_command"
+        "run_command",
+        "browser_open",
+        "current_page_state"
       ],
       "recovery_attempts": 1,
-      "stagnation_count": 0,
-      "step_index": 18
+      "stagnation_count": 1,
+      "step_index": 20
     },
     "objective": "Investigate, repair, and verify incident 'billing-api: Frontend live status summary reported healthy state while an open incident was visible 20260320151642' for service billing-api.",
     "patch_run_id": null,
-    "phase": "coding",
+    "phase": "failed",
     "policy": {
       "allow_writeback": true,
       "allowed_execution_backends": [
@@ -2509,7 +2787,7 @@
     "repo_profile_id": "1c3fb01a-e64c-4a8f-9baa-788341aef7ad",
     "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320f",
     "sandbox_run_id": null,
-    "status": "running",
-    "updated_at": "2026-03-20T15:25:43.151264Z"
+    "status": "failed",
+    "updated_at": "2026-03-20T15:26:05.156416Z"
   }
 }

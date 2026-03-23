@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from api.core.config import (
+    get_admin_api_token,
+    get_async_job_stale_lease_seconds,
     get_aws_region,
     get_control_plane_namespace,
+    get_control_plane_rate_limit_per_minute,
     get_control_plane_service_account,
     get_deployment_environment,
     get_eks_cluster_name,
@@ -23,6 +26,7 @@ from api.core.config import (
     get_openai_rca_model,
     get_public_base_url,
     get_s3_artifact_bucket,
+    get_outbox_stale_lock_seconds,
     get_sandbox_base_image,
     get_sandbox_execution_backend,
     get_sandbox_namespace,
@@ -32,10 +36,21 @@ from api.core.config import (
     get_sandbox_timeout_seconds,
     get_sandbox_verify_command,
     get_secrets_manager_prefix,
+    get_telemetry_rate_limit_per_minute,
+    is_control_plane_auth_enforced,
+    is_local_development_environment,
+    is_project_api_key_auth_enforced,
+    should_fail_readiness_when_degraded,
+    should_require_database,
+    should_require_redis,
+    should_run_migrations_on_startup,
+    validate_runtime_configuration,
 )
 
 
 def clear_model_env(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_CHAT_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_RCA_MODEL", raising=False)
@@ -71,6 +86,17 @@ def clear_model_env(monkeypatch) -> None:
     monkeypatch.delenv("GITLAB_BASE_URL", raising=False)
     monkeypatch.delenv("GITLAB_CALLBACK_URL", raising=False)
     monkeypatch.delenv("GITLAB_OAUTH_SCOPES", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_CONTROL_PLANE_AUTH", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_DATABASE", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_REDIS", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_STRICT_READINESS", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_RUN_MIGRATIONS", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_TELEMETRY_RATE_LIMIT_PER_MINUTE", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_OUTBOX_STALE_LOCK_SECONDS", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_ASYNC_JOB_STALE_LEASE_SECONDS", raising=False)
 
 
 def test_openai_model_defaults(monkeypatch) -> None:
@@ -170,6 +196,18 @@ def test_aws_and_kubernetes_config_defaults(monkeypatch) -> None:
     assert get_gitlab_base_url() == "https://gitlab.com"
     assert get_gitlab_callback_url() is None
     assert get_gitlab_oauth_scopes() == ["api", "read_repository", "write_repository"]
+    assert get_admin_api_token() is None
+    assert is_local_development_environment() is True
+    assert is_control_plane_auth_enforced() is False
+    assert is_project_api_key_auth_enforced() is False
+    assert should_require_database() is False
+    assert should_require_redis() is False
+    assert should_fail_readiness_when_degraded() is False
+    assert should_run_migrations_on_startup() is True
+    assert get_control_plane_rate_limit_per_minute() == 120
+    assert get_telemetry_rate_limit_per_minute() == 600
+    assert get_outbox_stale_lock_seconds() == 300
+    assert get_async_job_stale_lease_seconds() == 300
 
 
 def test_aws_and_kubernetes_config_overrides(monkeypatch) -> None:
@@ -212,3 +250,53 @@ def test_aws_and_kubernetes_config_overrides(monkeypatch) -> None:
     assert get_gitlab_base_url() == "https://gitlab.example.com"
     assert get_gitlab_callback_url() == "https://example.ngrok.dev/auth/gitlab/callback"
     assert get_gitlab_oauth_scopes() == ["api", "read_repository", "write_repository"]
+
+
+def test_auth_and_rate_limit_overrides(monkeypatch) -> None:
+    clear_model_env(monkeypatch)
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", "true")
+    monkeypatch.setenv("AGENT_PLATFORM_RUN_MIGRATIONS", "false")
+    monkeypatch.setenv("AGENT_PLATFORM_CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", "45")
+    monkeypatch.setenv("AGENT_PLATFORM_TELEMETRY_RATE_LIMIT_PER_MINUTE", "900")
+    monkeypatch.setenv("AGENT_PLATFORM_OUTBOX_STALE_LOCK_SECONDS", "120")
+    monkeypatch.setenv("AGENT_PLATFORM_ASYNC_JOB_STALE_LEASE_SECONDS", "180")
+
+    assert get_admin_api_token() == "admin-token"
+    assert is_control_plane_auth_enforced() is True
+    assert is_project_api_key_auth_enforced() is True
+    assert should_run_migrations_on_startup() is False
+    assert get_control_plane_rate_limit_per_minute() == 45
+    assert get_telemetry_rate_limit_per_minute() == 900
+    assert get_outbox_stale_lock_seconds() == 120
+    assert get_async_job_stale_lease_seconds() == 180
+
+
+def test_runtime_validation_requires_database_and_redis_in_production(monkeypatch) -> None:
+    clear_model_env(monkeypatch)
+    monkeypatch.setenv("AGENT_PLATFORM_ENVIRONMENT", "production")
+    monkeypatch.setenv("AGENT_PLATFORM_RUN_MIGRATIONS", "false")
+
+    try:
+        validate_runtime_configuration(runtime="api")
+    except ValueError as exc:
+        message = str(exc)
+        assert "DATABASE_URL is required" in message
+        assert "REDIS_URL is required" in message
+    else:
+        raise AssertionError("Expected runtime configuration validation to fail.")
+
+
+def test_runtime_validation_rejects_startup_migrations_in_production(monkeypatch) -> None:
+    clear_model_env(monkeypatch)
+    monkeypatch.setenv("AGENT_PLATFORM_ENVIRONMENT", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/postgres")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("AGENT_PLATFORM_RUN_MIGRATIONS", "true")
+
+    try:
+        validate_runtime_configuration(runtime="worker")
+    except ValueError as exc:
+        assert "AGENT_PLATFORM_RUN_MIGRATIONS must be disabled" in str(exc)
+    else:
+        raise AssertionError("Expected runtime configuration validation to fail.")

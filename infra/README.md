@@ -42,6 +42,27 @@ Attach them to separate IAM roles and bind them to Kubernetes service accounts u
 The sandbox policy is intentionally read-only for Secrets Manager.
 The checked-in `kubernetes/namespaces-and-serviceaccounts.yaml` file is a reference template only. For a real cluster, create the IAM-backed service accounts after the policies exist so the role ARNs are correct.
 
+## Step 3.5. Deployable Workloads
+
+The repository now includes first-class production workload manifests under `infra/kubernetes/apps/`:
+
+- `control-plane-config.yaml`
+- `database-migration-job.yaml`
+- `api-deployment.yaml`
+- `frontend-deployment.yaml`
+- `worker-deployments.yaml`
+- `ingress.yaml`
+
+Recommended rollout order:
+
+1. Apply `namespaces-and-serviceaccounts.yaml`
+2. Apply `control-plane-config.yaml`
+3. Run `database-migration-job.yaml`
+4. Apply `api-deployment.yaml`, `frontend-deployment.yaml`, and `worker-deployments.yaml`
+5. Apply `ingress.yaml`
+
+Before applying them, replace the `CHANGE_ME_*` placeholders for image URIs, ACM certificate ARN, artifact bucket, and secrets.
+
 ## Step 4. Create The EKS Cluster
 
 Prerequisites:
@@ -125,3 +146,13 @@ The backend now exposes provider onboarding and sync routes:
 - `GET /control-plane/provider-integrations/{integration_id}/repositories`
 
 GitLab OAuth access and refresh tokens are stored in AWS Secrets Manager through the existing secret-ref control-plane flow. Kubernetes sandbox jobs receive only an AWS secret reference for provider access, not raw tokens in the job manifest.
+
+## Step 8. Runtime Expectations
+
+Production services now assume:
+
+- `DATABASE_URL` is required
+- `REDIS_URL` is required
+- readiness should fail when persistence is unavailable
+- long-running API and worker services run with `AGENT_PLATFORM_RUN_MIGRATIONS=false`
+- database migrations run through the dedicated Kubernetes job rather than API startup

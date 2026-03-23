@@ -1,11 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 
 import { AppShellNav } from "@/components/app-shell-nav";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+
+  if (pathname === "/") {
+    return <>{children}</>;
+  }
+
   const sidebarWidthClass = collapsed ? "lg:w-0" : "lg:w-[248px]";
   const contentOffsetClass = collapsed ? "lg:pl-0" : "lg:pl-[248px]";
 
@@ -31,14 +38,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 collapsed ? "text-center" : ""
               }`}
             >
-              {collapsed ? "Live" : "Live preview"}
+              {collapsed ? "Live" : "Live workspace"}
             </p>
             <p
               className={`mt-2 text-sm leading-6 text-white/58 ${
                 collapsed ? "hidden" : "block"
               }`}
             >
-              Streaming incident updates and policy enforcement are still preview-only.
+              Streaming incident updates, policy enforcement, and onboarding are available from the live workspace.
             </p>
           </div>
         </div>

@@ -10,7 +10,7 @@ type AppShellNavProps = {
 
 const navItems = [
   {
-    href: "/",
+    href: "/live",
     label: "Live",
     description: "Incidents and uptime",
     icon: "pulse",
@@ -34,6 +34,24 @@ const navItems = [
     icon: "shield",
   },
   {
+    href: "/onboarding",
+    label: "Onboarding",
+    description: "Project setup",
+    icon: "spark",
+  },
+  {
+    href: "/operations",
+    label: "Operations",
+    description: "Response workflow",
+    icon: "flow",
+  },
+  {
+    href: "/automations",
+    label: "Automations",
+    description: "Execution catalog",
+    icon: "play",
+  },
+  {
     href: "/chat",
     label: "Agent",
     description: "Inbox and chat focus",
@@ -53,7 +71,7 @@ export function AppShellNav({
         {navItems.map((item) => {
           const isActive =
             pathname === item.href ||
-            (item.href !== "/" && pathname.startsWith(item.href));
+            pathname.startsWith(`${item.href}/`);
 
           return (
             <Link
@@ -78,7 +96,7 @@ export function AppShellNav({
           {navItems.map((item) => {
             const isActive =
               pathname === item.href ||
-              (item.href !== "/" && pathname.startsWith(item.href));
+              pathname.startsWith(`${item.href}/`);
 
             return (
               <Link
@@ -189,6 +207,44 @@ function NavIcon({
         strokeLinejoin="round"
       >
         <path d="M10 2.8 15.5 5v4.4c0 3.6-2.2 6.1-5.5 7.8-3.3-1.7-5.5-4.2-5.5-7.8V5L10 2.8Z" />
+      </svg>
+    );
+  }
+
+  if (icon === "flow") {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 20 20"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 5h4v4H4z" />
+        <path d="M12 11h4v4h-4z" />
+        <path d="M8 7h4" />
+        <path d="M10 7v4" />
+        <path d="M10 11h2" />
+      </svg>
+    );
+  }
+
+  if (icon === "play") {
+    return (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 20 20"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M6 4.5 14 10l-8 5.5Z" />
       </svg>
     );
   }
