@@ -18,7 +18,7 @@ export default async function MetricsPage() {
     return (
       <ProjectSetupState
         eyebrow="Metrics and reporting"
-        title="Create a protected project before loading reporting views"
+        title="Create a project before loading reporting views"
         description="Metrics are generated from project-scoped incident and runtime data. Complete onboarding first, then this route will populate with trend reporting and readiness summaries."
       />
     );

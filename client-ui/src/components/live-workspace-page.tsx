@@ -27,7 +27,7 @@ export async function LiveWorkspacePage() {
     return (
       <ProjectSetupState
         eyebrow="Live workspace"
-        title="Create your first protected project before opening live operations"
+        title="Create your first project before opening live operations"
         description="The live workspace reads from project-scoped incident data. Finish onboarding first, then this route will show the active warning stream, current system state, and operator updates."
       />
     );

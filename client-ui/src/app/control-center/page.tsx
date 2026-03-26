@@ -60,8 +60,8 @@ export default async function ControlCenterPage() {
     return (
       <ProjectSetupState
         eyebrow="Control center"
-        title="Create your first protected project before opening the control center"
-        description="The control center needs a protected project before it can show policy, repo profiles, credentials, and automation guardrails. Start with onboarding, then come back here once your first project is set up."
+        title="Create your first project before opening the control center"
+        description="The control center needs a project before it can show policy, repo profiles, credentials, and automation guardrails. Start with onboarding, then come back here once your first project is set up."
       />
     );
   }

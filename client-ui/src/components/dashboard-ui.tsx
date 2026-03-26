@@ -144,8 +144,8 @@ export function QuickLinkCard({
 
 export function ProjectSetupState({
   eyebrow = "Project setup required",
-  title = "Create your first protected project to unlock the workspace",
-  description = "This workspace is authenticated, but incident, metrics, chat, and automation views stay empty until a protected project is created and connected through onboarding.",
+  title = "Create your first project to unlock the workspace",
+  description = "This workspace is authenticated, but incident, metrics, chat, and automation views stay empty until a project is created and connected through onboarding.",
 }: {
   eyebrow?: string;
   title?: string;

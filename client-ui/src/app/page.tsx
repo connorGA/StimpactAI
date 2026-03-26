@@ -87,7 +87,7 @@ const PRICING_PLANS = [
     price: "$15",
     cadence: "per project / month",
     summary:
-      "For teams that want real-time detection, a shared dashboard, AI chatbot access, incident chat, and basic investigation on one protected project.",
+      "For teams that want real-time detection, a shared dashboard, AI chatbot access, incident chat, and basic investigation on one project.",
     features: [
       "1 integrated project",
       "real-time error detection",

@@ -199,7 +199,7 @@ export function SignupIntakeCard() {
         {inviteToken
           ? "Accept the invite to join your company workspace and continue into protected onboarding."
           : mode === "create"
-            ? "Choose your starting plan and create the workspace that will own your protected projects."
+            ? "Choose your starting plan and create the workspace that will own your projects."
             : "Request access to an existing team if your company has already created a Stimpact.ai workspace."}
       </p>
 
@@ -475,7 +475,7 @@ export function SignupIntakeCard() {
           </label>
         ) : (
           <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-white/62">
-            Includes `1 protected project` on the {PLAN_LABELS[selectedPlan]} plan.
+            Includes `1 project` on the {PLAN_LABELS[selectedPlan]} plan.
           </div>
         )}
 

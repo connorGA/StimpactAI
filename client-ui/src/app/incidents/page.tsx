@@ -33,8 +33,8 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
     return (
       <ProjectSetupState
         eyebrow="Incident center"
-        title="Create a protected project before browsing incident history"
-        description="Incident history is scoped to a protected project. Complete onboarding first, then this route will load the ledger, filters, and response status for that project."
+        title="Create a project before browsing incident history"
+        description="Incident history is scoped to a project. Complete onboarding first, then this route will load the ledger, filters, and response status for that project."
       />
     );
   }

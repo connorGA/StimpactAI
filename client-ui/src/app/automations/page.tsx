@@ -22,7 +22,7 @@ export default async function AutomationsPage() {
     return (
       <ProjectSetupState
         eyebrow="Automations"
-        title="Create a protected project before unlocking automation workflows"
+        title="Create a project before unlocking automation workflows"
         description="Automation availability depends on a project, provider integration, and repo profile. Finish onboarding first, then this page will reflect live policy and remediation readiness."
       />
     );

@@ -14,7 +14,7 @@ export default async function OperationsPage() {
     return (
       <ProjectSetupState
         eyebrow="Operations"
-        title="Create a protected project before using the response workflow"
+        title="Create a project before using the response workflow"
         description="The operations surface is built around project-scoped incidents, handoff state, and repair activity. Complete onboarding first to activate this workflow."
       />
     );

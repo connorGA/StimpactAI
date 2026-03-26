@@ -1648,10 +1648,10 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                 onClick: ()=>setOpen((value)=>!value),
                 "aria-haspopup": "menu",
                 "aria-expanded": open,
-                className: `flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/[0.06] text-white transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white/[0.1] ${desktop ? "pl-3 pr-2 py-2" : "h-10 w-10 justify-center rounded-full"}`,
+                className: `flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/[0.06] text-white transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white/[0.1] ${desktop ? "h-10 pl-2 pr-2.5" : "h-10 w-10 justify-center rounded-full"}`,
                 children: [
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        className: "flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(180deg,#ff754b,#ff5a2a)] text-sm font-semibold text-white",
+                        className: "flex h-8 w-8 items-center justify-center rounded-full bg-[linear-gradient(180deg,#ff754b,#ff5a2a)] text-sm font-semibold text-white",
                         children: initials
                     }, void 0, false, {
                         fileName: "[project]/src/components/app-shell.tsx",
@@ -1659,10 +1659,10 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                         columnNumber: 9
                     }, this),
                     desktop ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        className: "pr-1 text-left text-white",
+                        className: "pr-0.5 text-left text-white leading-none",
                         children: [
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                className: "text-sm font-semibold",
+                                className: "text-sm font-semibold leading-none",
                                 children: sessionLoading ? "Loading account..." : session?.user.full_name ?? "Workspace account"
                             }, void 0, false, {
                                 fileName: "[project]/src/components/app-shell.tsx",
@@ -1670,7 +1670,7 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                className: "text-xs text-white/70",
+                                className: "mt-1 text-[11px] leading-none text-white/70",
                                 children: subtitle
                             }, void 0, false, {
                                 fileName: "[project]/src/components/app-shell.tsx",

@@ -12,7 +12,7 @@ export default async function ChatPage() {
     return (
       <ProjectSetupState
         eyebrow="Agent workspace"
-        title="Create a protected project before opening the incident agent"
+        title="Create a project before opening the incident agent"
         description="The agent chat is grounded in the current project’s incident set. Finish onboarding first so the assistant has real incident context to work with."
       />
     );

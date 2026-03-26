@@ -382,18 +382,18 @@ function AccountMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         className={`flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/[0.06] text-white transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white/[0.1] ${
-          desktop ? "pl-3 pr-2 py-2" : "h-10 w-10 justify-center rounded-full"
+          desktop ? "h-10 pl-2 pr-2.5" : "h-10 w-10 justify-center rounded-full"
         }`}
       >
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(180deg,#ff754b,#ff5a2a)] text-sm font-semibold text-white">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[linear-gradient(180deg,#ff754b,#ff5a2a)] text-sm font-semibold text-white">
           {initials}
         </div>
         {desktop ? (
-          <div className="pr-1 text-left text-white">
-            <p className="text-sm font-semibold">
+          <div className="pr-0.5 text-left text-white leading-none">
+            <p className="text-sm font-semibold leading-none">
               {sessionLoading ? "Loading account..." : session?.user.full_name ?? "Workspace account"}
             </p>
-            <p className="text-xs text-white/70">{subtitle}</p>
+            <p className="mt-1 text-[11px] leading-none text-white/70">{subtitle}</p>
           </div>
         ) : null}
         {desktop ? (

@@ -43,7 +43,7 @@ export default async function SignupPage({ searchParams }: SignupPageProps) {
               </h1>
               <p className="mt-6 max-w-[600px] text-base leading-8 text-white/52">
                 Choose the plan that fits your stack, create the workspace for your first
-                protected project, or request access to an existing team before moving into
+                project, or request access to an existing team before moving into
                 guided onboarding.
               </p>
               <div className="mt-8 grid gap-3 sm:grid-cols-3">
