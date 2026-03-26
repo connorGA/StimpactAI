@@ -175,7 +175,7 @@ export function ProjectSetupState({
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
                 href="/onboarding"
-                className="ops-button inline-flex rounded-full px-5 py-3 text-sm font-semibold text-white"
+                className="ops-button inline-flex rounded-full px-5 py-3 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:scale-[1.02] hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
               >
                 Go to onboarding
               </Link>
@@ -196,25 +196,30 @@ function ProjectSetupIllustration() {
       <div className="relative flex aspect-square items-center justify-center">
         <div className="absolute inset-[12%] rounded-full border border-[rgba(17,24,39,0.06)] bg-[radial-gradient(circle,rgba(255,255,255,0.72),rgba(255,255,255,0.18))]" />
 
-        <div className="absolute left-[8%] top-[24%] w-[120px] rotate-[-8deg] rounded-[22px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(241,246,255,0.92))] px-4 py-3 shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7c8798]">
-            Live
-          </p>
-          <div className="mt-3 h-2 rounded-full bg-[rgba(75,107,251,0.14)]" />
-          <div className="mt-2 h-2 w-4/5 rounded-full bg-[rgba(75,107,251,0.1)]" />
-        </div>
-
-        <div className="absolute right-[10%] bottom-[20%] w-[124px] rotate-[8deg] rounded-[22px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(255,246,240,0.94))] px-4 py-3 shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9b4c2f]">
-            Metrics
-          </p>
-          <div className="mt-3 flex items-end gap-1.5">
-            <span className="h-3 w-2 rounded-full bg-[rgba(255,178,83,0.55)]" />
-            <span className="h-5 w-2 rounded-full bg-[rgba(255,106,61,0.5)]" />
-            <span className="h-7 w-2 rounded-full bg-[rgba(75,107,251,0.45)]" />
-            <span className="h-4 w-2 rounded-full bg-[rgba(255,178,83,0.45)]" />
-          </div>
-        </div>
+        <FeatureTab
+          className="absolute left-[4%] top-[24%] rotate-[-10deg]"
+          label="Live"
+          tone="blue"
+          icon={<PulseGlyph />}
+        />
+        <FeatureTab
+          className="absolute right-[8%] top-[19%] rotate-[10deg]"
+          label="Metrics"
+          tone="orange"
+          icon={<BarsGlyph />}
+        />
+        <FeatureTab
+          className="absolute left-[10%] bottom-[18%] rotate-[8deg]"
+          label="Incidents"
+          tone="blue"
+          icon={<ListGlyph />}
+        />
+        <FeatureTab
+          className="absolute right-[6%] bottom-[24%] rotate-[-8deg]"
+          label="Agent"
+          tone="orange"
+          icon={<SparkMiniGlyph />}
+        />
 
         <svg
           aria-hidden="true"
@@ -229,87 +234,134 @@ function ProjectSetupIllustration() {
             strokeLinecap="round"
             strokeDasharray="8 10"
           />
-          <path
-            d="M228 124c18 20 26 40 24 62-2 22-12 41-31 59"
-            stroke="rgba(255,106,61,0.48)"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeDasharray="8 10"
-          />
         </svg>
 
-        <div className="absolute left-[56%] top-[28%] text-[#4b6bfb]">
-          <PaperPlaneGlyph className="h-10 w-10 rotate-[14deg] drop-shadow-[0_10px_20px_rgba(75,107,251,0.16)]" />
-        </div>
-
-        <div className="relative w-[210px] rounded-[28px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#1b2231_0%,#141b27_100%)] p-5 text-white shadow-[0_24px_56px_rgba(15,23,42,0.18)]">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-white/14" />
-            <span className="h-2.5 w-2.5 rounded-full bg-white/12" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[linear-gradient(180deg,#ffb253,#ff6a3d)]" />
+        <Link
+          href="/onboarding"
+          className="group relative flex h-[224px] w-[224px] items-center justify-center rounded-full border border-[rgba(255,106,61,0.22)] bg-[linear-gradient(180deg,#ff9b6f_0%,#ff754b_36%,#ff5a2a_100%)] text-white shadow-[0_24px_56px_rgba(255,106,61,0.24)] transition duration-200 hover:scale-[1.02] hover:shadow-[0_28px_64px_rgba(255,106,61,0.3)] focus:outline-none focus-visible:ring-4 focus-visible:ring-[rgba(255,106,61,0.18)]"
+          aria-label="Open onboarding"
+        >
+          <div className="absolute inset-3 rounded-full border border-white/14" />
+          <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_50%_24%,rgba(255,255,255,0.26),transparent_30%),radial-gradient(circle_at_50%_82%,rgba(124,45,18,0.16),transparent_42%)]" />
+          <div className="relative flex max-w-[164px] -translate-y-2 flex-col items-center text-center">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/52">
+              Get Started
+            </p>
+            <p className="mt-3 text-[2.15rem] font-semibold leading-none">Onboarding</p>
+            <p className="mt-4 text-sm leading-6 text-white/72">
+              Onboard a project to unlock the workspace.
+            </p>
           </div>
-
-          <div className="mt-5 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/42">
-                Next destination
-              </p>
-              <p className="mt-2 text-xl font-semibold">Onboarding</p>
-            </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#ffb253,#ff6a3d)] text-white shadow-[0_12px_28px_rgba(255,106,61,0.24)]">
-              <PlusGlyph />
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-[20px] border border-white/8 bg-white/[0.04] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-medium text-white/78">Create first protected project</p>
-              <span className="rounded-full border border-[rgba(255,106,61,0.24)] bg-[rgba(255,106,61,0.14)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#ffd7ca]">
-                Required
-              </span>
-            </div>
-            <div className="mt-4 h-2 rounded-full bg-white/8">
-              <div className="h-2 w-[42%] rounded-full bg-[linear-gradient(90deg,#4b6bfb,#ff6a3d)]" />
-            </div>
-          </div>
-        </div>
+        </Link>
       </div>
     </div>
   );
 }
 
-function PaperPlaneGlyph({ className = "h-6 w-6" }: { className?: string }) {
+function FeatureTab({
+  className,
+  label,
+  tone,
+  icon,
+}: {
+  className: string;
+  label: string;
+  tone: "blue" | "orange";
+  icon: ReactNode;
+}) {
+  const toneClasses =
+    tone === "blue"
+      ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(241,246,255,0.94))] text-[#35547d]"
+      : "bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(255,246,240,0.96))] text-[#9b4c2f]";
+
+  return (
+    <div
+      className={`${className} w-[122px] rounded-[22px] border border-[rgba(17,24,39,0.08)] px-4 py-3 shadow-[0_14px_36px_rgba(15,23,42,0.08)] ${toneClasses}`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em]">
+          {label}
+        </p>
+        <span className="opacity-70">{icon}</span>
+      </div>
+      <div className="mt-3 h-2 rounded-full bg-black/6" />
+      <div className="mt-2 h-2 w-4/5 rounded-full bg-black/5" />
+    </div>
+  );
+}
+
+function PulseGlyph() {
   return (
     <svg
       aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M21 3 10 14" />
-      <path d="m21 3-7 18-4-7-7-4Z" />
+      <path d="M2.5 10h3l1.8-3.5L10 14l2.2-4h5.3" />
     </svg>
   );
 }
 
-function PlusGlyph() {
+function BarsGlyph() {
   return (
     <svg
       aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="h-5 w-5"
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
+      <path d="M3 16.5h14" />
+      <path d="M6 14V9" />
+      <path d="M10 14V5.5" />
+      <path d="M14 14v-3" />
+    </svg>
+  );
+}
+
+function ListGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6.5 5h9" />
+      <path d="M6.5 10h9" />
+      <path d="M6.5 15h9" />
+      <path d="M3.5 5h.01" />
+      <path d="M3.5 10h.01" />
+      <path d="M3.5 15h.01" />
+    </svg>
+  );
+}
+
+function SparkMiniGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m10 3 1.5 4 4 1-4 1.1L10 13l-1.5-3.9-4-1.1 4-1Z" />
     </svg>
   );
 }

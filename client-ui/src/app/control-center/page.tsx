@@ -13,7 +13,7 @@ import {
 } from "@/lib/agent-platform";
 import { WorkspaceAdminPanel } from "@/components/workspace-admin-panel";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
-import { PageHeader, SectionCard, StatCard } from "@/components/dashboard-ui";
+import { PageHeader, ProjectSetupState, SectionCard, StatCard } from "@/components/dashboard-ui";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +44,7 @@ export default async function ControlCenterPage() {
   const session = await getCurrentSession().catch(() => null);
   const projectId = await resolvePrimaryProjectId();
 
-  if (!projectId || !session) {
+  if (!session) {
     return (
       <main className="space-y-6">
         <PageHeader
@@ -53,6 +53,16 @@ export default async function ControlCenterPage() {
           description="Connect a project, ingest telemetry, or add a repo profile to unlock the control plane."
         />
       </main>
+    );
+  }
+
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Control center"
+        title="Create your first protected project before opening the control center"
+        description="The control center needs a protected project before it can show policy, repo profiles, credentials, and automation guardrails. Start with onboarding, then come back here once your first project is set up."
+      />
     );
   }
 
