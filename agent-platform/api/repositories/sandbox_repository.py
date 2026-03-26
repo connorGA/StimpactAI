@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import asyncpg
@@ -50,7 +51,9 @@ INSERT INTO sandbox_runs (
     id,
     incident_id,
     patch_run_id,
+    project_service_id,
     repo_profile_id,
+    dependency_service_ids,
     async_job_id,
     status,
     executor_backend,
@@ -64,7 +67,7 @@ INSERT INTO sandbox_runs (
     summary,
     execution_log
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 RETURNING *;
 """
@@ -161,7 +164,9 @@ class SandboxRepository:
         *,
         incident_id: str,
         patch_run_id: str,
+        project_service_id: str | None = None,
         repo_profile_id: str | None = None,
+        dependency_service_ids: list[str] | None = None,
         async_job_id: str | None = None,
         status: SandboxRunStatus,
         executor_backend: str = "local",
@@ -180,7 +185,9 @@ class SandboxRepository:
             str(uuid4()),
             incident_id,
             patch_run_id,
+            project_service_id,
             repo_profile_id,
+            json.dumps(dependency_service_ids or []),
             async_job_id,
             status.value,
             executor_backend,

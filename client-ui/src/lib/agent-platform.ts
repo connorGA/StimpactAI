@@ -24,6 +24,8 @@ import type {
   ProjectApiKey,
   ProjectOnboarding,
   ProjectPolicy,
+  ProjectSandboxPlanPreview,
+  ProjectService,
   ProviderIntegration,
   ProviderRepository,
   ProjectSummary,
@@ -354,6 +356,13 @@ export async function listRepoProfiles(projectId: string): Promise<RepoProfile[]
   );
 }
 
+export async function listProjectServices(projectId: string): Promise<ProjectService[]> {
+  return fetchFromControlPlane<ProjectService[]>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/services`,
+    { method: "GET" },
+  );
+}
+
 export async function listSecretRefs(projectId: string): Promise<SecretRef[]> {
   return fetchFromControlPlane<SecretRef[]>(
     `/control-plane/projects/${encodeURIComponent(projectId)}/secret-refs`,
@@ -496,6 +505,106 @@ export async function createProjectRepoProfile(
     {
       method: "POST",
       body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function createProjectService(
+  projectId: string,
+  body: {
+    project_id: string;
+    name: string;
+    slug: string;
+    service_type:
+      | "frontend"
+      | "backend"
+      | "api"
+      | "worker"
+      | "cron"
+      | "gateway"
+      | "database"
+      | "cache"
+      | "other";
+    repo_profile_id?: string | null;
+    owner?: string | null;
+    deploy_target?: string | null;
+    routing_hints?: {
+      service_names?: string[];
+      path_prefixes?: string[];
+      domains?: string[];
+      tags?: string[];
+    };
+    startup_priority?: number;
+    sandbox_healthcheck_command?: string | null;
+    sandbox_healthcheck_url?: string | null;
+    active?: boolean;
+    dependencies?: Array<{
+      depends_on_service_id: string;
+      dependency_kind: "required" | "optional" | "mock";
+    }>;
+  },
+): Promise<ProjectService> {
+  return fetchFromControlPlane<ProjectService>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/services`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function updateProjectService(
+  projectId: string,
+  serviceId: string,
+  body: {
+    name: string;
+    slug: string;
+    service_type:
+      | "frontend"
+      | "backend"
+      | "api"
+      | "worker"
+      | "cron"
+      | "gateway"
+      | "database"
+      | "cache"
+      | "other";
+    repo_profile_id?: string | null;
+    owner?: string | null;
+    deploy_target?: string | null;
+    routing_hints?: {
+      service_names?: string[];
+      path_prefixes?: string[];
+      domains?: string[];
+      tags?: string[];
+    };
+    startup_priority?: number;
+    sandbox_healthcheck_command?: string | null;
+    sandbox_healthcheck_url?: string | null;
+    active?: boolean;
+    dependencies?: Array<{
+      depends_on_service_id: string;
+      dependency_kind: "required" | "optional" | "mock";
+    }>;
+  },
+): Promise<ProjectService> {
+  return fetchFromControlPlane<ProjectService>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function getProjectServiceSandboxPlan(
+  projectId: string,
+  serviceId: string,
+): Promise<ProjectSandboxPlanPreview> {
+  return fetchFromControlPlane<ProjectSandboxPlanPreview>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/sandbox-plan`,
+    {
+      method: "GET",
     },
   );
 }

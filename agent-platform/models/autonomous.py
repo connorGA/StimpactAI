@@ -15,6 +15,7 @@ class AutonomousRunPersistenceRecord(BaseModel):
 
     id: str
     incident_id: str
+    project_service_id: str | None = None
     repo_profile_id: str | None = None
     async_job_id: str | None = None
     feature_seeds: list[FeatureSeed] = Field(default_factory=list)
@@ -46,6 +47,7 @@ class AutonomousRunPersistenceRecord(BaseModel):
         return cls(
             id=str(row["id"]),
             incident_id=str(row["incident_id"]),
+            project_service_id=str(row["project_service_id"]) if row["project_service_id"] is not None else None,
             repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
             async_job_id=str(row["async_job_id"]) if row["async_job_id"] is not None else None,
             feature_seeds=[FeatureSeed.model_validate(item) for item in feature_seeds if isinstance(item, dict)],

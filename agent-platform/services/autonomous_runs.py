@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -48,6 +49,14 @@ from services.repository_provider import get_provider_adapter
 from services.sandbox_verification import SandboxVerificationService
 
 
+@dataclass(slots=True)
+class ResolvedAutonomousServiceContext:
+    incident: object
+    project_service: object | None
+    repo_profile: object | None
+    project_policy: object | None
+
+
 class AutonomousRunService:
     def __init__(
         self,
@@ -87,8 +96,9 @@ class AutonomousRunService:
         incident_id: str,
         request: AutonomousRunCreateRequest,
     ) -> AutonomousRunDetailResponse:
-        incident = await self._require_incident(incident_id)
-        repo_profile = await self._get_active_repo_profile(incident.project_id)
+        service_context = await self._resolve_incident_service_context(incident_id)
+        incident = service_context.incident
+        repo_profile = service_context.repo_profile
         repository_root = request.repository_root or str(self._repository_root)
         repository_profile_override = self._profile_adapter.build_profile(
             repository_root=repository_root,
@@ -104,6 +114,8 @@ class AutonomousRunService:
         policy, approval_status = self._policy_service.evaluate(
             incident=incident,
             repo_profile=repo_profile,
+            project_service=service_context.project_service,
+            project_policy=service_context.project_policy,
             request=request,
             browser_verification_supported=browser_verification_supported,
         )
@@ -156,6 +168,9 @@ class AutonomousRunService:
         if self._autonomous_repository is not None:
             await self._autonomous_repository.create_run(
                 incident_id=incident_id,
+                project_service_id=service_context.project_service.id
+                if service_context.project_service is not None
+                else None,
                 repo_profile_id=repo_profile.id if repo_profile is not None else None,
                 async_job_id=async_job_id,
                 feature_seeds=feature_seeds,
@@ -256,6 +271,11 @@ class AutonomousRunService:
     ) -> AutonomousRunDetailResponse:
         await self._require_incident(incident_id)
         detail = self.get_run_detail_sync(incident_id, run_id)
+        persisted_record = (
+            await self._autonomous_repository.get_run(run_id)
+            if self._autonomous_repository is not None
+            else None
+        )
         updated_run = detail.run.model_copy(update={"approval_status": request.approval_status})
         if request.approval_status is AutonomousApprovalStatus.REJECTED:
             updated_run = updated_run.model_copy(
@@ -282,6 +302,7 @@ class AutonomousRunService:
             await self._autonomous_repository.update_run(
                 run_id,
                 async_job_id=updated_run.async_job_id,
+                project_service_id=getattr(persisted_record, "project_service_id", None),
                 repo_profile_id=updated_run.repo_profile_id,
                 run=updated_run,
                 outcome=detail.outcome,
@@ -367,6 +388,7 @@ class AutonomousRunService:
                 await self._autonomous_repository.update_run(
                     run_id,
                     async_job_id=job.id,
+                    project_service_id=getattr(persisted_record, "project_service_id", None),
                     repo_profile_id=snapshot.run.repo_profile_id,
                     run=snapshot.run.model_copy(update={"async_job_id": job.id}),
                     outcome=outcome,
@@ -395,6 +417,7 @@ class AutonomousRunService:
                 await self._autonomous_repository.update_run(
                     run_id,
                     async_job_id=job.id,
+                    project_service_id=getattr(persisted_record, "project_service_id", None),
                     repo_profile_id=reset_snapshot.run.repo_profile_id,
                     run=reset_snapshot.run.model_copy(update={"async_job_id": job.id}),
                     outcome=None,
@@ -460,6 +483,7 @@ class AutonomousRunService:
             await self._autonomous_repository.update_run(
                 updated_run.id,
                 async_job_id=updated_run.async_job_id,
+                project_service_id=getattr(record, "project_service_id", None),
                 repo_profile_id=updated_run.repo_profile_id,
                 run=updated_run,
                 outcome=outcome,
@@ -552,9 +576,11 @@ class AutonomousRunService:
         )
         self._event_stream.upsert_run(updated_run)
         if self._autonomous_repository is not None:
+            persisted_record = await self._autonomous_repository.get_run(run_id)
             await self._autonomous_repository.update_run(
                 run_id,
                 async_job_id=updated_run.async_job_id,
+                project_service_id=getattr(persisted_record, "project_service_id", None),
                 repo_profile_id=updated_run.repo_profile_id,
                 run=updated_run,
                 outcome=detail.outcome,
@@ -596,6 +622,50 @@ class AutonomousRunService:
         if self._control_plane_repository is None:
             return None
         return await self._control_plane_repository.get_active_repo_profile(project_id)
+
+    async def _resolve_incident_service_context(self, incident_id: str) -> ResolvedAutonomousServiceContext:
+        incident = await self._require_incident(incident_id)
+        if self._control_plane_repository is None:
+            return ResolvedAutonomousServiceContext(
+                incident=incident,
+                project_service=None,
+                repo_profile=None,
+                project_policy=None,
+            )
+        project_service = None
+        if incident.project_service_id and hasattr(self._control_plane_repository, "get_project_service"):
+            project_service = await self._control_plane_repository.get_project_service(incident.project_service_id)
+        if project_service is None and hasattr(self._control_plane_repository, "resolve_project_service"):
+            project_service = await self._control_plane_repository.resolve_project_service(
+                project_id=incident.project_id,
+                service_name=incident.service,
+            )
+        repo_profile = None
+        if project_service is not None and project_service.repo_profile_id is not None:
+            repo_profile = await self._control_plane_repository.get_repo_profile(project_service.repo_profile_id)
+        if repo_profile is None and incident.repo_profile_id:
+            repo_profile = await self._control_plane_repository.get_repo_profile(incident.repo_profile_id)
+        if repo_profile is None:
+            repo_profile = await self._control_plane_repository.get_active_repo_profile(incident.project_id)
+        if project_service is not None and repo_profile is not None and (
+            incident.project_service_id != project_service.id or incident.repo_profile_id != repo_profile.id
+        ):
+            incident = await self._incident_repository.resolve_incident_service(
+                incident.id,
+                project_service_id=project_service.id,
+                repo_profile_id=repo_profile.id,
+            )
+        project_policy = (
+            await self._control_plane_repository.get_or_create_project_policy(incident.project_id)
+            if hasattr(self._control_plane_repository, "get_or_create_project_policy")
+            else None
+        )
+        return ResolvedAutonomousServiceContext(
+            incident=incident,
+            project_service=project_service,
+            repo_profile=repo_profile,
+            project_policy=project_policy,
+        )
 
     def _derive_feature_seeds(
         self,
@@ -714,10 +784,12 @@ class AutonomousRunService:
         )
         self._event_stream.upsert_run(updated_run)
         if self._autonomous_repository is not None:
+            persisted_record = await self._autonomous_repository.get_run(run.id)
             outcome = self._artifact_store.get_outcome(run.incident_id or "", run.id)
             await self._autonomous_repository.update_run(
                 run.id,
                 async_job_id=updated_run.async_job_id,
+                project_service_id=getattr(persisted_record, "project_service_id", None),
                 repo_profile_id=updated_run.repo_profile_id,
                 run=updated_run,
                 outcome=outcome,

@@ -70,6 +70,8 @@ class IncidentRecord(BaseModel):
 
     id: str
     project_id: str
+    project_service_id: str | None = None
+    repo_profile_id: str | None = None
     fingerprint: str
     service: str
     environment: Environment
@@ -88,6 +90,8 @@ class IncidentRecord(BaseModel):
         return cls(
             id=str(row["id"]),
             project_id=str(row["project_id"]),
+            project_service_id=str(row["project_service_id"]) if row["project_service_id"] is not None else None,
+            repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
             fingerprint=str(row["fingerprint"]),
             service=str(row["service"]),
             environment=Environment(str(row["environment"])),

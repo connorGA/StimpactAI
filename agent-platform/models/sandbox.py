@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SandboxRunStatus(StrEnum):
@@ -20,7 +20,9 @@ class SandboxRunRecord(BaseModel):
     id: str
     incident_id: str
     patch_run_id: str
+    project_service_id: str | None = None
     repo_profile_id: str | None = None
+    dependency_service_ids: list[str] = Field(default_factory=list)
     async_job_id: str | None = None
     status: SandboxRunStatus
     executor_backend: str = "local"
@@ -42,7 +44,16 @@ class SandboxRunRecord(BaseModel):
             id=str(row["id"]),
             incident_id=str(row["incident_id"]),
             patch_run_id=str(row["patch_run_id"]),
+            project_service_id=str(row["project_service_id"]) if row["project_service_id"] is not None else None,
             repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
+            dependency_service_ids=[
+                str(item)
+                for item in (
+                    row["dependency_service_ids"]
+                    if isinstance(row["dependency_service_ids"], list)
+                    else []
+                )
+            ],
             async_job_id=str(row["async_job_id"]) if row["async_job_id"] is not None else None,
             status=SandboxRunStatus(str(row["status"])),
             executor_backend=str(row["executor_backend"]),

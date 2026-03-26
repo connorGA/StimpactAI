@@ -97,6 +97,7 @@ const PRICING_PLANS = [
       "no automated repair execution",
     ],
     accent: "visibility first",
+    featured: false,
   },
   {
     name: "Growth",
@@ -129,6 +130,7 @@ const PRICING_PLANS = [
       "custom rollout and support options",
     ],
     accent: "multi-project",
+    featured: false,
   },
 ] as const;
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import dataclass
 from pathlib import Path
 import socket
 import subprocess
@@ -21,7 +22,7 @@ from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
 from models.artifact import ArtifactStorageBackend, ArtifactType
 from models.async_job import AsyncJobRecord, AsyncJobType
-from models.control_plane import RepoProfileRecord, RepoProfileSecretBindingRecord
+from models.control_plane import ProjectServiceRecord, RepoProfileRecord, RepoProfileSecretBindingRecord
 from models.patch import PatchRunRecord
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from sandbox.kubernetes_runner import KubernetesJobMonitor, KubernetesSandboxRunner
@@ -31,6 +32,14 @@ from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsMana
 from services.patch_generation import PatchGenerationService
 from services.provider_integration_service import ProviderIntegrationService
 from services.repository_provider import get_provider_adapter
+
+
+@dataclass(slots=True)
+class ResolvedSandboxServiceContext:
+    incident_id: str
+    project_service: ProjectServiceRecord | None
+    repo_profile: RepoProfileRecord
+    dependency_services: list[ProjectServiceRecord]
 
 
 class SandboxVerificationService:
@@ -129,7 +138,7 @@ class SandboxVerificationService:
                 code="incident_not_found",
             )
 
-        repo_profile = await self._get_repo_profile_for_project(incident.project_id)
+        service_context = await self._resolve_service_context(incident)
         patch_run = await self._resolve_patch_run(
             incident_id=incident_id,
             patch_run_id=patch_run_id,
@@ -142,7 +151,11 @@ class SandboxVerificationService:
             payload={
                 "incident_id": incident.id,
                 "patch_run_id": patch_run.id,
-                "repo_profile_id": repo_profile.id,
+                "project_service_id": service_context.project_service.id
+                if service_context.project_service is not None
+                else None,
+                "repo_profile_id": service_context.repo_profile.id,
+                "dependency_service_ids": [service.id for service in service_context.dependency_services],
                 "event_limit": event_limit,
                 "refresh_patch": refresh_patch,
                 "repository_root": repository_root or str(self._repository_root),
@@ -155,13 +168,17 @@ class SandboxVerificationService:
         sandbox_run = await self._sandbox_repository.create_sandbox_run(
             incident_id=incident.id,
             patch_run_id=patch_run.id,
-            repo_profile_id=repo_profile.id,
+            project_service_id=service_context.project_service.id
+            if service_context.project_service is not None
+            else None,
+            repo_profile_id=service_context.repo_profile.id,
+            dependency_service_ids=[service.id for service in service_context.dependency_services],
             async_job_id=job.id,
             status=SandboxRunStatus.QUEUED,
             executor_backend=get_sandbox_execution_backend(),
-            install_command=repo_profile.install_command,
-            reproduce_command=repo_profile.reproduce_command,
-            verify_command=repo_profile.verify_command,
+            install_command=service_context.repo_profile.install_command,
+            reproduce_command=service_context.repo_profile.reproduce_command,
+            verify_command=service_context.repo_profile.verify_command,
             reproduction_succeeded=False,
             patch_applied=False,
             verification_succeeded=False,
@@ -178,6 +195,25 @@ class SandboxVerificationService:
             exit_code=None,
             finished=True,
         )
+        if service_context.project_service is not None:
+            dependency_summary = (
+                ", ".join(service.slug for service in service_context.dependency_services)
+                if service_context.dependency_services
+                else "none"
+            )
+            await self._sandbox_repository.create_sandbox_run_step(
+                sandbox_run_id=sandbox_run.id,
+                step_name="dependency-plan",
+                status=SandboxRunStatus.QUEUED,
+                command=None,
+                summary=(
+                    f"Target service {service_context.project_service.slug}; "
+                    f"declared dependencies: {dependency_summary}."
+                ),
+                artifact_id=None,
+                exit_code=None,
+                finished=True,
+            )
         return sandbox_run, job
 
     async def process_async_job(self, job: AsyncJobRecord) -> SandboxRunRecord:
@@ -202,6 +238,11 @@ class SandboxVerificationService:
             event_limit=int(job.payload.get("event_limit", 50)),
         )
         repo_profile = await self._require_repo_profile(str(job.payload["repo_profile_id"]))
+        project_service = (
+            await self._control_plane_repository.get_project_service(str(job.payload["project_service_id"]))
+            if job.payload.get("project_service_id") is not None
+            else None
+        )
         await self._sandbox_repository.update_sandbox_run(
             sandbox_run.id,
             status=SandboxRunStatus.RUNNING,
@@ -220,7 +261,11 @@ class SandboxVerificationService:
             step_name="resolve-profile",
             status=SandboxRunStatus.RUNNING,
             command=None,
-            summary="Resolved repo profile and execution backend.",
+            summary=(
+                f"Resolved service {project_service.slug} and its repo profile."
+                if project_service is not None
+                else "Resolved repo profile and execution backend."
+            ),
             artifact_id=None,
             exit_code=None,
             finished=True,
@@ -548,6 +593,68 @@ class SandboxVerificationService:
                 code="repo_profile_not_found",
             )
         return repo_profile
+
+    async def _resolve_service_context(self, incident) -> ResolvedSandboxServiceContext:
+        if self._control_plane_repository is None:
+            repo_profile = await self._get_repo_profile_for_project(incident.project_id)
+            return ResolvedSandboxServiceContext(
+                incident_id=incident.id,
+                project_service=None,
+                repo_profile=repo_profile,
+                dependency_services=[],
+            )
+
+        project_service = None
+        if incident.project_service_id and hasattr(self._control_plane_repository, "get_project_service"):
+            project_service = await self._control_plane_repository.get_project_service(incident.project_service_id)
+        if project_service is None and hasattr(self._control_plane_repository, "resolve_project_service"):
+            project_service = await self._control_plane_repository.resolve_project_service(
+                project_id=incident.project_id,
+                service_name=incident.service,
+            )
+        repo_profile = None
+        if project_service is not None and project_service.repo_profile_id is not None:
+            repo_profile = await self._control_plane_repository.get_repo_profile(project_service.repo_profile_id)
+        if repo_profile is None and incident.repo_profile_id:
+            repo_profile = await self._control_plane_repository.get_repo_profile(incident.repo_profile_id)
+        if repo_profile is None:
+            repo_profile = await self._control_plane_repository.get_active_repo_profile(incident.project_id)
+        if repo_profile is None:
+            raise APIError(
+                f"No repo profile is configured for project {incident.project_id}.",
+                status_code=404,
+                code="repo_profile_not_found",
+            )
+        if project_service is not None and (
+            incident.project_service_id != project_service.id or incident.repo_profile_id != repo_profile.id
+        ):
+            await self._incident_repository.resolve_incident_service(
+                incident.id,
+                project_service_id=project_service.id,
+                repo_profile_id=repo_profile.id,
+            )
+        dependency_records = (
+            await self._control_plane_repository.list_project_service_dependencies(project_service.id)
+            if project_service is not None
+            and hasattr(self._control_plane_repository, "list_project_service_dependencies")
+            else []
+        )
+        dependency_services: list[ProjectServiceRecord] = []
+        for dependency in dependency_records:
+            service = (
+                await self._control_plane_repository.get_project_service(dependency.depends_on_service_id)
+                if hasattr(self._control_plane_repository, "get_project_service")
+                else None
+            )
+            if service is not None and service.active:
+                dependency_services.append(service)
+        dependency_services.sort(key=lambda item: (item.startup_priority, item.created_at))
+        return ResolvedSandboxServiceContext(
+            incident_id=incident.id,
+            project_service=project_service,
+            repo_profile=repo_profile,
+            dependency_services=dependency_services,
+        )
 
     async def _require_repo_profile(self, repo_profile_id: str) -> RepoProfileRecord:
         repo_profile = await self._control_plane_repository.get_repo_profile(repo_profile_id)

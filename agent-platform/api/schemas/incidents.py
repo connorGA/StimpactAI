@@ -25,6 +25,8 @@ class IncidentSummaryResponse(BaseModel):
 
     id: str
     project_id: str
+    project_service_id: str | None = None
+    repo_profile_id: str | None = None
     fingerprint: str
     service: str
     environment: Environment
@@ -251,7 +253,9 @@ class IncidentSandboxRunResponse(BaseModel):
     id: str
     incident_id: str
     patch_run_id: str
+    project_service_id: str | None = None
     repo_profile_id: str | None = None
+    dependency_service_ids: list[str] = Field(default_factory=list)
     async_job_id: str | None = None
     status: SandboxRunStatus
     executor_backend: str

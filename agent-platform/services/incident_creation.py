@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.incident_repository import IncidentRepository
 from models.incident import IncidentProcessingResult, IncidentSeverity, TelemetryRecord
 from shared.events.incident_events import IncidentEvent
@@ -9,14 +10,30 @@ from shared.types.telemetry import Environment
 
 
 class IncidentCreationService:
-    def __init__(self, repository: IncidentRepository) -> None:
+    def __init__(
+        self,
+        repository: IncidentRepository,
+        control_plane_repository: ControlPlaneRepository | None = None,
+    ) -> None:
         self._repository = repository
+        self._control_plane_repository = control_plane_repository
 
     async def process_telemetry_received(self, payload: dict[str, Any]) -> IncidentProcessingResult:
         event = IncidentEvent.model_validate(payload)
         telemetry = await self._repository.get_telemetry(event.telemetry_id)
         severity = determine_incident_severity(telemetry)
         title = build_incident_title(telemetry)
+        project_service_id = None
+        repo_profile_id = None
+        if self._control_plane_repository is not None:
+            resolved_service = await self._control_plane_repository.resolve_project_service(
+                project_id=telemetry.project_id,
+                service_name=telemetry.service,
+                stacktrace=telemetry.stacktrace,
+            )
+            if resolved_service is not None:
+                project_service_id = resolved_service.id
+                repo_profile_id = resolved_service.repo_profile_id
 
         return await self._repository.attach_to_incident(
             telemetry=telemetry,
@@ -24,6 +41,8 @@ class IncidentCreationService:
             event_payload=event.model_dump(mode="json"),
             severity=severity,
             title=title,
+            project_service_id=project_service_id,
+            repo_profile_id=repo_profile_id,
         )
 
 

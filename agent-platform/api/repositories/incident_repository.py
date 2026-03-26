@@ -56,6 +56,8 @@ INSERT_INCIDENT_SQL = """
 INSERT INTO incidents (
     id,
     project_id,
+    project_service_id,
+    repo_profile_id,
     fingerprint,
     service,
     environment,
@@ -67,7 +69,7 @@ INSERT INTO incidents (
     event_count,
     latest_telemetry_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, 'open', $7, $8, $9, 1, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, $11, 1, $12
 )
 RETURNING *;
 """
@@ -78,6 +80,17 @@ SET last_seen_at = GREATEST(last_seen_at, $2),
     event_count = event_count + 1,
     latest_telemetry_id = $3,
     severity = $4,
+    project_service_id = COALESCE($5, project_service_id),
+    repo_profile_id = COALESCE($6, repo_profile_id),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+RESOLVE_INCIDENT_SERVICE_SQL = """
+UPDATE incidents
+SET project_service_id = $2,
+    repo_profile_id = $3,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -240,6 +253,8 @@ class IncidentRepository:
         event_payload: dict[str, object],
         severity: IncidentSeverity,
         title: str,
+        project_service_id: str | None = None,
+        repo_profile_id: str | None = None,
     ) -> IncidentProcessingResult:
         if self._pool is None:
             raise PersistenceError("Postgres is not configured for incident creation.")
@@ -277,6 +292,8 @@ class IncidentRepository:
                                 INSERT_INCIDENT_SQL,
                                 str(uuid4()),
                                 telemetry.project_id,
+                                project_service_id,
+                                repo_profile_id,
                                 telemetry.fingerprint,
                                 telemetry.service,
                                 telemetry.environment.value,
@@ -309,6 +326,8 @@ class IncidentRepository:
                             telemetry.occurred_at,
                             telemetry.id,
                             merged_severity.value,
+                            project_service_id,
+                            repo_profile_id,
                         )
                         if updated_incident_row is None:
                             raise PersistenceError(f"Failed to update incident {incident.id}.")
@@ -347,6 +366,21 @@ class IncidentRepository:
                     )
         except asyncpg.PostgresError as exc:
             raise PersistenceError("Failed to attach telemetry to an incident.") from exc
+
+    async def resolve_incident_service(
+        self,
+        incident_id: str,
+        *,
+        project_service_id: str | None,
+        repo_profile_id: str | None,
+    ) -> IncidentRecord:
+        row = await self._fetchrow(
+            RESOLVE_INCIDENT_SERVICE_SQL,
+            incident_id,
+            project_service_id,
+            repo_profile_id,
+        )
+        return IncidentRecord.from_db_row(row)
 
 
 def _max_severity(current: IncidentSeverity, candidate: IncidentSeverity) -> IncidentSeverity:

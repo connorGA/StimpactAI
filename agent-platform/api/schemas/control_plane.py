@@ -7,6 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from models.control_plane import (
     AutonomyMode,
+    ProjectServiceDependencyKind,
+    ProjectServiceDependencyRecord,
+    ProjectServiceRecord,
+    ProjectServiceRoutingHints,
+    ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
     ProjectPolicyRecord,
@@ -372,6 +377,143 @@ class ProjectBootstrapRequest(BaseModel):
         return normalized
 
 
+class ProjectServiceRoutingHintsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_names: list[str] = Field(default_factory=list, max_length=50)
+    path_prefixes: list[str] = Field(default_factory=list, max_length=50)
+    domains: list[str] = Field(default_factory=list, max_length=50)
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+    def to_record(self) -> ProjectServiceRoutingHints:
+        return ProjectServiceRoutingHints(**self.model_dump())
+
+
+class ProjectServiceDependencyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    depends_on_service_id: str = Field(min_length=1, max_length=128)
+    dependency_kind: ProjectServiceDependencyKind = ProjectServiceDependencyKind.REQUIRED
+
+
+class CreateProjectServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(min_length=1, max_length=200)
+    service_type: ProjectServiceType = ProjectServiceType.OTHER
+    repo_profile_id: str | None = None
+    owner: str | None = Field(default=None, max_length=200)
+    deploy_target: str | None = Field(default=None, max_length=200)
+    routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
+    startup_priority: int = Field(default=100, ge=0, le=10_000)
+    sandbox_healthcheck_command: str | None = Field(default=None, max_length=2_000)
+    sandbox_healthcheck_url: str | None = Field(default=None, max_length=2_000)
+    active: bool = True
+    dependencies: list[ProjectServiceDependencyRequest] = Field(default_factory=list, max_length=50)
+
+    @field_validator("project_id", "name", "slug", mode="before")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("value must be a string")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+
+class UpdateProjectServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(min_length=1, max_length=200)
+    service_type: ProjectServiceType = ProjectServiceType.OTHER
+    repo_profile_id: str | None = None
+    owner: str | None = Field(default=None, max_length=200)
+    deploy_target: str | None = Field(default=None, max_length=200)
+    routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
+    startup_priority: int = Field(default=100, ge=0, le=10_000)
+    sandbox_healthcheck_command: str | None = Field(default=None, max_length=2_000)
+    sandbox_healthcheck_url: str | None = Field(default=None, max_length=2_000)
+    active: bool = True
+    dependencies: list[ProjectServiceDependencyRequest] = Field(default_factory=list, max_length=50)
+
+
+class ProjectServiceDependencyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    depends_on_service_id: str
+    dependency_kind: ProjectServiceDependencyKind
+
+    @classmethod
+    def from_record(
+        cls,
+        record: ProjectServiceDependencyRecord,
+    ) -> "ProjectServiceDependencyResponse":
+        return cls(
+            depends_on_service_id=record.depends_on_service_id,
+            dependency_kind=record.dependency_kind,
+        )
+
+
+class ProjectServiceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    slug: str
+    service_type: ProjectServiceType
+    repo_profile_id: str | None = None
+    owner: str | None = None
+    deploy_target: str | None = None
+    routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
+    startup_priority: int
+    sandbox_healthcheck_command: str | None = None
+    sandbox_healthcheck_url: str | None = None
+    active: bool
+    dependencies: list[ProjectServiceDependencyResponse] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(
+        cls,
+        record: ProjectServiceRecord,
+        *,
+        dependencies: list[ProjectServiceDependencyRecord] | None = None,
+    ) -> "ProjectServiceResponse":
+        return cls(
+            **record.model_dump(mode="json"),
+            routing_hints=ProjectServiceRoutingHintsPayload(**record.routing_hints.model_dump(mode="json")),
+            dependencies=[
+                ProjectServiceDependencyResponse.from_record(item).model_dump(mode="json")
+                for item in (dependencies or [])
+            ],
+        )
+
+
+class SandboxPlanServiceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service: ProjectServiceResponse
+    repo_profile: RepoProfileResponse | None = None
+    startup_commands: list[str] = Field(default_factory=list)
+    healthcheck_command: str | None = None
+    healthcheck_url: str | None = None
+
+
+class ProjectSandboxPlanPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    target_service: SandboxPlanServiceResponse
+    dependency_services: list[SandboxPlanServiceResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RepoProfileSecretMountResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -445,4 +587,5 @@ class ProjectOnboardingResponse(BaseModel):
     api_keys: list[ProjectApiKeyResponse] = Field(default_factory=list)
     integrations: list[ProviderIntegrationOnboardingResponse] = Field(default_factory=list)
     repo_profiles: list[RepoProfileResponse] = Field(default_factory=list)
+    project_services: list[ProjectServiceResponse] = Field(default_factory=list)
     suggested_next_steps: list[str] = Field(default_factory=list)

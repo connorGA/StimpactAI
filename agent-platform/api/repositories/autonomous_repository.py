@@ -14,6 +14,7 @@ INSERT_AUTONOMOUS_RUN_SQL = """
 INSERT INTO autonomous_runs (
     id,
     incident_id,
+    project_service_id,
     repo_profile_id,
     async_job_id,
     feature_seeds,
@@ -22,7 +23,7 @@ INSERT INTO autonomous_runs (
     run_snapshot,
     outcome_snapshot
 ) VALUES (
-    $1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb
+    $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10::jsonb
 )
 RETURNING *;
 """
@@ -30,9 +31,10 @@ RETURNING *;
 UPDATE_AUTONOMOUS_RUN_SQL = """
 UPDATE autonomous_runs
 SET async_job_id = COALESCE($2, async_job_id),
-    repo_profile_id = COALESCE($3, repo_profile_id),
-    run_snapshot = $4::jsonb,
-    outcome_snapshot = $5::jsonb,
+    project_service_id = COALESCE($3, project_service_id),
+    repo_profile_id = COALESCE($4, repo_profile_id),
+    run_snapshot = $5::jsonb,
+    outcome_snapshot = $6::jsonb,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -90,6 +92,7 @@ class AutonomousRunRepository:
         self,
         *,
         incident_id: str,
+        project_service_id: str | None,
         repo_profile_id: str | None,
         async_job_id: str | None,
         feature_seeds: list[FeatureSeed],
@@ -102,6 +105,7 @@ class AutonomousRunRepository:
             INSERT_AUTONOMOUS_RUN_SQL,
             run.id,
             incident_id,
+            project_service_id,
             repo_profile_id,
             async_job_id,
             json.dumps([seed.model_dump(mode="json") for seed in feature_seeds]),
@@ -117,6 +121,7 @@ class AutonomousRunRepository:
         run_id: str,
         *,
         async_job_id: str | None,
+        project_service_id: str | None,
         repo_profile_id: str | None,
         run: AutonomousRepairRunRecord,
         outcome: AutonomousRunOutcome | None = None,
@@ -125,6 +130,7 @@ class AutonomousRunRepository:
             UPDATE_AUTONOMOUS_RUN_SQL,
             run_id,
             async_job_id,
+            project_service_id,
             repo_profile_id,
             json.dumps(run.model_dump(mode="json")),
             json.dumps(outcome.model_dump(mode="json")) if outcome is not None else None,

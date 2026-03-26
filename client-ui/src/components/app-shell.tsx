@@ -14,6 +14,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const isPublicRoute =
     pathname === "/" || pathname === "/login" || pathname === "/signup";
@@ -37,6 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         const payload = (await response.json()) as Omit<AuthSession, "access_token">;
         if (!cancelled) {
           setSession({ ...payload, access_token: "" });
+          setSelectedProjectId(readCurrentProjectCookie());
         }
       } catch {
         if (!cancelled) {
@@ -65,19 +67,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     router.refresh();
   }
 
+  async function handleProjectSwitch(projectId: string | null) {
+    await fetch("/api/projects/current", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ project_id: projectId }),
+    });
+    setSelectedProjectId(projectId);
+    router.refresh();
+  }
+
   if (isPublicRoute) {
     return <>{children}</>;
   }
 
   const sidebarWidthClass = collapsed ? "lg:w-0" : "lg:w-[248px]";
   const contentOffsetClass = collapsed ? "lg:ml-0" : "lg:ml-[248px]";
+  const currentProject =
+    (selectedProjectId
+      ? session?.projects.find((project) => project.id === selectedProjectId) ?? null
+      : null) ??
+    session?.projects[0] ??
+    null;
 
   return (
     <div className="h-screen overflow-hidden bg-transparent">
       <div className="hidden lg:block">
         <DesktopTopBar
           session={session}
+          currentProject={currentProject}
           sessionLoading={sessionLoading}
+          onProjectSwitch={handleProjectSwitch}
           onLogout={handleLogout}
         />
       </div>
@@ -125,7 +147,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="px-4 py-4 lg:hidden">
           <MobileTopBar
             session={session}
+            currentProject={currentProject}
             sessionLoading={sessionLoading}
+            onProjectSwitch={handleProjectSwitch}
             onLogout={handleLogout}
           />
           <div className="mt-4">
@@ -145,14 +169,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 function DesktopTopBar({
   session,
+  currentProject,
   sessionLoading,
+  onProjectSwitch,
   onLogout,
 }: {
   session: AuthSession | null;
+  currentProject: AuthSession["projects"][number] | null;
   sessionLoading: boolean;
+  onProjectSwitch: (projectId: string | null) => Promise<void>;
   onLogout: () => Promise<void>;
 }) {
-  const primaryProject = session?.projects[0] ?? null;
   const workspaceName = session?.organization.name ?? "Workspace";
   const workspaceRole = session ? `${formatRole(session.role)} workspace` : "Signed-in workspace";
 
@@ -166,25 +193,22 @@ function DesktopTopBar({
             <BrandMark className="h-11 w-11" />
             <span className="text-base font-semibold tracking-[0.04em]">Stimpact.ai</span>
           </Link>
-          <div className="h-8 w-px bg-white/18" />
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl border border-[rgba(255,106,61,0.18)] bg-[rgba(255,106,61,0.1)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-white">
-              {primaryProject?.name ?? "Workspace"}
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-white">
-                {sessionLoading ? "Loading workspace..." : workspaceName}
-              </p>
-              <p className="text-xs text-white/70">
-                {primaryProject?.slug
-                  ? `${primaryProject.slug} project`
-                  : "Live monitoring, metrics, and controlled autonomy"}
-              </p>
-            </div>
+          <div>
+            <p className="text-sm font-semibold text-white">
+              {sessionLoading ? "Loading workspace..." : workspaceName}
+            </p>
+            <p className="text-xs text-white/70">
+              Live monitoring, metrics, and controlled autonomy
+            </p>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
+          <ProjectMenu
+            projects={session?.projects ?? []}
+            currentProjectId={currentProject?.id ?? null}
+            onSelect={onProjectSwitch}
+          />
           <Link
             href="/control-center"
             aria-label="Settings"
@@ -246,11 +270,15 @@ function DesktopTopBar({
 
 function MobileTopBar({
   session,
+  currentProject,
   sessionLoading,
+  onProjectSwitch,
   onLogout,
 }: {
   session: AuthSession | null;
+  currentProject: AuthSession["projects"][number] | null;
   sessionLoading: boolean;
+  onProjectSwitch: (projectId: string | null) => Promise<void>;
   onLogout: () => Promise<void>;
 }) {
   return (
@@ -261,11 +289,19 @@ function MobileTopBar({
           <div>
             <p className="text-sm font-semibold text-white">Stimpact.ai</p>
             <p className="text-xs text-white/70">
-              {sessionLoading ? "Loading workspace..." : session?.organization.name ?? "Operations workspace"}
+              {sessionLoading
+                ? "Loading workspace..."
+                : session?.organization.name ?? "Operations workspace"}
             </p>
           </div>
         </Link>
         <div className="flex items-center gap-2">
+          <ProjectMenu
+            projects={session?.projects ?? []}
+            currentProjectId={currentProject?.id ?? null}
+            onSelect={onProjectSwitch}
+            compact
+          />
           <Link
             href="/control-center"
             aria-label="Settings"
@@ -320,6 +356,103 @@ function MobileTopBar({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProjectMenu({
+  projects,
+  currentProjectId,
+  onSelect,
+  compact = false,
+}: {
+  projects: AuthSession["projects"];
+  currentProjectId: string | null;
+  onSelect: (projectId: string | null) => Promise<void>;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const activeProject =
+    projects.find((project) => project.id === currentProjectId) ?? projects[0] ?? null;
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, []);
+
+  if (!activeProject) {
+    return null;
+  }
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className={`inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] text-white transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white/[0.1] ${
+          compact ? "h-10 px-3" : "h-10 px-3.5"
+        }`}
+      >
+        <span className="max-w-[120px] truncate text-sm font-semibold">{activeProject.name}</span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-[calc(100%+0.6rem)] z-50 w-72 rounded-[22px] border border-white/10 bg-[#101725] p-3 shadow-[0_24px_60px_rgba(9,13,22,0.38)]">
+          <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/45">
+            Switch project
+          </p>
+          <div className="mt-3 space-y-2">
+            {projects.map((project) => {
+              const active = project.id === activeProject.id;
+              return (
+                <button
+                  key={project.id}
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    void onSelect(project.id);
+                  }}
+                  className={`w-full rounded-[16px] border px-3 py-3 text-left transition ${
+                    active
+                      ? "border-[rgba(255,106,61,0.28)] bg-[rgba(255,106,61,0.14)] text-white"
+                      : "border-white/8 bg-white/[0.03] text-white/84 hover:border-[rgba(255,106,61,0.16)] hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <p className="text-sm font-semibold">{project.name}</p>
+                  <p className="mt-1 text-xs text-white/55">{project.slug}</p>
+                </button>
+              );
+            })}
+          </div>
+          <Link
+            href="/onboarding?create=1"
+            onClick={() => setOpen(false)}
+            className="mt-3 inline-flex w-full items-center justify-center rounded-[16px] border border-[rgba(255,106,61,0.22)] bg-[rgba(255,106,61,0.12)] px-4 py-3 text-sm font-semibold text-[#ffd7c3] transition hover:border-[rgba(255,106,61,0.4)] hover:bg-[rgba(255,106,61,0.18)] hover:text-white"
+          >
+            Create new project
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -503,6 +636,20 @@ function buildInitials(fullName?: string, email?: string) {
     return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
   }
   return source.slice(0, 2).toUpperCase();
+}
+
+function readCurrentProjectCookie(): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const match = document.cookie
+    .split("; ")
+    .find((value) => value.startsWith("stimpact_current_project="));
+  if (!match) {
+    return null;
+  }
+  const [, cookieValue] = match.split("=", 2);
+  return cookieValue ? decodeURIComponent(cookieValue) : null;
 }
 
 function formatRole(role: AuthSession["role"]) {

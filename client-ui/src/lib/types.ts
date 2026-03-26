@@ -516,6 +516,65 @@ export type RepoProfile = {
   updated_at: string;
 };
 
+export type ProjectServiceType =
+  | "frontend"
+  | "backend"
+  | "api"
+  | "worker"
+  | "cron"
+  | "gateway"
+  | "database"
+  | "cache"
+  | "other";
+
+export type ProjectServiceDependencyKind = "required" | "optional" | "mock";
+
+export type ProjectServiceRoutingHints = {
+  service_names: string[];
+  path_prefixes: string[];
+  domains: string[];
+  tags: string[];
+};
+
+export type ProjectServiceDependency = {
+  depends_on_service_id: string;
+  dependency_kind: ProjectServiceDependencyKind;
+};
+
+export type ProjectService = {
+  id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  service_type: ProjectServiceType;
+  repo_profile_id: string | null;
+  owner: string | null;
+  deploy_target: string | null;
+  routing_hints: ProjectServiceRoutingHints;
+  startup_priority: number;
+  sandbox_healthcheck_command: string | null;
+  sandbox_healthcheck_url: string | null;
+  active: boolean;
+  dependencies: ProjectServiceDependency[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SandboxPlanService = {
+  service: ProjectService;
+  repo_profile: RepoProfile | null;
+  startup_commands: string[];
+  healthcheck_command: string | null;
+  healthcheck_url: string | null;
+};
+
+export type ProjectSandboxPlanPreview = {
+  project_id: string;
+  target_service: SandboxPlanService;
+  dependency_services: SandboxPlanService[];
+  warnings: string[];
+};
+
 export type HealthReadiness = {
   status: string;
   checks: {
@@ -533,6 +592,7 @@ export type ProjectOnboarding = {
   api_keys: ProjectApiKey[];
   integrations: ProviderIntegrationOnboarding[];
   repo_profiles: RepoProfile[];
+  project_services: ProjectService[];
   suggested_next_steps: string[];
 };
 

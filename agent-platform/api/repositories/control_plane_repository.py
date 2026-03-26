@@ -8,6 +8,11 @@ import asyncpg
 from api.core.errors import PersistenceError
 from models.control_plane import (
     AutonomyMode,
+    ProjectServiceDependencyKind,
+    ProjectServiceDependencyRecord,
+    ProjectServiceRecord,
+    ProjectServiceRoutingHints,
+    ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
     ProjectPolicyRecord,
@@ -305,6 +310,98 @@ FROM repo_profile_secret_refs
 JOIN secret_refs ON secret_refs.id = repo_profile_secret_refs.secret_ref_id
 WHERE repo_profile_secret_refs.repo_profile_id = $1
 ORDER BY repo_profile_secret_refs.created_at ASC;
+"""
+
+INSERT_PROJECT_SERVICE_SQL = """
+INSERT INTO project_services (
+    id,
+    project_id,
+    name,
+    slug,
+    service_type,
+    repo_profile_id,
+    owner,
+    deploy_target,
+    routing_hints,
+    startup_priority,
+    sandbox_healthcheck_command,
+    sandbox_healthcheck_url,
+    active
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13
+)
+RETURNING *;
+"""
+
+UPDATE_PROJECT_SERVICE_SQL = """
+UPDATE project_services
+SET name = $2,
+    slug = $3,
+    service_type = $4,
+    repo_profile_id = $5,
+    owner = $6,
+    deploy_target = $7,
+    routing_hints = $8::jsonb,
+    startup_priority = $9,
+    sandbox_healthcheck_command = $10,
+    sandbox_healthcheck_url = $11,
+    active = $12,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+LIST_PROJECT_SERVICES_SQL = """
+SELECT *
+FROM project_services
+WHERE project_id = $1
+ORDER BY startup_priority ASC, created_at ASC;
+"""
+
+GET_PROJECT_SERVICE_SQL = """
+SELECT *
+FROM project_services
+WHERE id = $1
+LIMIT 1;
+"""
+
+GET_PROJECT_SERVICE_BY_SLUG_SQL = """
+SELECT *
+FROM project_services
+WHERE project_id = $1
+  AND slug = $2
+LIMIT 1;
+"""
+
+LIST_PROJECT_SERVICE_DEPENDENCIES_SQL = """
+SELECT *
+FROM project_service_dependencies
+WHERE service_id = $1
+ORDER BY created_at ASC;
+"""
+
+LIST_PROJECT_DEPENDENCIES_FOR_SERVICES_SQL = """
+SELECT *
+FROM project_service_dependencies
+WHERE service_id = ANY($1::uuid[])
+ORDER BY created_at ASC;
+"""
+
+DELETE_PROJECT_SERVICE_DEPENDENCIES_SQL = """
+DELETE FROM project_service_dependencies
+WHERE service_id = $1;
+"""
+
+INSERT_PROJECT_SERVICE_DEPENDENCY_SQL = """
+INSERT INTO project_service_dependencies (
+    service_id,
+    depends_on_service_id,
+    dependency_kind
+) VALUES (
+    $1, $2, $3
+)
+ON CONFLICT (service_id, depends_on_service_id) DO UPDATE
+SET dependency_kind = EXCLUDED.dependency_kind;
 """
 
 
@@ -656,6 +753,166 @@ class ControlPlaneRepository:
     async def list_repo_profile_secret_refs(self, repo_profile_id: str) -> list[SecretRefRecord]:
         bindings = await self.list_repo_profile_secret_bindings(repo_profile_id)
         return [binding.secret_ref for binding in bindings]
+
+    async def create_project_service(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        slug: str,
+        service_type: ProjectServiceType,
+        repo_profile_id: str | None,
+        owner: str | None,
+        deploy_target: str | None,
+        routing_hints: ProjectServiceRoutingHints,
+        startup_priority: int,
+        sandbox_healthcheck_command: str | None,
+        sandbox_healthcheck_url: str | None,
+        active: bool = True,
+    ) -> ProjectServiceRecord:
+        row = await self._fetchrow(
+            INSERT_PROJECT_SERVICE_SQL,
+            str(uuid4()),
+            project_id,
+            name,
+            slug,
+            service_type.value,
+            repo_profile_id,
+            owner,
+            deploy_target,
+            json.dumps(routing_hints.model_dump(mode="json")),
+            startup_priority,
+            sandbox_healthcheck_command,
+            sandbox_healthcheck_url,
+            active,
+        )
+        return ProjectServiceRecord.from_db_row(row)
+
+    async def update_project_service(
+        self,
+        service_id: str,
+        *,
+        name: str,
+        slug: str,
+        service_type: ProjectServiceType,
+        repo_profile_id: str | None,
+        owner: str | None,
+        deploy_target: str | None,
+        routing_hints: ProjectServiceRoutingHints,
+        startup_priority: int,
+        sandbox_healthcheck_command: str | None,
+        sandbox_healthcheck_url: str | None,
+        active: bool,
+    ) -> ProjectServiceRecord:
+        row = await self._fetchrow(
+            UPDATE_PROJECT_SERVICE_SQL,
+            service_id,
+            name,
+            slug,
+            service_type.value,
+            repo_profile_id,
+            owner,
+            deploy_target,
+            json.dumps(routing_hints.model_dump(mode="json")),
+            startup_priority,
+            sandbox_healthcheck_command,
+            sandbox_healthcheck_url,
+            active,
+        )
+        return ProjectServiceRecord.from_db_row(row)
+
+    async def list_project_services(self, project_id: str) -> list[ProjectServiceRecord]:
+        rows = await self._fetch(LIST_PROJECT_SERVICES_SQL, project_id)
+        return [ProjectServiceRecord.from_db_row(row) for row in rows]
+
+    async def get_project_service(self, service_id: str) -> ProjectServiceRecord | None:
+        row = await self._fetchrow(GET_PROJECT_SERVICE_SQL, service_id, allow_missing=True)
+        if row is None:
+            return None
+        return ProjectServiceRecord.from_db_row(row)
+
+    async def get_project_service_by_slug(self, project_id: str, slug: str) -> ProjectServiceRecord | None:
+        row = await self._fetchrow(GET_PROJECT_SERVICE_BY_SLUG_SQL, project_id, slug, allow_missing=True)
+        if row is None:
+            return None
+        return ProjectServiceRecord.from_db_row(row)
+
+    async def list_project_service_dependencies(
+        self,
+        service_id: str,
+    ) -> list[ProjectServiceDependencyRecord]:
+        rows = await self._fetch(LIST_PROJECT_SERVICE_DEPENDENCIES_SQL, service_id)
+        return [ProjectServiceDependencyRecord.from_db_row(row) for row in rows]
+
+    async def list_project_dependencies_for_services(
+        self,
+        service_ids: list[str],
+    ) -> list[ProjectServiceDependencyRecord]:
+        if not service_ids:
+            return []
+        rows = await self._fetch(LIST_PROJECT_DEPENDENCIES_FOR_SERVICES_SQL, service_ids)
+        return [ProjectServiceDependencyRecord.from_db_row(row) for row in rows]
+
+    async def replace_project_service_dependencies(
+        self,
+        service_id: str,
+        dependencies: list[tuple[str, ProjectServiceDependencyKind]],
+    ) -> list[ProjectServiceDependencyRecord]:
+        await self._execute(DELETE_PROJECT_SERVICE_DEPENDENCIES_SQL, service_id)
+        for depends_on_service_id, dependency_kind in dependencies:
+            await self._execute(
+                INSERT_PROJECT_SERVICE_DEPENDENCY_SQL,
+                service_id,
+                depends_on_service_id,
+                dependency_kind.value,
+            )
+        return await self.list_project_service_dependencies(service_id)
+
+    async def resolve_project_service(
+        self,
+        *,
+        project_id: str,
+        service_name: str,
+        stacktrace: str | None = None,
+    ) -> ProjectServiceRecord | None:
+        normalized_service = service_name.strip().lower()
+        normalized_stacktrace = (stacktrace or "").lower()
+        candidates = await self.list_project_services(project_id)
+        if not candidates:
+            return None
+        scored: list[tuple[int, ProjectServiceRecord]] = []
+        for candidate in candidates:
+            if not candidate.active:
+                continue
+            score = 0
+            if candidate.slug.lower() == normalized_service:
+                score += 120
+            if candidate.name.strip().lower() == normalized_service:
+                score += 110
+            for value in candidate.routing_hints.service_names:
+                if value.strip().lower() == normalized_service:
+                    score += 100
+            for value in candidate.routing_hints.path_prefixes:
+                normalized = value.strip().lower()
+                if normalized and normalized in normalized_stacktrace:
+                    score += 40
+            for value in candidate.routing_hints.domains:
+                normalized = value.strip().lower()
+                if normalized and normalized in normalized_stacktrace:
+                    score += 20
+            for value in candidate.routing_hints.tags:
+                normalized = value.strip().lower()
+                if normalized and normalized in normalized_service:
+                    score += 10
+            if score > 0:
+                scored.append((score, candidate))
+        if scored:
+            scored.sort(key=lambda item: (-item[0], item[1].startup_priority, item[1].created_at))
+            return scored[0][1]
+        active_candidates = [candidate for candidate in candidates if candidate.active]
+        if len(active_candidates) == 1:
+            return active_candidates[0]
+        return None
 
     async def _fetchrow(
         self,

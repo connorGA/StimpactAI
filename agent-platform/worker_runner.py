@@ -154,9 +154,13 @@ async def _run_outbox_worker(stop_event: asyncio.Event) -> None:
         try:
             repository = OutboxRepository(manager.pool)
             incident_repository = IncidentRepository(manager.pool)
+            control_plane_repository = ControlPlaneRepository(manager.pool)
             dispatcher = OutboxDispatcher(
                 repository,
-                IncidentCreationService(incident_repository),
+                IncidentCreationService(
+                    incident_repository,
+                    control_plane_repository=control_plane_repository,
+                ),
                 signal_bus=outbox_signal_bus,
             )
 

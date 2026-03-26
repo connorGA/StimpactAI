@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 
 import { BrandMark } from "@/components/brand-mark";
@@ -41,10 +42,16 @@ export default function LoginPage() {
           </div>
 
           <div className="lg:justify-self-end">
-            <LandingLoginCard />
+            <Suspense fallback={<LoginCardFallback />}>
+              <LandingLoginCard />
+            </Suspense>
           </div>
         </section>
       </div>
     </main>
   );
+}
+
+function LoginCardFallback() {
+  return <div className="landing-login-panel min-h-[420px] rounded-[28px] p-6" />;
 }

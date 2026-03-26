@@ -4,7 +4,9 @@ import {
   getCurrentSession,
   getHealthReadiness,
   getProjectPolicy,
+  getProjectServiceSandboxPlan,
   listProjectApiKeys,
+  listProjectServices,
   listProviderIntegrations,
   listRepoProfiles,
   listSecretRefs,
@@ -70,6 +72,7 @@ export default async function ControlCenterPage() {
     policy,
     integrations,
     repoProfiles,
+    projectServices,
     apiKeys,
     secretRefs,
     readiness,
@@ -80,12 +83,18 @@ export default async function ControlCenterPage() {
       getProjectPolicy(projectId),
       listProviderIntegrations(projectId),
       listRepoProfiles(projectId),
+      listProjectServices(projectId),
       listProjectApiKeys(projectId),
       listSecretRefs(projectId),
       getHealthReadiness().catch(() => null),
       listWorkspaceInvites(session.organization.id).catch(() => []),
       listWorkspaceAccessRequests(session.organization.id).catch(() => []),
     ]);
+  const sandboxPlans = await Promise.all(
+    projectServices.map((service) =>
+      getProjectServiceSandboxPlan(projectId, service.id).catch(() => null),
+    ),
+  );
 
   const guardrails = [
     {
@@ -157,7 +166,7 @@ export default async function ControlCenterPage() {
         }
       />
 
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-5">
         <StatCard
           label="Autonomy mode"
           value={formatMode(policy.autonomy_mode)}
@@ -172,6 +181,12 @@ export default async function ControlCenterPage() {
           value={String(repoProfiles.length)}
           detail="Active repo profiles available for sandbox and repair flows."
           tone="blue"
+        />
+        <StatCard
+          label="Mapped services"
+          value={String(projectServices.length)}
+          detail="Named deployable services currently scoped to this project."
+          tone="white"
         />
         <StatCard
           label="Project API keys"
@@ -223,7 +238,7 @@ export default async function ControlCenterPage() {
 
         <SectionCard
           title="Project access"
-          description="Credentials and repositories currently available to the remediation platform."
+          description="Credentials, repositories, and service mappings currently available to the remediation platform."
         >
           <div className="space-y-4">
             <KeyValueRow label="Provider integrations" value={String(integrations.length)} />
@@ -245,11 +260,117 @@ export default async function ControlCenterPage() {
                 {repoProfiles.length === 0 ? <p>No active repo profiles configured.</p> : null}
               </div>
             </div>
+            <div className="rounded-[20px] bg-[#fff7f2] px-4 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
+                Project services
+              </p>
+              <div className="mt-3 space-y-2 text-sm text-[#5f4b41]">
+                {projectServices.map((service) => (
+                  <p key={service.id}>
+                    {service.name} ({service.service_type}) mapped to{" "}
+                    <code>
+                      {repoProfiles.find((profile) => profile.id === service.repo_profile_id)?.verify_command ??
+                        "unmapped profile"}
+                    </code>
+                  </p>
+                ))}
+                {projectServices.length === 0 ? <p>No project services configured yet.</p> : null}
+              </div>
+            </div>
           </div>
         </SectionCard>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
+        <SectionCard
+          title="Infrastructure map"
+          description="A project-scoped view of the repositories, services, and dependencies currently configured."
+        >
+          <div className="space-y-3">
+            {projectServices.length ? (
+              projectServices.map((service) => (
+                <div
+                  key={service.id}
+                  className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium text-[#171717]">{service.name}</p>
+                    <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#d45a2b]">
+                      {service.service_type}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[#746d66]">
+                    Repo profile:{" "}
+                    {repoProfiles.find((profile) => profile.id === service.repo_profile_id)?.verify_command ??
+                      "Unmapped"}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                    Depends on:{" "}
+                    {service.dependencies.length
+                      ? service.dependencies
+                          .map((dependency) => {
+                            const match = projectServices.find(
+                              (candidate) => candidate.id === dependency.depends_on_service_id,
+                            );
+                            return match?.name ?? dependency.depends_on_service_id;
+                          })
+                          .join(" -> ")
+                      : "No declared dependencies"}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm leading-6 text-[#746d66]">
+                No project services have been mapped yet. Use onboarding to define the project
+                infrastructure that sandbox verification and autonomous repair should target.
+              </p>
+            )}
+          </div>
+        </SectionCard>
+        <SectionCard
+          title="Sandbox plan preview"
+          description="Preview the repo profile, startup commands, and dependency plan the sandbox will use for each mapped service."
+        >
+          <div className="space-y-3">
+            {sandboxPlans.filter(Boolean).length ? (
+              sandboxPlans.filter(Boolean).map((plan) => (
+                <div
+                  key={plan!.target_service.service.id}
+                  className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
+                >
+                  <p className="font-medium text-[#171717]">{plan!.target_service.service.name}</p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                    Startup:{" "}
+                    {plan!.target_service.startup_commands.length
+                      ? plan!.target_service.startup_commands.join(" && ")
+                      : "No startup commands configured"}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                    Dependencies:{" "}
+                    {plan!.dependency_services.length
+                      ? plan!.dependency_services.map((dependency) => dependency.service.name).join(", ")
+                      : "None"}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                    Health checks:{" "}
+                    {plan!.target_service.healthcheck_command ||
+                      plan!.target_service.healthcheck_url ||
+                      "None configured"}
+                  </p>
+                  {plan!.warnings.length ? (
+                    <p className="mt-2 text-sm leading-6 text-[#c25a34]">
+                      {plan!.warnings.join(" ")}
+                    </p>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <p className="text-sm leading-6 text-[#746d66]">
+                Add at least one mapped service to preview sandbox startup and dependency plans.
+              </p>
+            )}
+          </div>
+        </SectionCard>
         <SectionCard
           title="Guardrails"
           description="Operator safety rules now read from the project policy model."

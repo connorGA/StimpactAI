@@ -31,6 +31,26 @@ def _decode_json_array(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _decode_json_object(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return {}
+        try:
+            import json
+
+            parsed = json.loads(normalized)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return {str(key): item for key, item in parsed.items()}
+    return {}
+
+
 class ProviderKind(StrEnum):
     GITHUB = "github"
     GITLAB = "gitlab"
@@ -62,6 +82,24 @@ class RuntimeKind(StrEnum):
     PYTHON = "python"
     NODE = "node"
     CONTAINER = "container"
+
+
+class ProjectServiceType(StrEnum):
+    FRONTEND = "frontend"
+    BACKEND = "backend"
+    API = "api"
+    WORKER = "worker"
+    CRON = "cron"
+    GATEWAY = "gateway"
+    DATABASE = "database"
+    CACHE = "cache"
+    OTHER = "other"
+
+
+class ProjectServiceDependencyKind(StrEnum):
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    MOCK = "mock"
 
 
 class ProviderIntegrationRecord(BaseModel):
@@ -268,6 +306,83 @@ class RepoProfileRecord(BaseModel):
             active=bool(row["active"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+
+class ProjectServiceRoutingHints(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_names: list[str] = Field(default_factory=list)
+    path_prefixes: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_db_value(cls, value: Any) -> "ProjectServiceRoutingHints":
+        payload = _decode_json_object(value)
+        return cls(
+            service_names=_decode_json_array(payload.get("service_names")),
+            path_prefixes=_decode_json_array(payload.get("path_prefixes")),
+            domains=_decode_json_array(payload.get("domains")),
+            tags=_decode_json_array(payload.get("tags")),
+        )
+
+
+class ProjectServiceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    slug: str
+    service_type: ProjectServiceType
+    repo_profile_id: str | None = None
+    owner: str | None = None
+    deploy_target: str | None = None
+    routing_hints: ProjectServiceRoutingHints = Field(default_factory=ProjectServiceRoutingHints)
+    startup_priority: int = 100
+    sandbox_healthcheck_command: str | None = None
+    sandbox_healthcheck_url: str | None = None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectServiceRecord":
+        return cls(
+            id=str(row["id"]),
+            project_id=str(row["project_id"]),
+            name=str(row["name"]),
+            slug=str(row["slug"]),
+            service_type=ProjectServiceType(str(row["service_type"])),
+            repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
+            owner=row["owner"],
+            deploy_target=row["deploy_target"],
+            routing_hints=ProjectServiceRoutingHints.from_db_value(row["routing_hints"]),
+            startup_priority=int(row["startup_priority"]),
+            sandbox_healthcheck_command=row["sandbox_healthcheck_command"],
+            sandbox_healthcheck_url=row["sandbox_healthcheck_url"],
+            active=bool(row["active"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectServiceDependencyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_id: str
+    depends_on_service_id: str
+    dependency_kind: ProjectServiceDependencyKind
+    created_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectServiceDependencyRecord":
+        return cls(
+            service_id=str(row["service_id"]),
+            depends_on_service_id=str(row["depends_on_service_id"]),
+            dependency_kind=ProjectServiceDependencyKind(str(row["dependency_kind"])),
+            created_at=row["created_at"],
         )
 
 

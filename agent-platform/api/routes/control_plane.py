@@ -13,6 +13,7 @@ from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.core.errors import APIError
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.schemas.control_plane import (
+    CreateProjectServiceRequest,
     CreateProjectApiKeyRequest,
     CreateProviderIntegrationRequest,
     CreateProviderRepositoryRequest,
@@ -26,6 +27,9 @@ from api.schemas.control_plane import (
     ProjectApiKeyResponse,
     ProjectOnboardingResponse,
     ProjectPolicyResponse,
+    ProjectSandboxPlanPreviewResponse,
+    ProjectServiceResponse,
+    SandboxPlanServiceResponse,
     ProviderIntegrationOnboardingResponse,
     ProviderInstallationResponse,
     ProviderIntegrationResponse,
@@ -36,6 +40,7 @@ from api.schemas.control_plane import (
     StartGitLabOAuthRequest,
     SecretRefResponse,
     UpdateProjectPolicyRequest,
+    UpdateProjectServiceRequest,
 )
 from models.control_plane import ProviderKind, SecretBackend
 from services.aws_secrets_manager import (
@@ -115,6 +120,7 @@ def _build_onboarding_next_steps(
     integrations: list[ProviderIntegrationOnboardingResponse],
     secret_refs: list[SecretRefResponse],
     repo_profiles: list[RepoProfileResponse],
+    project_services: list[ProjectServiceResponse],
 ) -> list[str]:
     steps: list[str] = []
     if not integrations:
@@ -125,10 +131,12 @@ def _build_onboarding_next_steps(
         steps.append("Add the runtime secrets your sandbox environment needs.")
     if not repo_profiles:
         steps.append("Create a repo profile with reproduce and verify commands.")
+    if repo_profiles and not project_services:
+        steps.append("Create project services and map each one to the correct repo profile.")
     if integrations and not any(item.repositories for item in integrations):
         steps.append("Choose a repository after the sync completes.")
     if integrations and secret_refs and not repo_profiles:
-        steps.append("Sync provider repositories and choose one to activate for sandbox runs.")
+        steps.append("Sync provider repositories and create repo profiles for the services you need.")
     if not steps:
         steps.append("Project onboarding looks complete. Run a sandbox verification to validate the setup.")
     return steps
@@ -162,6 +170,26 @@ async def _build_project_onboarding_response(
     for record in await repository.list_repo_profiles(project_id):
         secret_mounts = await repository.list_repo_profile_secret_bindings(record.id)
         repo_profiles.append(RepoProfileResponse.from_record(record, secret_mounts=secret_mounts))
+    project_service_records = (
+        await repository.list_project_services(project_id)
+        if hasattr(repository, "list_project_services")
+        else []
+    )
+    project_service_dependencies = (
+        await repository.list_project_dependencies_for_services([record.id for record in project_service_records])
+        if project_service_records and hasattr(repository, "list_project_dependencies_for_services")
+        else []
+    )
+    dependency_map: dict[str, list] = {}
+    for item in project_service_dependencies:
+        dependency_map.setdefault(item.service_id, []).append(item)
+    project_services = [
+        ProjectServiceResponse.from_record(
+            record,
+            dependencies=dependency_map.get(record.id, []),
+        )
+        for record in project_service_records
+    ]
     return ProjectOnboardingResponse(
         project_id=project_id,
         policy=ProjectPolicyResponse.from_record(policy),
@@ -169,10 +197,94 @@ async def _build_project_onboarding_response(
         api_keys=api_keys,
         integrations=integration_payloads,
         repo_profiles=repo_profiles,
+        project_services=project_services,
         suggested_next_steps=_build_onboarding_next_steps(
             integrations=integration_payloads,
             secret_refs=secret_refs,
             repo_profiles=repo_profiles,
+            project_services=project_services,
+        ),
+    )
+
+
+async def _build_project_sandbox_plan_preview(
+    *,
+    project_id: str,
+    service_id: str,
+    repository: ControlPlaneRepository,
+) -> ProjectSandboxPlanPreviewResponse:
+    service = await repository.get_project_service(service_id)
+    if service is None or service.project_id != project_id:
+        raise APIError(
+            f"Project service {service_id} was not found for project {project_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="project_service_not_found",
+        )
+    dependency_records = await repository.list_project_service_dependencies(service.id)
+    warnings: list[str] = []
+
+    async def build_service_payload(service_id_value: str) -> SandboxPlanServiceResponse:
+        target_service = await repository.get_project_service(service_id_value)
+        if target_service is None:
+            raise APIError(
+                f"Project service {service_id_value} was not found.",
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="project_service_not_found",
+            )
+        dependencies_for_target = await repository.list_project_service_dependencies(target_service.id)
+        repo_profile = (
+            await repository.get_repo_profile(target_service.repo_profile_id)
+            if target_service.repo_profile_id is not None
+            else None
+        )
+        if repo_profile is None:
+            warnings.append(f"Service {target_service.slug} does not yet have a repo profile.")
+        secret_mounts = (
+            await repository.list_repo_profile_secret_bindings(repo_profile.id)
+            if repo_profile is not None
+            else []
+        )
+        return SandboxPlanServiceResponse(
+            service=ProjectServiceResponse.from_record(target_service, dependencies=dependencies_for_target),
+            repo_profile=RepoProfileResponse.from_record(repo_profile, secret_mounts=secret_mounts)
+            if repo_profile is not None
+            else None,
+            startup_commands=list(repo_profile.startup_commands) if repo_profile is not None else [],
+            healthcheck_command=target_service.sandbox_healthcheck_command,
+            healthcheck_url=target_service.sandbox_healthcheck_url,
+        )
+
+    target_payload = await build_service_payload(service.id)
+    dependency_payloads = [await build_service_payload(item.depends_on_service_id) for item in dependency_records]
+    return ProjectSandboxPlanPreviewResponse(
+        project_id=project_id,
+        target_service=target_payload,
+        dependency_services=dependency_payloads,
+        warnings=warnings,
+    )
+    dependency_map: dict[str, list] = {}
+    for item in project_service_dependencies:
+        dependency_map.setdefault(item.service_id, []).append(item)
+    project_services = [
+        ProjectServiceResponse.from_record(
+            record,
+            dependencies=dependency_map.get(record.id, []),
+        )
+        for record in project_service_records
+    ]
+    return ProjectOnboardingResponse(
+        project_id=project_id,
+        policy=ProjectPolicyResponse.from_record(policy),
+        secret_refs=secret_refs,
+        api_keys=api_keys,
+        integrations=integration_payloads,
+        repo_profiles=repo_profiles,
+        project_services=project_services,
+        suggested_next_steps=_build_onboarding_next_steps(
+            integrations=integration_payloads,
+            secret_refs=secret_refs,
+            repo_profiles=repo_profiles,
+            project_services=project_services,
         ),
     )
 
@@ -607,6 +719,124 @@ async def list_project_repo_profiles(
     repository: ControlPlaneRepository = Depends(get_control_plane_repository),
 ) -> list[RepoProfileResponse]:
     return await list_repo_profiles(project_id=project_id, repository=repository)
+
+
+@project_router.post("/services", response_model=ProjectServiceResponse, status_code=status.HTTP_201_CREATED)
+async def create_project_service(
+    project_id: str,
+    payload: CreateProjectServiceRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectServiceResponse:
+    _assert_project_matches(project_id, payload.project_id)
+    if payload.repo_profile_id is not None:
+        repo_profile = await repository.get_repo_profile(payload.repo_profile_id)
+        if repo_profile is None or repo_profile.project_id != project_id:
+            raise APIError(
+                f"Repo profile {payload.repo_profile_id} was not found for project {project_id}.",
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="repo_profile_not_found",
+            )
+    record = await repository.create_project_service(
+        project_id=project_id,
+        name=payload.name,
+        slug=payload.slug,
+        service_type=payload.service_type,
+        repo_profile_id=payload.repo_profile_id,
+        owner=payload.owner,
+        deploy_target=payload.deploy_target,
+        routing_hints=payload.routing_hints.to_record(),
+        startup_priority=payload.startup_priority,
+        sandbox_healthcheck_command=payload.sandbox_healthcheck_command,
+        sandbox_healthcheck_url=payload.sandbox_healthcheck_url,
+        active=payload.active,
+    )
+    dependencies = await repository.replace_project_service_dependencies(
+        record.id,
+        [
+            (item.depends_on_service_id, item.dependency_kind)
+            for item in payload.dependencies
+        ],
+    )
+    return ProjectServiceResponse.from_record(record, dependencies=dependencies)
+
+
+@project_router.get("/services", response_model=list[ProjectServiceResponse], status_code=status.HTTP_200_OK)
+async def list_project_services(
+    project_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> list[ProjectServiceResponse]:
+    records = await repository.list_project_services(project_id)
+    dependencies = await repository.list_project_dependencies_for_services([record.id for record in records])
+    dependency_map: dict[str, list] = {}
+    for item in dependencies:
+        dependency_map.setdefault(item.service_id, []).append(item)
+    return [
+        ProjectServiceResponse.from_record(record, dependencies=dependency_map.get(record.id, []))
+        for record in records
+    ]
+
+
+@project_router.put("/services/{service_id}", response_model=ProjectServiceResponse, status_code=status.HTTP_200_OK)
+async def update_project_service(
+    project_id: str,
+    service_id: str,
+    payload: UpdateProjectServiceRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectServiceResponse:
+    existing = await repository.get_project_service(service_id)
+    if existing is None or existing.project_id != project_id:
+        raise APIError(
+            f"Project service {service_id} was not found for project {project_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="project_service_not_found",
+        )
+    if payload.repo_profile_id is not None:
+        repo_profile = await repository.get_repo_profile(payload.repo_profile_id)
+        if repo_profile is None or repo_profile.project_id != project_id:
+            raise APIError(
+                f"Repo profile {payload.repo_profile_id} was not found for project {project_id}.",
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="repo_profile_not_found",
+            )
+    record = await repository.update_project_service(
+        service_id,
+        name=payload.name,
+        slug=payload.slug,
+        service_type=payload.service_type,
+        repo_profile_id=payload.repo_profile_id,
+        owner=payload.owner,
+        deploy_target=payload.deploy_target,
+        routing_hints=payload.routing_hints.to_record(),
+        startup_priority=payload.startup_priority,
+        sandbox_healthcheck_command=payload.sandbox_healthcheck_command,
+        sandbox_healthcheck_url=payload.sandbox_healthcheck_url,
+        active=payload.active,
+    )
+    dependencies = await repository.replace_project_service_dependencies(
+        record.id,
+        [
+            (item.depends_on_service_id, item.dependency_kind)
+            for item in payload.dependencies
+        ],
+    )
+    return ProjectServiceResponse.from_record(record, dependencies=dependencies)
+
+
+@project_router.get(
+    "/services/{service_id}/sandbox-plan",
+    response_model=ProjectSandboxPlanPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_service_sandbox_plan(
+    project_id: str,
+    service_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectSandboxPlanPreviewResponse:
+    return await _build_project_sandbox_plan_preview(
+        project_id=project_id,
+        service_id=service_id,
+        repository=repository,
+    )
 
 
 @public_router.get(
