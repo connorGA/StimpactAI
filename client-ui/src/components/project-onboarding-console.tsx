@@ -1,11 +1,13 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  AuthSession,
   GitLabOAuthStartResponse,
   ProjectOnboarding,
+  ProjectSummary,
   ProviderRepository,
 } from "@/lib/types";
 
@@ -18,13 +20,11 @@ type ApiErrorPayload = {
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
-  projectKey?: string,
 ): Promise<T> {
   const response = await fetch(`/api/onboarding/${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(projectKey ? { "X-Stimpact-Project-Key": projectKey } : {}),
       ...(init.headers ?? {}),
     },
   });
@@ -46,12 +46,15 @@ async function requestJson<T>(
 }
 
 export function ProjectOnboardingConsole() {
-  const [projectId, setProjectId] = useState("project-1");
-  const [projectKey, setProjectKey] = useState("");
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [projectId, setProjectId] = useState("");
   const [state, setState] = useState<ProjectOnboarding | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("Production");
+  const [newProjectSlug, setNewProjectSlug] = useState("production");
 
   const [githubName, setGithubName] = useState("Acme GitHub");
   const [githubInstallationId, setGithubInstallationId] = useState("");
@@ -80,6 +83,55 @@ export function ProjectOnboardingConsole() {
     return state.integrations.flatMap((integration) => integration.repositories);
   }, [state]);
 
+  const loadOnboardingState = useCallback(async (bootstrap = false) => {
+    const encodedProjectId = encodeURIComponent(projectId.trim());
+    const payload = await requestJson<ProjectOnboarding>(
+      `projects/${encodedProjectId}/${bootstrap ? "bootstrap" : "onboarding"}`,
+      {
+        method: bootstrap ? "POST" : "GET",
+      },
+    );
+    setState(payload);
+    if (!selectedRepositoryId && payload.integrations[0]?.repositories[0]?.id) {
+      setSelectedRepositoryId(payload.integrations[0].repositories[0].id);
+    }
+    if (!selectedSecretRefId && payload.secret_refs[0]?.id) {
+      setSelectedSecretRefId(payload.secret_refs[0].id);
+      setSecretMountAs(payload.secret_refs[0].label);
+    }
+  }, [projectId, selectedRepositoryId, selectedSecretRefId]);
+
+  useEffect(() => {
+    async function loadSession() {
+      try {
+        const response = await fetch("/api/auth/session", {
+          method: "GET",
+        });
+        if (!response.ok) {
+          throw new Error("Unable to load session.");
+        }
+        const payload = (await response.json()) as Omit<AuthSession, "access_token">;
+        const normalized = { ...payload, access_token: "" } as AuthSession;
+        setSession(normalized);
+        if (payload.projects[0]?.id) {
+          setProjectId(payload.projects[0].id);
+        }
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load session.");
+      }
+    }
+    void loadSession();
+  }, []);
+
+  useEffect(() => {
+    if (!projectId.trim()) {
+      return;
+    }
+    void loadOnboardingState(false).catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to load onboarding.");
+    });
+  }, [loadOnboardingState, projectId]);
+
   async function withFeedback(
     action: () => Promise<void>,
     successMessage: string,
@@ -98,25 +150,6 @@ export function ProjectOnboardingConsole() {
       );
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function loadOnboardingState(bootstrap = false) {
-    const encodedProjectId = encodeURIComponent(projectId.trim());
-    const payload = await requestJson<ProjectOnboarding>(
-      `projects/${encodedProjectId}/${bootstrap ? "bootstrap" : "onboarding"}`,
-      {
-        method: bootstrap ? "POST" : "GET",
-      },
-      projectKey.trim() || undefined,
-    );
-    setState(payload);
-    if (!selectedRepositoryId && payload.integrations[0]?.repositories[0]?.id) {
-      setSelectedRepositoryId(payload.integrations[0].repositories[0].id);
-    }
-    if (!selectedSecretRefId && payload.secret_refs[0]?.id) {
-      setSelectedSecretRefId(payload.secret_refs[0].id);
-      setSecretMountAs(payload.secret_refs[0].label);
     }
   }
 
@@ -144,7 +177,6 @@ export function ProjectOnboardingConsole() {
             installation_id: githubInstallationId || undefined,
           }),
         },
-        projectKey.trim() || undefined,
       );
       await loadOnboardingState(false);
     }, "GitHub integration connected.");
@@ -162,7 +194,6 @@ export function ProjectOnboardingConsole() {
             gitlab_base_url: gitlabBaseUrl || undefined,
           }),
         },
-        projectKey.trim() || undefined,
       );
       setLastGitLabAuthUrl(response.authorization_url);
       await loadOnboardingState(false);
@@ -176,7 +207,6 @@ export function ProjectOnboardingConsole() {
         {
           method: "POST",
         },
-        projectKey.trim() || undefined,
       );
       await loadOnboardingState(false);
     }, "Provider repositories synced.");
@@ -195,7 +225,6 @@ export function ProjectOnboardingConsole() {
             value: secretValue,
           }),
         },
-        projectKey.trim() || undefined,
       );
       setSecretValue("");
       await loadOnboardingState(false);
@@ -233,36 +262,83 @@ export function ProjectOnboardingConsole() {
                 : [],
           }),
         },
-        projectKey.trim() || undefined,
       );
       await loadOnboardingState(false);
     }, "Repo profile created.");
   }
 
+  async function createFirstProject() {
+    setCreatingProject(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const response = await fetch("/api/auth/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: newProjectName,
+          slug: newProjectSlug,
+        }),
+      });
+      const payload = (await response.json()) as
+        | ProjectSummary
+        | { error?: { message?: string } };
+      if (!response.ok || !("id" in payload)) {
+        throw new Error(
+          "error" in payload ? payload.error?.message ?? "Project creation failed." : "Project creation failed.",
+        );
+      }
+      const sessionResponse = await fetch("/api/auth/session", { method: "GET" });
+      if (sessionResponse.ok) {
+        const sessionPayload = (await sessionResponse.json()) as Omit<AuthSession, "access_token">;
+        setSession({ ...sessionPayload, access_token: "" } as AuthSession);
+      }
+      setProjectId(payload.id);
+      setStatusMessage("Project created. Continue with provider, secret, and repo profile setup.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Project creation failed.");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <section className="vault-panel-strong rounded-[24px] p-6">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
-          <Field
-            label="Project ID"
-            value={projectId}
-            onChange={setProjectId}
-            placeholder="acme-prod"
-          />
-          <Field
-            label="Project onboarding key"
-            value={projectKey}
-            onChange={setProjectKey}
-            placeholder="Optional project-scoped key"
-            type="password"
-          />
-          <ActionButton label="Bootstrap" onClick={bootstrapProject} disabled={loading || !projectId.trim()} />
-          <ActionButton label="Refresh" onClick={refreshProject} disabled={loading || !projectId.trim()} />
-        </div>
-        <p className="mt-3 text-sm leading-6 text-[#746d66]">
-          Use a project-scoped key if you want to exercise the safer onboarding access path. If the dashboard is
-          configured with an operator admin token, this page can also operate in managed mode.
-        </p>
+        {projectId.trim() ? (
+          <>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+              <ReadOnlyField
+                label="Workspace"
+                value={session?.organization.name ?? "Workspace"}
+              />
+              <ReadOnlyField label="Project" value={projectId} />
+              <ActionButton label="Bootstrap" onClick={bootstrapProject} disabled={loading || !projectId.trim()} />
+              <ActionButton label="Refresh" onClick={refreshProject} disabled={loading || !projectId.trim()} />
+            </div>
+            <p className="mt-3 text-sm leading-6 text-[#746d66]">
+              Your onboarding actions are now scoped to the authenticated workspace and selected project.
+            </p>
+          </>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-[#746d66]">
+              Create the first protected project for {session?.organization.name ?? "your workspace"} before
+              connecting repositories or storing runtime secrets.
+            </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Project name" value={newProjectName} onChange={setNewProjectName} />
+              <Field label="Project slug" value={newProjectSlug} onChange={setNewProjectSlug} />
+            </div>
+            <ActionButton
+              label={creatingProject ? "Creating project..." : "Create first project"}
+              onClick={createFirstProject}
+              disabled={creatingProject || !newProjectName.trim() || !newProjectSlug.trim()}
+            />
+          </div>
+        )}
         {statusMessage ? <Banner tone="success" message={statusMessage} /> : null}
         {errorMessage ? <Banner tone="error" message={errorMessage} /> : null}
       </section>
@@ -537,6 +613,17 @@ function Field({
         className="w-full rounded-[16px] border border-[rgba(17,24,39,0.12)] bg-white px-4 py-3 text-sm text-[#171717] outline-none transition focus:border-[rgba(52,81,209,0.42)]"
       />
     </label>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="block">
+      <span className="mb-2 block text-sm font-medium text-[#171717]">{label}</span>
+      <div className="w-full rounded-[16px] border border-[rgba(17,24,39,0.12)] bg-[#f8fbff] px-4 py-3 text-sm text-[#171717]">
+        {value}
+      </div>
+    </div>
   );
 }
 

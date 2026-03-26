@@ -1,9 +1,11 @@
 import Link from "next/link";
 
+import { BrandMark } from "@/components/brand-mark";
+import { LandingContactForm } from "@/components/landing-contact-form";
+
 const NAV_ITEMS = [
-  { label: "HOME", href: "#home" },
-  { label: "ABOUT US", href: "#about" },
-  { label: "GALLERY", href: "#gallery" },
+  { label: "HOW IT WORKS", href: "#about" },
+  { label: "PRICING", href: "#pricing" },
   { label: "CONTACT US", href: "#contact" },
 ];
 
@@ -81,57 +83,62 @@ const SERVICE_HIGHLIGHTS = [
 
 const PRICING_PLANS = [
   {
-    name: "Starter",
-    price: "$299",
+    name: "Basic",
+    price: "$15",
     cadence: "per project / month",
-    summary: "Best for teams that want live incident visibility and guided response on a single integrated project.",
+    summary:
+      "For teams that want real-time detection, a shared dashboard, AI chatbot access, incident chat, and basic investigation on one protected project.",
     features: [
       "1 integrated project",
       "real-time error detection",
-      "live panel and incident chat",
-      "sandbox repair validation",
-      "human approval before execution",
+      "live dashboard, AI chatbot, and incident chat",
+      "basic incident investigation",
+      "shared timeline and evidence view",
+      "no automated repair execution",
     ],
-    accent: "launch safely",
+    accent: "visibility first",
   },
   {
     name: "Growth",
-    price: "$899",
+    price: "$50",
     cadence: "per project / month",
-    summary: "For production teams that want autonomous repair loops, richer visibility, and optional repository execution.",
+    summary:
+      "The full Stimpact suite for one integrated project, including repair generation, replica sandbox validation, and optional execution controls.",
     features: [
-      "up to 3 environments per project",
+      "1 integrated project",
+      "full detection and investigation suite",
       "automatic repair drafting",
       "replica sandbox verification",
-      "git operations when enabled",
-      "optional redeploy triggers",
+      "git operations and redeploy when enabled",
     ],
-    accent: "most popular",
+    accent: "full suite",
     featured: true,
   },
   {
     name: "Scale",
-    price: "$2,400+",
-    cadence: "per project / month",
-    summary: "For critical systems needing deeper policy controls, enterprise workflows, and higher-volume operational coverage.",
+    price: "$99",
+    cadence: "per month",
+    priceNote: "+ $30 / month for each project after 3",
+    summary:
+      "For teams running Stimpact across multiple integrated projects with shared controls, broader coverage, and centralized operations.",
     features: [
-      "custom environment mappings",
-      "advanced policy and approval rules",
-      "multi-team coordination surfaces",
-      "enterprise deployment integrations",
-      "priority onboarding and support",
+      "multi-project coverage",
+      "full suite on every connected project",
+      "cross-project policy and approval controls",
+      "centralized operations visibility",
+      "custom rollout and support options",
     ],
-    accent: "custom control",
+    accent: "multi-project",
   },
 ] as const;
 
 const WAVE_LAYERS = Array.from({ length: 22 }, (_, index) => index);
 const WAVE_PATH_A =
-  "M-180 414 C 20 610, 162 214, 338 332 S 618 632, 770 362 1012 112, 1186 252 1406 516, 1660 236";
+  "M-420 414 C -150 610, 80 214, 318 332 S 618 632, 770 362 1012 112, 1186 252 1466 516, 1920 236";
 const WAVE_PATH_B =
-  "M-180 392 C 18 560, 168 248, 342 354 S 620 608, 770 346 1014 146, 1190 276 1408 486, 1660 262";
+  "M-420 392 C -160 560, 86 248, 322 354 S 620 608, 770 346 1014 146, 1190 276 1468 486, 1920 262";
 const WAVE_PATH_C =
-  "M-180 430 C 12 646, 156 190, 334 314 S 616 654, 772 378 1010 88, 1182 234 1402 536, 1660 214";
+  "M-420 430 C -170 646, 72 190, 314 314 S 616 654, 772 378 1010 88, 1182 234 1462 536, 1920 214";
 
 export default function Home() {
   return (
@@ -140,16 +147,17 @@ export default function Home() {
         id="home"
         className="landing-reference-shell relative flex min-h-screen w-full flex-col overflow-hidden px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10"
       >
-        <div className="landing-dot-matrix absolute bottom-12 right-10 z-20 h-12 w-44 sm:bottom-14 sm:right-16" />
-        <div className="landing-orb landing-orb-left" />
+        <div className="landing-static-tag absolute bottom-12 right-8 z-20 sm:bottom-14 sm:right-16">
+          Self-healing Software
+        </div>
         <div className="landing-orb landing-orb-top" />
         <div className="landing-orb landing-orb-right" />
         <div className="landing-orb landing-orb-bottom" />
 
         <header className="relative z-30 grid items-center gap-6 md:grid-cols-[auto_1fr_auto]">
           <Link href="/" className="inline-flex w-fit items-center gap-3 text-white/90">
-            <BrandMark />
-            <span className="text-sm font-semibold tracking-[0.04em]">Stimpact</span>
+            <BrandMark className="h-11 w-11" />
+            <span className="text-sm font-semibold tracking-[0.04em]">Stimpact.ai</span>
           </Link>
 
           <nav
@@ -164,28 +172,29 @@ export default function Home() {
           </nav>
 
           <Link
-            href="/live"
+            href="/login"
             className="landing-reference-outline-button hidden justify-self-end px-5 py-2 text-sm font-medium text-white/80 sm:inline-flex"
           >
-            learn more
+            Login
           </Link>
         </header>
 
         <AnimatedWaveHero />
 
-        <div className="relative z-30 mt-16 max-w-[520px] sm:mt-20 lg:mt-28">
-          <h1 className="text-5xl font-semibold tracking-[-0.04em] text-white/92 sm:text-6xl lg:text-[4.15rem]">
-            Landing Page
+        <div className="landing-hero-copy relative z-30 mt-16 max-w-[660px] sm:mt-20 lg:mt-28">
+          <h1 className="text-6xl font-semibold tracking-[-0.05em] text-white/94 sm:text-7xl lg:text-[5.35rem]">
+            Stimpact.ai
           </h1>
-          <p className="mt-4 max-w-[420px] text-sm leading-6 text-white/42 sm:text-[15px]">
-            Stimpact brings autonomous incident response, live operations, and sandbox
-            verification into one cinematic control surface for modern reliability teams.
+          <p className="mt-5 max-w-[580px] text-lg leading-9 text-white/76 sm:text-[1.45rem]">
+            Stimpact brings autonomous incident response, self-healing solutions, and
+            sandbox verification into one cinematic control surface for modern reliability
+            teams.
           </p>
         </div>
 
         <div className="relative z-30 mt-auto pt-16">
           <Link
-            href="/onboarding"
+            href="#pricing"
             className="landing-reference-outline-button inline-flex px-6 py-2.5 text-xl font-medium text-white/88"
           >
             sign up
@@ -196,27 +205,9 @@ export default function Home() {
 
       <SystemFlowSection />
       <PricingSection />
+      <ContactSection />
       <FooterSection />
-
-      <div id="gallery" className="sr-only">
-        Gallery section anchor
-      </div>
-      <div id="contact" className="sr-only">
-        Contact section anchor
-      </div>
     </main>
-  );
-}
-
-function BrandMark() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 32 32" className="h-9 w-9 text-white/86">
-      <g fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M16 3.75 27.5 10.5V21.5L16 28.25 4.5 21.5V10.5L16 3.75Z" opacity="0.88" />
-        <path d="M16 8.5 23 12.5V19.5L16 23.5 9 19.5V12.5L16 8.5Z" opacity="0.92" />
-        <path d="M11.2 16h9.6" opacity="0.55" />
-      </g>
-    </svg>
   );
 }
 
@@ -265,7 +256,7 @@ function AnimatedWaveHero() {
               <g key={index} className="landing-wave-layer">
                 <path
                   d={WAVE_PATH_A}
-                  transform={`translate(${index * 24 - 180} ${Math.sin(index * 0.55) * 24})`}
+                  transform={`translate(${index * 24 - 260} ${Math.sin(index * 0.55) * 24})`}
                   fill="none"
                   stroke="url(#landing-wave-stroke)"
                   strokeWidth="2.6"
@@ -313,13 +304,13 @@ function SystemFlowSection() {
     <section id="about" className="landing-flow-section relative overflow-hidden px-6 py-24 sm:px-8 lg:px-12 lg:py-32">
       <div className="mx-auto max-w-[1280px]">
         <div className="mx-auto max-w-[760px] text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/42">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/52">
             System flow
           </p>
           <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white/92 sm:text-5xl">
             One continuous operating loop from signal intake to verified resolution.
           </h2>
-          <p className="mx-auto mt-5 max-w-[680px] text-base leading-7 text-white/50">
+          <p className="mx-auto mt-5 max-w-[680px] text-lg leading-8 text-white/62">
             From the first production error to sandbox verification and optional execution,
             the service behaves like one coordinated response loop your team can watch live.
           </p>
@@ -329,7 +320,7 @@ function SystemFlowSection() {
           {SERVICE_HIGHLIGHTS.map((item) => (
             <div key={item.title} className="landing-highlight-card">
               <p className="text-sm font-semibold tracking-tight text-white/90">{item.title}</p>
-              <p className="mt-2 text-sm leading-6 text-white/48">{item.detail}</p>
+              <p className="mt-2 text-sm leading-6 text-white/60">{item.detail}</p>
             </div>
           ))}
         </div>
@@ -344,7 +335,7 @@ function SystemFlowSection() {
             >
               <div className="landing-flow-card relative">
                 <div className="flex items-center justify-between gap-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/42">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/52">
                     {step.eyebrow}
                   </p>
                   <span className="landing-flow-accent-pill">{step.accent}</span>
@@ -352,8 +343,8 @@ function SystemFlowSection() {
                 <h3 className="mt-4 text-2xl font-semibold tracking-tight text-white/92">
                   {step.title}
                 </h3>
-                <p className="mt-4 text-base leading-7 text-white/58">{step.summary}</p>
-                <p className="mt-4 text-sm leading-7 text-white/42">{step.detail}</p>
+                <p className="mt-4 text-base leading-8 text-white/70">{step.summary}</p>
+                <p className="mt-4 text-sm leading-7 text-white/56">{step.detail}</p>
                 <div className="mt-5 flex flex-wrap gap-2.5">
                   {step.points.map((point) => (
                     <span key={point} className="landing-flow-point-pill">
@@ -386,18 +377,18 @@ function getFlowNodeColor(index: number) {
 
 function PricingSection() {
   return (
-    <section className="relative px-6 py-24 sm:px-8 lg:px-12 lg:py-28">
+    <section id="pricing" className="relative px-6 py-24 sm:px-8 lg:px-12 lg:py-28">
       <div className="mx-auto max-w-[1280px]">
         <div className="mx-auto max-w-[820px] text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/42">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/52">
             Pricing
           </p>
           <h2 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white/92 sm:text-5xl">
             Pricing that scales by integrated project, not by passive seats.
           </h2>
-          <p className="mx-auto mt-5 max-w-[720px] text-base leading-7 text-white/50">
-            Each connected project gets its own live detection, sandbox validation, and
-            repair workflow. Teams pay for the projects Stimpact is actively protecting.
+          <p className="mx-auto mt-5 max-w-[720px] text-lg leading-8 text-white/62">
+            Start with visibility on a single project, unlock the full repair loop on one
+            protected service, then scale across multiple projects when your stack grows.
           </p>
         </div>
 
@@ -405,14 +396,14 @@ function PricingSection() {
           {PRICING_PLANS.map((plan) => (
             <section
               key={plan.name}
-              className={`landing-pricing-card ${plan.featured ? "landing-pricing-card-featured" : ""}`}
+              className={`landing-pricing-card h-full ${plan.featured ? "landing-pricing-card-featured" : ""}`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold tracking-[0.08em] text-white/86">
                     {plan.name}
                   </p>
-                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/38">
+                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/48">
                     {plan.accent}
                   </p>
                 </div>
@@ -423,30 +414,33 @@ function PricingSection() {
                 <span className="text-4xl font-semibold tracking-tight text-white/94 sm:text-5xl">
                   {plan.price}
                 </span>
-                <span className="pb-1 text-sm text-white/46">{plan.cadence}</span>
+                <span className="pb-1 text-sm text-white/58">{plan.cadence}</span>
               </div>
+              {"priceNote" in plan ? (
+                <p className="mt-2 text-xs leading-6 text-white/48">{plan.priceNote}</p>
+              ) : null}
 
-              <p className="mt-5 text-sm leading-7 text-white/56">{plan.summary}</p>
+              <div className="mt-5 flex flex-1 flex-col">
+                <p className="text-sm leading-7 text-white/66">{plan.summary}</p>
 
-              <div className="mt-8 space-y-3">
-                {plan.features.map((feature) => (
-                  <div key={feature} className="landing-pricing-feature">
-                    <span className="landing-pricing-feature-dot" />
-                    <span>{feature}</span>
+                <div className="landing-pricing-feature-zone">
+                  <div className="landing-pricing-feature-list">
+                    {plan.features.map((feature) => (
+                      <div key={feature} className="landing-pricing-feature">
+                        <span className="landing-pricing-feature-dot" />
+                        <span>{feature}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
 
-              <Link
-                href="/onboarding"
-                className={`mt-8 inline-flex w-full items-center justify-center rounded-full px-5 py-3 text-sm font-semibold ${
-                  plan.featured
-                    ? "landing-button-primary text-white"
-                    : "landing-reference-outline-button text-white/88"
-                }`}
-              >
-                Start this plan
-              </Link>
+                <Link
+                  href={`/signup?plan=${plan.name.toLowerCase()}`}
+                  className="landing-button-primary inline-flex w-full items-center justify-center rounded-full px-5 py-3 text-sm font-semibold text-white"
+                >
+                  Start this plan
+                </Link>
+              </div>
             </section>
           ))}
         </div>
@@ -462,10 +456,10 @@ function FooterSection() {
         <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-[520px]">
             <div className="inline-flex items-center gap-3 text-white/88">
-              <BrandMark />
-              <span className="text-sm font-semibold tracking-[0.04em]">Stimpact</span>
+              <BrandMark className="h-10 w-10" />
+              <span className="text-sm font-semibold tracking-[0.04em]">Stimpact.ai</span>
             </div>
-            <p className="mt-4 text-sm leading-7 text-white/46">
+            <p className="mt-4 text-sm leading-7 text-white/58">
               Real-time incident detection, autonomous repair workflows, replica sandbox
               verification, and optional git and redeploy execution for every protected
               project.
@@ -474,43 +468,68 @@ function FooterSection() {
 
           <div className="grid gap-8 text-sm sm:grid-cols-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/50">
                 Platform
               </p>
-              <div className="mt-4 space-y-3 text-white/56">
+              <div className="mt-4 space-y-3 text-white/66">
                 <p>Detection</p>
                 <p>Sandbox repair</p>
                 <p>Live panel</p>
               </div>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/50">
                 Execution
               </p>
-              <div className="mt-4 space-y-3 text-white/56">
+              <div className="mt-4 space-y-3 text-white/66">
                 <p>Git operations</p>
                 <p>Deploy controls</p>
                 <p>Approval policies</p>
               </div>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/40">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/50">
                 Access
               </p>
-              <div className="mt-4 space-y-3 text-white/56">
-                <Link href="/onboarding">Get started</Link>
-                <Link href="/live">Open live workspace</Link>
+              <div className="mt-4 space-y-3 text-white/66">
+                <Link href="/signup">Get started</Link>
+                <Link href="/login">Open live workspace</Link>
                 <Link href="#about">View system flow</Link>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col gap-3 border-t border-white/8 pt-6 text-xs text-white/34 sm:flex-row sm:items-center sm:justify-between">
-          <p>Pricing is billed per integrated project under active protection.</p>
-          <p>Execution steps like git push or redeploy only run when explicitly enabled.</p>
+        <div className="mt-8 flex flex-col gap-3 border-t border-white/8 pt-6 text-xs text-white/46 sm:flex-row sm:items-center sm:justify-between">
+          <p>Basic and Growth cover one integrated project; Scale expands across multiple projects.</p>
+          <p>Git operations and redeploy steps only run when explicitly enabled by the user.</p>
         </div>
       </div>
     </footer>
+  );
+}
+
+function ContactSection() {
+  return (
+    <section id="contact" className="landing-contact-section relative px-6 py-24 sm:px-8 lg:px-12 lg:py-28">
+      <div className="landing-contact-card mx-auto max-w-[1280px]">
+        <div className="mx-auto max-w-[760px] text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/52">
+            Contact us
+          </p>
+          <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-white/94 sm:text-4xl">
+            Talk to us about protecting your stack.
+          </h2>
+          <p className="mt-4 text-base leading-8 text-white/68">
+            Tell us what you want Stimpact.ai to watch, validate, or repair. We will route
+            your note directly to connor@stimpact.ai.
+          </p>
+        </div>
+
+        <div className="mt-10 mx-auto max-w-[760px]">
+          <LandingContactForm />
+        </div>
+      </div>
+    </section>
   );
 }

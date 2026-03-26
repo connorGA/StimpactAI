@@ -8,8 +8,8 @@ export default function OnboardingPage() {
     <main className="space-y-6">
       <PageHeader
         eyebrow="Project onboarding"
-        title="Connect a project, store secrets securely, and prepare sandbox execution"
-        description="Use this guided flow to bootstrap a project, connect GitHub or GitLab, sync repositories, store runtime secrets in AWS Secrets Manager, and create the repo profile that powers sandbox verification."
+        title="Create a protected project, then connect repositories and sandbox verification"
+        description="Use this authenticated onboarding flow to create the first project in your workspace, connect GitHub or GitLab, store runtime secrets securely, and define the repo profile that powers sandbox execution."
       />
       <ProjectOnboardingConsole />
     </main>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ProjectSetupState } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -13,6 +14,7 @@ import {
   getLiveStatusSummary,
   getServiceHealthRows,
 } from "@/lib/dashboard";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
 import type {
   AutonomousRunStatus,
   IncidentAutonomousRunDetail,
@@ -20,8 +22,18 @@ import type {
 } from "@/lib/types";
 
 export async function LiveWorkspacePage() {
-  const incidentList = await getIncidents({ limit: 12, offset: 0 });
-  const reporting = await getIncidentReportingOverview();
+  const projectId = await resolvePrimaryProjectId();
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Live workspace"
+        title="Create your first protected project before opening live operations"
+        description="The live workspace reads from project-scoped incident data. Finish onboarding first, then this route will show the active warning stream, current system state, and operator updates."
+      />
+    );
+  }
+  const incidentList = await getIncidents({ projectId: projectId ?? undefined, limit: 12, offset: 0 });
+  const reporting = await getIncidentReportingOverview(projectId ?? undefined);
   const incidents = incidentList.items;
   const openIncidents = reporting.open_incidents;
   const liveStatus = getLiveStatusSummary(incidents);

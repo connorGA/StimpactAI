@@ -1,16 +1,43 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export function LandingLoginCard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSubmitting(true);
-    router.push("/live");
+    setErrorMessage(null);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        throw new Error(payload.error?.message ?? "Login failed.");
+      }
+      router.push(searchParams.get("next") || "/live");
+      router.refresh();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Login failed.");
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -31,24 +58,11 @@ export function LandingLoginCard() {
       </div>
 
       <p className="mt-3 text-sm leading-6 text-white/72">
-        Use your team account to open the live workspace, review incidents, and coordinate
-        autonomous response.
+        Sign in with your work email to open the live workspace, review incidents, and
+        coordinate autonomous response across your team.
       </p>
 
       <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
-        <label className="block">
-          <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-white/54">
-            Team workspace
-          </span>
-          <input
-            type="text"
-            name="workspace"
-            defaultValue="stimpact-prod"
-            className="landing-input w-full rounded-[18px] px-4 py-3 text-sm text-white"
-            placeholder="your-team"
-            autoComplete="organization"
-          />
-        </label>
         <label className="block">
           <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-white/54">
             Work email
@@ -56,10 +70,12 @@ export function LandingLoginCard() {
           <input
             type="email"
             name="email"
-            defaultValue="ops@stimpact.ai"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
             className="landing-input w-full rounded-[18px] px-4 py-3 text-sm text-white"
             placeholder="you@company.com"
             autoComplete="email"
+            required
           />
         </label>
         <label className="block">
@@ -69,12 +85,20 @@ export function LandingLoginCard() {
           <input
             type="password"
             name="password"
-            defaultValue="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
             className="landing-input w-full rounded-[18px] px-4 py-3 text-sm text-white"
             placeholder="Enter your password"
             autoComplete="current-password"
+            required
           />
         </label>
+
+        {errorMessage ? (
+          <div className="rounded-[18px] border border-[rgba(255,106,61,0.24)] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-white/80">
+            {errorMessage}
+          </div>
+        ) : null}
 
         <button
           type="submit"
@@ -86,8 +110,8 @@ export function LandingLoginCard() {
       </form>
 
       <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/10 pt-4 text-xs text-white/52">
-        <span>SSO-ready team access</span>
         <span>Protected workspace routes</span>
+        <span>Join your team by invite or approved access</span>
       </div>
     </section>
   );

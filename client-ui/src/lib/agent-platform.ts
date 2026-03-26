@@ -1,7 +1,13 @@
 import "server-only";
 
+import { cookies } from "next/headers";
+
 import type {
+  AccessRequest,
+  ApproveAccessRequestResponse,
   AutonomousRunQueuedResponse,
+  AuthSession,
+  CreateInviteResponse,
   GitLabOAuthStartResponse,
   HealthReadiness,
   IncidentClassification,
@@ -14,15 +20,18 @@ import type {
   IncidentRootCause,
   IncidentSandboxRunDetail,
   IncidentSandboxRun,
+  OrganizationInvite,
   ProjectApiKey,
   ProjectOnboarding,
   ProjectPolicy,
   ProviderIntegration,
   ProviderRepository,
+  ProjectSummary,
   RepoProfile,
   SandboxRunQueuedResponse,
   SecretRef,
 } from "@/lib/types";
+import { SESSION_COOKIE_NAME } from "@/lib/auth-session";
 
 const AGENT_PLATFORM_API_URL =
   process.env.AGENT_PLATFORM_API_URL ?? "http://127.0.0.1:8000";
@@ -52,16 +61,29 @@ function buildControlPlaneHeaders(headers?: HeadersInit): HeadersInit {
   };
 }
 
+async function buildAuthenticatedHeaders(headers?: HeadersInit): Promise<HeadersInit> {
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (sessionToken) {
+    return {
+      Authorization: `Bearer ${sessionToken}`,
+      ...headers,
+    };
+  }
+  return buildControlPlaneHeaders(headers);
+}
+
 async function fetchFromAgentPlatform<T>({
   path,
   headers,
   ...init
 }: FetchOptions): Promise<T> {
+  const resolvedHeaders = await buildAuthenticatedHeaders(headers);
   const response = await fetch(`${AGENT_PLATFORM_API_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...headers,
+      ...resolvedHeaders,
     },
     cache: "no-store",
   });
@@ -88,7 +110,7 @@ async function fetchFromControlPlane<T>(path: string, init?: RequestInit): Promi
   return fetchFromAgentPlatform<T>({
     path,
     ...init,
-    headers: buildControlPlaneHeaders(init?.headers),
+    headers: init?.headers,
   });
 }
 
@@ -313,27 +335,28 @@ export async function getHealthReadiness(): Promise<HealthReadiness> {
 export async function listProviderIntegrations(
   projectId?: string,
 ): Promise<ProviderIntegration[]> {
-  const searchParams = new URLSearchParams();
   if (projectId) {
-    searchParams.set("project_id", projectId);
+    return fetchFromControlPlane<ProviderIntegration[]>(
+      `/control-plane/projects/${encodeURIComponent(projectId)}/provider-integrations`,
+      { method: "GET" },
+    );
   }
-  const query = searchParams.toString();
   return fetchFromControlPlane<ProviderIntegration[]>(
-    `/control-plane/provider-integrations${query ? `?${query}` : ""}`,
+    "/control-plane/provider-integrations",
     { method: "GET" },
   );
 }
 
 export async function listRepoProfiles(projectId: string): Promise<RepoProfile[]> {
   return fetchFromControlPlane<RepoProfile[]>(
-    `/control-plane/repo-profiles?project_id=${encodeURIComponent(projectId)}`,
+    `/control-plane/projects/${encodeURIComponent(projectId)}/repo-profiles`,
     { method: "GET" },
   );
 }
 
 export async function listSecretRefs(projectId: string): Promise<SecretRef[]> {
   return fetchFromControlPlane<SecretRef[]>(
-    `/control-plane/secret-refs?project_id=${encodeURIComponent(projectId)}`,
+    `/control-plane/projects/${encodeURIComponent(projectId)}/secret-refs`,
     { method: "GET" },
   );
 }
@@ -475,4 +498,117 @@ export async function createProjectRepoProfile(
       body: JSON.stringify(body),
     },
   );
+}
+
+export async function loginWithPassword(body: {
+  email: string;
+  password: string;
+}): Promise<AuthSession> {
+  return fetchFromAgentPlatform<AuthSession>({
+    path: "/auth/login",
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {},
+  });
+}
+
+export async function signupWorkspace(body: {
+  plan: "basic" | "growth" | "scale";
+  organization_name: string;
+  organization_slug: string;
+  full_name: string;
+  email: string;
+  password: string;
+}): Promise<AuthSession> {
+  return fetchFromAgentPlatform<AuthSession>({
+    path: "/auth/signup",
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {},
+  });
+}
+
+export async function acceptWorkspaceInvite(body: {
+  invite_token: string;
+  full_name: string;
+  password: string;
+}): Promise<AuthSession> {
+  return fetchFromAgentPlatform<AuthSession>({
+    path: "/auth/accept-invite",
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {},
+  });
+}
+
+export async function getCurrentSession(): Promise<AuthSession> {
+  return fetchFromAgentPlatform<AuthSession>({
+    path: "/auth/me",
+    method: "GET",
+  });
+}
+
+export async function createAccessRequest(body: {
+  organization_slug: string;
+  full_name: string;
+  email: string;
+}): Promise<AccessRequest> {
+  return fetchFromAgentPlatform<AccessRequest>({
+    path: "/auth/access-requests",
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {},
+  });
+}
+
+export async function createWorkspaceProject(body: {
+  name: string;
+  slug: string;
+}): Promise<ProjectSummary> {
+  return fetchFromAgentPlatform<ProjectSummary>({
+    path: "/auth/projects",
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listWorkspaceInvites(
+  organizationId: string,
+): Promise<OrganizationInvite[]> {
+  return fetchFromAgentPlatform<OrganizationInvite[]>({
+    path: `/auth/organizations/${encodeURIComponent(organizationId)}/invites`,
+    method: "GET",
+  });
+}
+
+export async function createWorkspaceInvite(
+  organizationId: string,
+  body: { email: string; role: "owner" | "admin" | "member" },
+): Promise<CreateInviteResponse> {
+  return fetchFromAgentPlatform<CreateInviteResponse>({
+    path: `/auth/organizations/${encodeURIComponent(organizationId)}/invites`,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listWorkspaceAccessRequests(
+  organizationId: string,
+): Promise<AccessRequest[]> {
+  return fetchFromAgentPlatform<AccessRequest[]>({
+    path: `/auth/organizations/${encodeURIComponent(organizationId)}/access-requests`,
+    method: "GET",
+  });
+}
+
+export async function approveWorkspaceAccessRequest(
+  organizationId: string,
+  accessRequestId: string,
+  body: { role: "owner" | "admin" | "member" },
+): Promise<ApproveAccessRequestResponse> {
+  return fetchFromAgentPlatform<ApproveAccessRequestResponse>({
+    path: `/auth/organizations/${encodeURIComponent(organizationId)}/access-requests/${encodeURIComponent(accessRequestId)}/approve`,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

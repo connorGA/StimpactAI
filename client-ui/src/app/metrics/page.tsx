@@ -1,4 +1,4 @@
-import { PageHeader, SectionCard } from "@/components/dashboard-ui";
+import { PageHeader, ProjectSetupState, SectionCard } from "@/components/dashboard-ui";
 import {
   getHealthReadiness,
   getIncidentReportingOverview,
@@ -8,12 +8,23 @@ import {
 import {
   calculateLinePath,
 } from "@/lib/dashboard";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
 
 export default async function MetricsPage() {
-  const incidentList = await getIncidents({ limit: 100, offset: 0 });
-  const reporting = await getIncidentReportingOverview();
+  const projectId = await resolvePrimaryProjectId();
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Metrics and reporting"
+        title="Create a protected project before loading reporting views"
+        description="Metrics are generated from project-scoped incident and runtime data. Complete onboarding first, then this route will populate with trend reporting and readiness summaries."
+      />
+    );
+  }
+  const incidentList = await getIncidents({ projectId: projectId ?? undefined, limit: 100, offset: 0 });
+  const reporting = await getIncidentReportingOverview(projectId ?? undefined);
   const incidents = incidentList.items;
   const readiness = await getHealthReadiness().catch(() => null);
   const latestRuns = await Promise.all(

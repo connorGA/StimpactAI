@@ -535,3 +535,94 @@ export type ProjectOnboarding = {
   repo_profiles: RepoProfile[];
   suggested_next_steps: string[];
 };
+
+export type SubscriptionPlan = "basic" | "growth" | "scale";
+export type MembershipRole = "owner" | "admin" | "member";
+
+export type UserSummary = {
+  id: string;
+  email: string;
+  full_name: string;
+  email_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrganizationSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrganizationMembershipSummary = {
+  organization: OrganizationSummary;
+  role: MembershipRole;
+};
+
+export type ProjectSummary = {
+  id: string;
+  organization_id: string;
+  slug: string;
+  name: string;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SubscriptionSummary = {
+  id: string;
+  organization_id: string;
+  plan: SubscriptionPlan;
+  status: "trialing" | "active" | "past_due" | "canceled";
+  included_projects: number;
+  additional_project_price_cents: number;
+  seat_policy: "unlimited";
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuthSession = {
+  access_token: string;
+  user: UserSummary;
+  organization: OrganizationSummary;
+  role: MembershipRole;
+  memberships: OrganizationMembershipSummary[];
+  projects: ProjectSummary[];
+  subscription: SubscriptionSummary | null;
+};
+
+export type OrganizationInvite = {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: MembershipRole;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccessRequest = {
+  id: string;
+  organization_id: string;
+  email: string;
+  full_name: string;
+  status: "pending" | "approved" | "rejected";
+  reviewed_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateInviteResponse = {
+  invite: OrganizationInvite;
+  invite_token: string;
+};
+
+export type ApproveAccessRequestResponse = {
+  access_request: AccessRequest;
+  invite: OrganizationInvite;
+  invite_token: string;
+};

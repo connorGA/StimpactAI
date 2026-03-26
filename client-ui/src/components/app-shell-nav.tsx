@@ -103,7 +103,7 @@ export function AppShellNav({
                 key={item.href}
                 href={item.href}
                 className={`vault-sidebar-link vault-nav-link block -mx-2 px-4 py-3 transition ${
-                  isActive ? "vault-nav-link-active" : ""
+                  isActive ? "vault-nav-link-active vault-sidebar-link-active" : ""
                 }`}
               >
                 <div className={`flex items-center justify-between gap-3 ${compact ? "justify-center" : ""}`}>

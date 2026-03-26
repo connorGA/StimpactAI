@@ -10,6 +10,7 @@ import {
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 import {
   PageHeader,
+  ProjectSetupState,
   SectionCard,
   StatCard,
 } from "@/components/dashboard-ui";
@@ -17,7 +18,16 @@ export const dynamic = "force-dynamic";
 
 export default async function AutomationsPage() {
   const projectId = await resolvePrimaryProjectId();
-  const incidents = await getIncidents({ limit: 6, offset: 0 });
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Automations"
+        title="Create a protected project before unlocking automation workflows"
+        description="Automation availability depends on a project, provider integration, and repo profile. Finish onboarding first, then this page will reflect live policy and remediation readiness."
+      />
+    );
+  }
+  const incidents = await getIncidents({ projectId: projectId ?? undefined, limit: 6, offset: 0 });
   const [policy, repoProfiles, integrations] = projectId
     ? await Promise.all([
         getProjectPolicy(projectId),

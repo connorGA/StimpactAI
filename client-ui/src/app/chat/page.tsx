@@ -1,11 +1,23 @@
 import { ChatPanel } from "@/components/chat-panel";
+import { ProjectSetupState } from "@/components/dashboard-ui";
 import { getIncidents } from "@/lib/agent-platform";
 import { countOpenIncidents } from "@/lib/dashboard";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
 
 export default async function ChatPage() {
-  const incidentList = await getIncidents({ limit: 20, offset: 0 });
+  const projectId = await resolvePrimaryProjectId();
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Agent workspace"
+        title="Create a protected project before opening the incident agent"
+        description="The agent chat is grounded in the current project’s incident set. Finish onboarding first so the assistant has real incident context to work with."
+      />
+    );
+  }
+  const incidentList = await getIncidents({ projectId: projectId ?? undefined, limit: 20, offset: 0 });
   const incidents = incidentList.items;
 
   return (

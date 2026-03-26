@@ -10,6 +10,7 @@ from api.db.postgres import install_postgres
 from api.events.outbox_signaler import OutboxSignaler
 from api.events.redis_bus import build_outbox_signal_bus
 from api.observability import RequestObservabilityMiddleware, configure_logging
+from api.routes.auth import router as auth_router
 from api.routes.control_plane import public_router as provider_callback_router
 from api.routes.control_plane import project_router as project_control_plane_router
 from api.routes.control_plane import router as control_plane_router
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.add_middleware(RequestObservabilityMiddleware)
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(telemetry_router)
     app.include_router(incident_chat_router)
     app.include_router(incidents_router)

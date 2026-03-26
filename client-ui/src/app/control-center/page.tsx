@@ -1,13 +1,17 @@
 import Link from "next/link";
 
 import {
+  getCurrentSession,
   getHealthReadiness,
   getProjectPolicy,
   listProjectApiKeys,
   listProviderIntegrations,
   listRepoProfiles,
   listSecretRefs,
+  listWorkspaceAccessRequests,
+  listWorkspaceInvites,
 } from "@/lib/agent-platform";
+import { WorkspaceAdminPanel } from "@/components/workspace-admin-panel";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 import { PageHeader, SectionCard, StatCard } from "@/components/dashboard-ui";
 
@@ -37,9 +41,10 @@ const autonomyModes = [
 ] as const;
 
 export default async function ControlCenterPage() {
+  const session = await getCurrentSession().catch(() => null);
   const projectId = await resolvePrimaryProjectId();
 
-  if (!projectId) {
+  if (!projectId || !session) {
     return (
       <main className="space-y-6">
         <PageHeader
@@ -51,7 +56,16 @@ export default async function ControlCenterPage() {
     );
   }
 
-  const [policy, integrations, repoProfiles, apiKeys, secretRefs, readiness] =
+  const [
+    policy,
+    integrations,
+    repoProfiles,
+    apiKeys,
+    secretRefs,
+    readiness,
+    invites,
+    accessRequests,
+  ] =
     await Promise.all([
       getProjectPolicy(projectId),
       listProviderIntegrations(projectId),
@@ -59,6 +73,8 @@ export default async function ControlCenterPage() {
       listProjectApiKeys(projectId),
       listSecretRefs(projectId),
       getHealthReadiness().catch(() => null),
+      listWorkspaceInvites(session.organization.id).catch(() => []),
+      listWorkspaceAccessRequests(session.organization.id).catch(() => []),
     ]);
 
   const guardrails = [
@@ -264,6 +280,22 @@ export default async function ControlCenterPage() {
           </div>
         </SectionCard>
       </div>
+
+      {session.role === "owner" || session.role === "admin" ? (
+        <SectionCard
+          title="Workspace administration"
+          description="Invite teammates, review join requests, and keep project-based access within your plan entitlement."
+        >
+          <WorkspaceAdminPanel
+            organizationId={session.organization.id}
+            projectCount={session.projects.length}
+            includedProjects={session.subscription?.included_projects ?? 1}
+            additionalProjectPriceCents={session.subscription?.additional_project_price_cents ?? 0}
+            invites={invites}
+            accessRequests={accessRequests}
+          />
+        </SectionCard>
+      ) : null}
     </main>
   );
 }

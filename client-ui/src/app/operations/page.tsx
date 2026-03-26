@@ -1,14 +1,25 @@
 import Link from "next/link";
 
-import { PageHeader, SectionCard, StatCard } from "@/components/dashboard-ui";
+import { PageHeader, ProjectSetupState, SectionCard, StatCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { getHealthReadiness, getIncidents, getLatestIncidentAutonomousRunDetail } from "@/lib/agent-platform";
 import { countOpenIncidents, formatTimestamp } from "@/lib/dashboard";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
 
 export default async function OperationsPage() {
-  const incidentList = await getIncidents({ limit: 10, offset: 0 });
+  const projectId = await resolvePrimaryProjectId();
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Operations"
+        title="Create a protected project before using the response workflow"
+        description="The operations surface is built around project-scoped incidents, handoff state, and repair activity. Complete onboarding first to activate this workflow."
+      />
+    );
+  }
+  const incidentList = await getIncidents({ projectId: projectId ?? undefined, limit: 10, offset: 0 });
   const readiness = await getHealthReadiness().catch(() => null);
   const autonomousPairs = await Promise.all(
     incidentList.items.slice(0, 6).map(async (incident) => {

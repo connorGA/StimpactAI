@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ProjectSetupState } from "@/components/dashboard-ui";
 import { PaginationControls } from "@/components/pagination-controls";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
@@ -12,6 +13,7 @@ import {
   countOpenIncidents,
   formatTimestamp,
 } from "@/lib/dashboard";
+import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +28,16 @@ type IncidentsPageProps = {
 
 export default async function IncidentsPage({ searchParams }: IncidentsPageProps) {
   const params = await searchParams;
-  const projectId = params.project_id?.trim() || undefined;
+  const projectId = params.project_id?.trim() || (await resolvePrimaryProjectId()) || undefined;
+  if (!projectId) {
+    return (
+      <ProjectSetupState
+        eyebrow="Incident center"
+        title="Create a protected project before browsing incident history"
+        description="Incident history is scoped to a protected project. Complete onboarding first, then this route will load the ledger, filters, and response status for that project."
+      />
+    );
+  }
   const status = params.status?.trim() || undefined;
   const pageSize = parsePageSize(params.page_size);
   const requestedPage = parsePage(params.page);

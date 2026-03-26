@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { SESSION_COOKIE_NAME } from "@/lib/auth-session";
+
 const AGENT_PLATFORM_API_URL =
   process.env.AGENT_PLATFORM_API_URL ?? "http://127.0.0.1:8000";
 
@@ -7,9 +9,14 @@ function buildForwardHeaders(request: NextRequest): Headers {
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
 
-  const adminToken = process.env.AGENT_PLATFORM_ADMIN_TOKEN;
-  if (adminToken) {
-    headers.set("Authorization", `Bearer ${adminToken}`);
+  const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (sessionToken) {
+    headers.set("Authorization", `Bearer ${sessionToken}`);
+  } else {
+    const adminToken = process.env.AGENT_PLATFORM_ADMIN_TOKEN;
+    if (adminToken) {
+      headers.set("Authorization", `Bearer ${adminToken}`);
+    }
   }
 
   const projectKey = request.headers.get("X-Stimpact-Project-Key");
