@@ -6,6 +6,7 @@ from urllib.parse import quote
 from api.core.config import (
     get_github_api_base_url,
     get_github_app_id,
+    get_github_app_name,
     get_github_installation_id,
     get_github_private_key,
 )
@@ -60,6 +61,19 @@ class GitHubProviderClient:
 
     def __init__(self, *, api_base_url: str | None = None) -> None:
         self._api_base_url = (api_base_url or get_github_api_base_url()).rstrip("/")
+
+    def build_installation_url(self, *, state: str) -> str:
+        app_name = get_github_app_name()
+        if app_name is None:
+            raise APIError(
+                "GitHub App name is not configured.",
+                status_code=503,
+                code="github_unconfigured",
+            )
+        return (
+            f"https://github.com/apps/{quote(app_name, safe='')}/installations/new"
+            f"?state={quote(state, safe='')}"
+        )
 
     async def verify_integration(
         self,

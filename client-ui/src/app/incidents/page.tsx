@@ -7,12 +7,14 @@ import { StatusBadge } from "@/components/status-badge";
 import {
   getIncidents,
   getLatestIncidentAutonomousRunDetail,
+  getProjectOnboarding,
 } from "@/lib/agent-platform";
 import {
   countCriticalIncidents,
   countOpenIncidents,
   formatTimestamp,
 } from "@/lib/dashboard";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +37,16 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
         eyebrow="Incident center"
         title="Create a project before browsing incident history"
         description="Incident history is scoped to a project. Complete onboarding first, then this route will load the ledger, filters, and response status for that project."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Incident center"
+        title="Finish onboarding before browsing incident history"
+        description="Incident history stays in onboarding-first mode until the current project has completed repository connection, secrets setup, and service mapping."
       />
     );
   }

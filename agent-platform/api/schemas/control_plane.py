@@ -60,13 +60,14 @@ class SecretRefResponse(BaseModel):
     label: str
     description: str | None = None
     backend: SecretBackend
-    external_ref: str
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_record(cls, record: SecretRefRecord) -> "SecretRefResponse":
-        return cls(**record.model_dump(mode="json"))
+        payload = record.model_dump(mode="json")
+        payload.pop("external_ref", None)
+        return cls(**payload)
 
 
 class CreateProjectApiKeyRequest(BaseModel):
@@ -198,6 +199,32 @@ class CreateGitHubAppIntegrationRequest(BaseModel):
         return normalized
 
 
+class StartGitHubAppInstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=200)
+    redirect_url: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("project_id", "name")
+    @classmethod
+    def validate_nonempty_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("redirect_url")
+    @classmethod
+    def validate_redirect_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("redirect_url must not be blank")
+        if not (normalized.startswith("http://") or normalized.startswith("https://")):
+            raise ValueError("redirect_url must be an absolute http or https URL")
+        return normalized
+
+
 class StartGitLabOAuthRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -228,6 +255,13 @@ class GitLabOAuthStartResponse(BaseModel):
 
     integration: ProviderIntegrationResponse
     authorization_url: str
+
+
+class GitHubAppInstallStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration: ProviderIntegrationResponse
+    installation_url: str
 
 
 class GitLabOAuthCallbackResponse(BaseModel):

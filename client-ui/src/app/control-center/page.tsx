@@ -4,6 +4,7 @@ import {
   getCurrentSession,
   getHealthReadiness,
   getProjectPolicy,
+  getProjectOnboarding,
   getProjectServiceSandboxPlan,
   listProjectApiKeys,
   listProjectServices,
@@ -14,6 +15,7 @@ import {
   listWorkspaceInvites,
 } from "@/lib/agent-platform";
 import { WorkspaceAdminPanel } from "@/components/workspace-admin-panel";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 import { PageHeader, ProjectSetupState, SectionCard, StatCard } from "@/components/dashboard-ui";
 
@@ -64,6 +66,16 @@ export default async function ControlCenterPage() {
         eyebrow="Control center"
         title="Create your first project before opening the control center"
         description="The control center needs a project before it can show policy, repo profiles, credentials, and automation guardrails. Start with onboarding, then come back here once your first project is set up."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Control center"
+        title="Finish onboarding before opening the control center"
+        description="The control center stays in onboarding-first mode until the current project has a connected provider, synced repositories, stored secrets, and mapped service infrastructure."
       />
     );
   }

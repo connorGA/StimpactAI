@@ -70,6 +70,39 @@ def test_gitlab_provider_client_builds_oauth_authorization_url(monkeypatch) -> N
     assert "state=oauth-state-1" in authorization.authorization_url
 
 
+def test_provider_integration_record_decodes_json_metadata_strings() -> None:
+    now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
+    record = ProviderIntegrationRecord.from_db_row(
+        {
+            "id": "integration-1",
+            "provider": "github",
+            "name": "Acme GitHub",
+            "status": "active",
+            "credentials_secret_ref_id": None,
+            "webhook_secret_ref_id": None,
+            "aws_region": "us-west-2",
+            "metadata": (
+                '{"project_id":"project-1","install_state":"state-1",'
+                '"redirect_url":"http://localhost:3000/onboarding?project_id=project-1"}'
+            ),
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+    assert record.metadata["project_id"] == "project-1"
+    assert record.metadata["install_state"] == "state-1"
+
+
+def test_github_provider_client_builds_installation_url(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_APP_NAME", "stimpact")
+    client = GitHubProviderClient()
+
+    installation_url = client.build_installation_url(state="install-state-1")
+
+    assert installation_url == "https://github.com/apps/stimpact/installations/new?state=install-state-1"
+
+
 async def test_github_provider_client_builds_sandbox_access(monkeypatch) -> None:
     now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
     integration = ProviderIntegrationRecord(

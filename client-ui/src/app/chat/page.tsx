@@ -1,7 +1,8 @@
 import { ChatPanel } from "@/components/chat-panel";
 import { ProjectSetupState } from "@/components/dashboard-ui";
-import { getIncidents } from "@/lib/agent-platform";
+import { getIncidents, getProjectOnboarding } from "@/lib/agent-platform";
 import { countOpenIncidents } from "@/lib/dashboard";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,16 @@ export default async function ChatPage() {
         eyebrow="Agent workspace"
         title="Create a project before opening the incident agent"
         description="The agent chat is grounded in the current project’s incident set. Finish onboarding first so the assistant has real incident context to work with."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Agent workspace"
+        title="Finish onboarding before opening the incident agent"
+        description="The agent chat remains in onboarding-first mode until the current project has connected repositories, stored secrets, and mapped deployable services."
       />
     );
   }

@@ -1,11 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 
 import type {
   AuthSession,
+  GitHubAppInstallStartResponse,
   GitLabOAuthStartResponse,
   ProjectOnboarding,
   ProjectSummary,
@@ -19,6 +21,20 @@ type ApiErrorPayload = {
 };
 
 const STEP_ORDER = ["1", "2", "3", "4", "5"] as const;
+
+type SecretDraft = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+function createSecretDraft(): SecretDraft {
+  return {
+    id: `secret-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: "",
+    value: "",
+  };
+}
 
 async function requestJson<T>(
   path: string,
@@ -45,6 +61,10 @@ async function requestJson<T>(
     throw new Error(message);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -58,25 +78,21 @@ function toProjectSlug(value: string): string {
 
 export function ProjectOnboardingConsole() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [session, setSession] = useState<AuthSession | null>(null);
   const [projectId, setProjectId] = useState("");
   const [state, setState] = useState<ProjectOnboarding | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
-
-  const [githubName, setGithubName] = useState("");
-  const [githubInstallationId, setGithubInstallationId] = useState("");
   const [gitlabName, setGitlabName] = useState("");
   const [gitlabBaseUrl, setGitlabBaseUrl] = useState("");
   const [lastGitLabAuthUrl, setLastGitLabAuthUrl] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<"github" | "gitlab">("github");
 
-  const [secretLabel, setSecretLabel] = useState("");
-  const [secretDescription, setSecretDescription] = useState("");
-  const [secretValue, setSecretValue] = useState("");
+  const [secretDrafts, setSecretDrafts] = useState<SecretDraft[]>([createSecretDraft()]);
+  const [openSecretMenuId, setOpenSecretMenuId] = useState<string | null>(null);
 
   const [runtimeKind, setRuntimeKind] = useState<"python" | "node" | "generic" | "container">("python");
   const [baseImage, setBaseImage] = useState("");
@@ -110,17 +126,37 @@ export function ProjectOnboardingConsole() {
     }
     return state.integrations.flatMap((integration) => integration.repositories);
   }, [state]);
+  const githubIntegration = useMemo(
+    () => state?.integrations.find((integration) => integration.integration.provider === "github") ?? null,
+    [state],
+  );
+  const gitlabIntegration = useMemo(
+    () => state?.integrations.find((integration) => integration.integration.provider === "gitlab") ?? null,
+    [state],
+  );
+  const selectedProviderIntegration =
+    selectedProvider === "github" ? githubIntegration : gitlabIntegration;
   const newProjectSlug = useMemo(() => toProjectSlug(newProjectName), [newProjectName]);
   const serviceSlug = useMemo(() => toProjectSlug(serviceName), [serviceName]);
   const createRequested = searchParams.get("create") === "1";
   const [createMode, setCreateMode] = useState(createRequested);
+  const [bootstrappingPage, setBootstrappingPage] = useState(!createRequested);
+  const currentProject = useMemo(
+    () => session?.projects.find((project) => project.id === projectId) ?? session?.projects[0] ?? null,
+    [projectId, session],
+  );
 
   useEffect(() => {
     setCreateMode(createRequested);
+    setBootstrappingPage(!createRequested);
   }, [createRequested]);
 
-  const loadOnboardingState = useCallback(async (bootstrap = false) => {
-    const encodedProjectId = encodeURIComponent(projectId.trim());
+  const loadOnboardingState = useCallback(async (bootstrap = false, overrideProjectId?: string) => {
+    const resolvedProjectId = (overrideProjectId ?? projectId).trim();
+    if (!resolvedProjectId) {
+      return;
+    }
+    const encodedProjectId = encodeURIComponent(resolvedProjectId);
     const payload = await requestJson<ProjectOnboarding>(
       `projects/${encodedProjectId}/${bootstrap ? "bootstrap" : "onboarding"}`,
       {
@@ -131,15 +167,52 @@ export function ProjectOnboardingConsole() {
     if (!selectedRepositoryId && payload.integrations[0]?.repositories[0]?.id) {
       setSelectedRepositoryId(payload.integrations[0].repositories[0].id);
     }
-    if (!selectedSecretRefId && payload.secret_refs[0]?.id) {
-      setSelectedSecretRefId(payload.secret_refs[0].id);
-      setSecretMountAs(payload.secret_refs[0].label);
+    const selectedSecretStillExists = payload.secret_refs.some((secretRef) => secretRef.id === selectedSecretRefId);
+    if (!selectedSecretStillExists) {
+      const fallbackSecretRef = payload.secret_refs[0];
+      setSelectedSecretRefId(fallbackSecretRef?.id ?? "");
+      setSecretMountAs(fallbackSecretRef?.label ?? "");
     }
   }, [projectId, selectedRepositoryId, selectedSecretRefId]);
 
   useEffect(() => {
+    if (
+      searchParams.get("provider") !== "github" ||
+      searchParams.get("provider_status") !== "connected"
+    ) {
+      return;
+    }
+
+    const redirectedProjectId = searchParams.get("project_id")?.trim() ?? "";
+    if (redirectedProjectId) {
+      setProjectId(redirectedProjectId);
+      void loadOnboardingState(false, redirectedProjectId).catch((error) => {
+        setErrorMessage(error instanceof Error ? error.message : "Unable to refresh onboarding.");
+      });
+    }
+
+    setSelectedProvider("github");
+    setErrorMessage(null);
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    [
+      "provider",
+      "provider_status",
+      "project_id",
+      "integration_id",
+      "installation_id",
+      "setup_action",
+      "synced_repositories",
+      "step",
+    ].forEach((key) => nextParams.delete(key));
+    const nextUrl = nextParams.size > 0 ? `/onboarding?${nextParams.toString()}` : "/onboarding";
+    router.replace(nextUrl, { scroll: false });
+  }, [loadOnboardingState, router, searchParams]);
+
+  useEffect(() => {
     async function loadSession() {
       try {
+        setBootstrappingPage(!createMode);
         const response = await fetch("/api/auth/session", {
           method: "GET",
         });
@@ -154,9 +227,12 @@ export function ProjectOnboardingConsole() {
           payload.projects.find((project) => project.id === selectedProjectId) ?? payload.projects[0] ?? null;
         if (!createMode && preferredProject?.id) {
           setProjectId(preferredProject.id);
+          return;
         }
+        setBootstrappingPage(false);
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "Unable to load session.");
+        setBootstrappingPage(false);
       }
     }
     void loadSession();
@@ -164,10 +240,14 @@ export function ProjectOnboardingConsole() {
 
   useEffect(() => {
     if (!projectId.trim()) {
+      setBootstrappingPage(false);
       return;
     }
+    setBootstrappingPage(true);
     void loadOnboardingState(false).catch((error) => {
       setErrorMessage(error instanceof Error ? error.message : "Unable to load onboarding.");
+    }).finally(() => {
+      setBootstrappingPage(false);
     });
   }, [loadOnboardingState, projectId]);
 
@@ -202,12 +282,11 @@ export function ProjectOnboardingConsole() {
     action: () => Promise<void>,
     successMessage: string,
   ) {
+    void successMessage;
     setLoading(true);
     setErrorMessage(null);
-    setStatusMessage(null);
     try {
       await action();
-      setStatusMessage(successMessage);
     } catch (caughtError) {
       setErrorMessage(
         caughtError instanceof Error
@@ -219,21 +298,32 @@ export function ProjectOnboardingConsole() {
     }
   }
 
-  async function connectGitHub() {
-    await withFeedback(async () => {
-      await requestJson(
-        `projects/${encodeURIComponent(projectId.trim())}/provider-integrations/github-app`,
+  async function startGitHubInstall() {
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const redirectUrl = new URL("/onboarding", window.location.origin);
+      redirectUrl.searchParams.set("provider", "github");
+      redirectUrl.searchParams.set("step", "3");
+      redirectUrl.searchParams.set("project_id", projectId.trim());
+      const response = await requestJson<GitHubAppInstallStartResponse>(
+        `projects/${encodeURIComponent(projectId.trim())}/provider-integrations/github-app/start`,
         {
           method: "POST",
           body: JSON.stringify({
             project_id: projectId.trim(),
-            name: githubName,
-            installation_id: githubInstallationId || undefined,
+            name: currentProject ? `${currentProject.name} GitHub` : "GitHub",
+            redirect_url: redirectUrl.toString(),
           }),
         },
       );
-      await loadOnboardingState(false);
-    }, "GitHub integration connected.");
+      window.location.assign(response.installation_url);
+    } catch (caughtError) {
+      setErrorMessage(
+        caughtError instanceof Error ? caughtError.message : "Unable to start GitHub installation.",
+      );
+      setLoading(false);
+    }
   }
 
   async function startGitLab() {
@@ -266,7 +356,43 @@ export function ProjectOnboardingConsole() {
     }, "Provider repositories synced.");
   }
 
-  async function addSecret() {
+  function addSecretDraft() {
+    setSecretDrafts((current) => [...current, createSecretDraft()]);
+    setOpenSecretMenuId(null);
+  }
+
+  function updateSecretDraft(
+    draftId: string,
+    field: keyof Pick<SecretDraft, "label" | "value">,
+    nextValue: string,
+  ) {
+    setSecretDrafts((current) =>
+      current.map((draft) => (draft.id === draftId ? { ...draft, [field]: nextValue } : draft)),
+    );
+  }
+
+  function removeSecretDraft(draftId: string) {
+    setSecretDrafts((current) => {
+      if (current.length <= 1 && !(state?.secret_refs.length)) {
+        return current.map((draft) =>
+          draft.id === draftId
+            ? {
+                ...draft,
+                label: "",
+                value: "",
+              }
+            : draft,
+        );
+      }
+      return current.filter((draft) => draft.id !== draftId);
+    });
+  }
+
+  async function addSecret(draftId: string) {
+    const draft = secretDrafts.find((item) => item.id === draftId);
+    if (!draft) {
+      return;
+    }
     await withFeedback(async () => {
       await requestJson(
         `projects/${encodeURIComponent(projectId.trim())}/secret-refs`,
@@ -274,15 +400,31 @@ export function ProjectOnboardingConsole() {
           method: "POST",
           body: JSON.stringify({
             project_id: projectId.trim(),
-            label: secretLabel,
-            description: secretDescription || null,
-            value: secretValue,
+            label: draft.label,
+            value: draft.value,
           }),
         },
       );
-      setSecretValue("");
+      setSecretDrafts((current) => current.filter((item) => item.id !== draftId));
+      setOpenSecretMenuId(null);
       await loadOnboardingState(false);
     }, "Secret stored in AWS Secrets Manager.");
+  }
+
+  async function deleteSecret(secretRefId: string, secretProjectId: string) {
+    await withFeedback(async () => {
+      await requestJson(
+        `projects/${encodeURIComponent(secretProjectId.trim())}/secret-refs/${encodeURIComponent(secretRefId)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      setOpenSecretMenuId(null);
+      if (projectId !== secretProjectId) {
+        setProjectId(secretProjectId);
+      }
+      await loadOnboardingState(false, secretProjectId);
+    }, "Secret deleted from AWS Secrets Manager.");
   }
 
   async function createRepoProfile() {
@@ -382,7 +524,6 @@ export function ProjectOnboardingConsole() {
   async function createFirstProject() {
     setCreatingProject(true);
     setErrorMessage(null);
-    setStatusMessage(null);
     try {
       const response = await fetch("/api/auth/projects", {
         method: "POST",
@@ -416,7 +557,6 @@ export function ProjectOnboardingConsole() {
       });
       setProjectId(payload.id);
       setCreateMode(false);
-      setStatusMessage("Project created. Continue with provider, secret, and repo profile setup.");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Project creation failed.");
     } finally {
@@ -430,6 +570,17 @@ export function ProjectOnboardingConsole() {
   const hasSecrets = (state?.secret_refs.length ?? 0) > 0;
   const hasRepoProfiles = (state?.repo_profiles.length ?? 0) > 0;
   const hasProjectServices = (state?.project_services.length ?? 0) > 0;
+
+  if (bootstrappingPage && !createMode) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center px-6">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="inline-flex h-9 w-9 animate-spin rounded-full border-2 border-[rgba(23,56,93,0.18)] border-t-[rgba(255,106,61,0.88)]" />
+          <p className="text-sm font-medium text-[#746d66]">Loading..</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -450,6 +601,13 @@ export function ProjectOnboardingConsole() {
 
           <OnboardingTimeline
             activeStep={activeStep}
+            onStepSelect={(step) => {
+              const node = stepRefs.current[step];
+              if (!node) {
+                return;
+              }
+              node.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
             steps={[
               {
                 step: "1",
@@ -484,7 +642,6 @@ export function ProjectOnboardingConsole() {
             ]}
           />
 
-          {statusMessage ? <Banner tone="success" message={statusMessage} /> : null}
           {errorMessage ? <Banner tone="error" message={errorMessage} /> : null}
         </div>
       </section>
@@ -553,37 +710,98 @@ export function ProjectOnboardingConsole() {
             <div className="grid gap-4 md:grid-cols-2">
               <ProviderChoiceCard
                 label="GitHub"
-                description="Connect a GitHub App installation and sync repositories."
+                description={
+                  githubIntegration
+                    ? `${readIntegrationAccount(githubIntegration)} connected · ${githubIntegration.repositories.length} repos available`
+                    : "Connect a GitHub App installation and sync repositories."
+                }
+                statusLabel={githubIntegration ? "Connected" : undefined}
+                connected={Boolean(githubIntegration)}
+                subdued={!githubIntegration && Boolean(selectedProviderIntegration)}
                 active={selectedProvider === "github"}
                 onClick={() => setSelectedProvider("github")}
                 icon={<GitHubGlyph />}
               />
               <ProviderChoiceCard
                 label="GitLab"
-                description="Start a GitLab OAuth flow and sync repositories."
+                description={
+                  gitlabIntegration
+                    ? `${readIntegrationAccount(gitlabIntegration)} connected · ${gitlabIntegration.repositories.length} repos available`
+                    : "Start a GitLab OAuth flow and sync repositories."
+                }
+                statusLabel={gitlabIntegration ? "Connected" : undefined}
+                connected={Boolean(gitlabIntegration)}
+                subdued={!gitlabIntegration && Boolean(selectedProviderIntegration)}
                 active={selectedProvider === "gitlab"}
                 onClick={() => setSelectedProvider("gitlab")}
                 icon={<GitLabGlyph />}
               />
             </div>
 
-            {selectedProvider === "github" ? (
-              <SubStepCard title="GitHub App">
-                <Field
-                  label="Integration name"
-                  value={githubName}
-                  onChange={setGithubName}
-                  placeholder="Acme GitHub"
-                />
-                <Field
-                  label="Installation ID"
-                  value={githubInstallationId}
-                  onChange={setGithubInstallationId}
-                  placeholder="Optional override"
-                />
+            {selectedProviderIntegration ? (
+              <div className="overflow-hidden rounded-[24px] border border-[rgba(22,101,52,0.18)] bg-white shadow-[0_18px_36px_rgba(34,197,94,0.08)]">
+                <div className="flex items-center justify-between gap-4 border-b border-[rgba(22,101,52,0.14)] bg-[linear-gradient(180deg,rgba(240,253,244,0.98),rgba(231,248,237,0.98))] px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-[16px] border border-[rgba(22,101,52,0.2)] bg-[linear-gradient(180deg,#f0fdf4,#dcfce7)] text-[#15803d]">
+                      {selectedProvider === "github" ? <GitHubGlyph /> : <GitLabGlyph />}
+                    </div>
+                    <div>
+                      <p className="text-base font-semibold text-[#171717]">
+                        {selectedProvider === "github" ? "GitHub connected" : "GitLab connected"}
+                      </p>
+                      <p className="mt-1 text-sm text-[#746d66]">
+                        {selectedProvider === "github"
+                          ? "Connected and ready for repository selection."
+                          : "Connected and ready for repository selection."}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="inline-flex rounded-full bg-[linear-gradient(180deg,#22c55e,#16a34a)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white shadow-[0_10px_20px_rgba(34,197,94,0.22)]">
+                    Connected
+                  </span>
+                </div>
+                <div className="grid gap-5 px-5 py-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <ConnectionDetail
+                      label="Account"
+                      value={readIntegrationAccount(selectedProviderIntegration)}
+                    />
+                    <ConnectionDetail
+                      label="Integration"
+                      value={selectedProviderIntegration.integration.name}
+                    />
+                    <ConnectionDetail
+                      label="Repositories ready"
+                      value={String(selectedProviderIntegration.repositories.length)}
+                      emphasize
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <ActionButton
+                      label={selectedProvider === "github" ? "Reconnect GitHub" : "Reconnect GitLab"}
+                      onClick={selectedProvider === "github" ? startGitHubInstall : startGitLab}
+                      disabled={loading || !hasProject}
+                      variant="secondary"
+                    />
+                    <a
+                      href="#onboarding-step-3"
+                      className="inline-flex text-sm font-semibold text-[#3451d1] hover:underline"
+                    >
+                      Continue to repository selection
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ) : selectedProvider === "github" ? (
+              <SubStepCard title="GitHub App" tone="warm">
+                <p className="text-sm leading-6 text-[#65584f]">
+                  Connect GitHub in one step. We will open the GitHub App install flow, return you
+                  here automatically, sync the available repositories, and let you pick the repo to
+                  map next.
+                </p>
                 <ActionButton
                   label="Connect GitHub"
-                  onClick={connectGitHub}
+                  onClick={startGitHubInstall}
                   disabled={loading || !hasProject}
                 />
               </SubStepCard>
@@ -636,37 +854,71 @@ export function ProjectOnboardingConsole() {
           <div className="space-y-4">
             {state?.integrations.length ? (
               state.integrations.map((integration) => (
-                <div
-                  key={integration.integration.id}
-                  className="rounded-[22px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,250,255,0.98))] p-5"
-                >
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <p className="font-semibold text-[#171717]">{integration.integration.name}</p>
-                      <p className="mt-1 text-sm text-[#746d66]">
-                        {integration.integration.provider} · {integration.repositories.length} synced repos
-                      </p>
+                <div key={integration.integration.id} className="space-y-4">
+                  <div className="flex flex-col gap-4 border-b border-[rgba(29,26,24,0.08)] pb-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-[14px] border border-[rgba(34,197,94,0.22)] bg-[linear-gradient(180deg,#f0fdf4,#dcfce7)] text-[#16a34a]">
+                        {integration.integration.provider === "github" ? <GitHubGlyph /> : <GitLabGlyph />}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-[#171717]">{integration.integration.name}</p>
+                        <p className="mt-1 text-sm text-[#746d66]">
+                          {readIntegrationAccount(integration)} · {integration.repositories.length} synced repos
+                        </p>
+                      </div>
                     </div>
                     <ActionButton
-                      label="Sync repos"
+                      label="Refresh repos"
                       onClick={() => syncRepositories(integration.integration.id)}
                       disabled={loading}
                       variant="secondary"
                     />
                   </div>
                   {integration.repositories.length ? (
-                    <ul className="mt-4 grid gap-2 text-sm text-[#35547d]">
+                    <ul className="grid gap-3 text-sm text-[#35547d]">
                       {integration.repositories.map((repository) => (
                         <li key={repository.id}>
-                          <label className="flex items-center gap-3 rounded-[16px] border border-[rgba(17,24,39,0.06)] bg-white px-4 py-3">
-                            <input
-                              type="radio"
-                              name="provider_repository_id"
-                              checked={selectedRepositoryId === repository.id}
-                              onChange={() => setSelectedRepositoryId(repository.id)}
-                            />
-                            <span>
-                              {repository.owner}/{repository.name} · default {repository.default_branch}
+                          <label
+                            className={`flex cursor-pointer items-center justify-between gap-4 rounded-[18px] border px-4 py-4 transition ${
+                              selectedRepositoryId === repository.id
+                                ? "border-[rgba(22,101,52,0.28)] bg-[linear-gradient(180deg,#f0fdf4,#dcfce7)] shadow-[0_12px_28px_rgba(34,197,94,0.14)]"
+                                : "border-[rgba(29,26,24,0.08)] bg-white hover:border-[rgba(255,106,61,0.24)] hover:bg-[rgba(255,248,242,0.98)]"
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`flex h-5 w-5 items-center justify-center rounded-full border ${
+                                  selectedRepositoryId === repository.id
+                                    ? "border-[#16a34a] bg-[#16a34a]"
+                                    : "border-[rgba(29,26,24,0.18)] bg-white"
+                                }`}
+                              >
+                                <span className="h-2.5 w-2.5 rounded-full bg-white" />
+                              </span>
+                              <input
+                                type="radio"
+                                name="provider_repository_id"
+                                checked={selectedRepositoryId === repository.id}
+                                onChange={() => setSelectedRepositoryId(repository.id)}
+                                className="sr-only"
+                              />
+                              <span>
+                                <span className="block font-semibold text-[#171717]">
+                                  {repository.owner}/{repository.name}
+                                </span>
+                                <span className="mt-1 block text-sm text-[#746d66]">
+                                  Default branch {repository.default_branch}
+                                </span>
+                              </span>
+                            </div>
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                                selectedRepositoryId === repository.id
+                                  ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                  : "bg-[rgba(29,26,24,0.06)] text-[#7c756d]"
+                              }`}
+                            >
+                              {selectedRepositoryId === repository.id ? "Selected" : "Choose"}
                             </span>
                           </label>
                         </li>
@@ -696,47 +948,108 @@ export function ProjectOnboardingConsole() {
           }}
         >
           <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field
-                label="Secret label"
-                value={secretLabel}
-                onChange={setSecretLabel}
-                placeholder="OPENAI_API_KEY"
-              />
-              <Field
-                label="Description"
-                value={secretDescription}
-                onChange={setSecretDescription}
-                placeholder="Runtime secret"
-                autoComplete="off"
-              />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-[#171717]">Project secrets</p>
+                <p className="mt-1 text-sm text-[#746d66]">
+                  Add environment secrets, then manage them from the list below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addSecretDraft}
+                className="inline-flex items-center gap-2 self-start rounded-full border border-[rgba(29,26,24,0.1)] bg-white px-3 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff9f5]"
+              >
+                <PlusMiniGlyph />
+                Add secret
+              </button>
             </div>
-            <Field
-              label="Secret value"
-              value={secretValue}
-              onChange={setSecretValue}
-              type="password"
-              placeholder="Paste the secret value"
-              autoComplete="new-password"
-            />
-            <ActionButton
-              label="Store secret"
-              onClick={addSecret}
-              disabled={loading || !secretValue.trim()}
-            />
+
+            {secretDrafts.length ? (
+              <div className="rounded-[24px] border border-[rgba(29,26,24,0.08)] bg-[rgba(255,255,255,0.82)] p-5 shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
+                <div className="space-y-5">
+                  {secretDrafts.map((draft, index) => (
+                    <div
+                      key={draft.id}
+                      className={index < secretDrafts.length - 1 ? "border-b border-[rgba(29,26,24,0.08)] pb-5" : ""}
+                    >
+                      <input
+                        type="text"
+                        name={`decoy-username-${draft.id}`}
+                        autoComplete="username"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        className="hidden"
+                      />
+                      <input
+                        type="password"
+                        name={`decoy-password-${draft.id}`}
+                        autoComplete="new-password"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        className="hidden"
+                      />
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field
+                          label="Secret key"
+                          value={draft.label}
+                          onChange={(value) => updateSecretDraft(draft.id, "label", value)}
+                          placeholder="VITE_SUPABASE_URL"
+                          name={`secret-key-${draft.id}`}
+                          suppressPasswordManagers
+                        />
+                        <Field
+                          label="Secret value"
+                          value={draft.value}
+                          onChange={(value) => updateSecretDraft(draft.id, "value", value)}
+                          type="password"
+                          placeholder="Paste the secret value"
+                          name={`secret-value-${draft.id}`}
+                          suppressPasswordManagers
+                        />
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-3">
+                        <ActionButton
+                          label="Store secret"
+                          onClick={() => {
+                            void addSecret(draft.id);
+                          }}
+                          disabled={loading || !draft.label.trim() || !draft.value.trim()}
+                          variant="success"
+                        />
+                        <ActionButton
+                          label="Cancel"
+                          onClick={() => removeSecretDraft(draft.id)}
+                          variant="secondary"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {state?.secret_refs.length ? (
-              <ul className="grid gap-2 text-sm text-[#35547d]">
-                {state.secret_refs.map((secretRef) => (
-                  <li
+              <div className="overflow-visible rounded-[24px] border border-[rgba(29,26,24,0.08)] bg-[rgba(255,255,255,0.8)]">
+                {state.secret_refs.map((secretRef, index) => (
+                  <SecretManagerRow
                     key={secretRef.id}
-                    className="rounded-[16px] border border-[rgba(17,24,39,0.06)] bg-white px-4 py-3"
-                  >
-                    {secretRef.label} · stored in {secretRef.backend}
-                  </li>
+                    secretRef={secretRef}
+                    menuOpen={openSecretMenuId === secretRef.id}
+                    showBorder={index < state.secret_refs.length - 1}
+                    onToggleMenu={() =>
+                      setOpenSecretMenuId((current) => (current === secretRef.id ? null : secretRef.id))
+                    }
+                    onDelete={() => {
+                      void deleteSecret(secretRef.id, secretRef.project_id);
+                    }}
+                  />
                 ))}
-              </ul>
+              </div>
             ) : (
-              <p className="text-sm text-[#746d66]">No project secrets have been added yet.</p>
+              <p className="text-sm text-[#746d66]">
+                No project secrets have been added yet. Add one here to continue configuring repo profiles.
+              </p>
             )}
           </div>
         </StepPanel>
@@ -1086,6 +1399,16 @@ function readCookieValue(name: string): string | null {
   return cookieValue ? decodeURIComponent(cookieValue) : null;
 }
 
+function readIntegrationAccount(integration: ProjectOnboarding["integrations"][number]): string {
+  const accountLogin =
+    typeof integration.integration.metadata.account_login === "string"
+      ? integration.integration.metadata.account_login
+      : typeof integration.integration.metadata.connected_account_login === "string"
+        ? integration.integration.metadata.connected_account_login
+        : null;
+  return accountLogin?.trim() ? accountLogin : "Connected account";
+}
+
 function StepPanel({
   step,
   stepKey,
@@ -1107,9 +1430,15 @@ function StepPanel({
     <section
       id={`onboarding-step-${stepKey}`}
       ref={sectionRef}
-      className="relative overflow-hidden rounded-[28px] border border-[rgba(29,26,24,0.1)] bg-[linear-gradient(180deg,rgba(255,251,247,0.98),rgba(249,242,234,0.98))] px-6 py-6 shadow-[0_18px_40px_rgba(15,23,42,0.06)]"
+      className="relative scroll-mt-24 overflow-hidden rounded-[28px] border border-[rgba(29,26,24,0.1)] bg-[linear-gradient(180deg,rgba(255,251,247,0.98),rgba(249,242,234,0.98))] px-6 py-6 shadow-[0_18px_40px_rgba(15,23,42,0.06)] lg:scroll-mt-28"
     >
-      <div className="absolute left-0 top-0 h-full w-1.5 bg-[linear-gradient(180deg,#ffb253_0%,#ff6a3d_42%,#ff5a2a_100%)] opacity-95" />
+      <div
+        className={`absolute left-0 top-0 h-full w-1.5 opacity-95 ${
+          complete
+            ? "bg-[linear-gradient(180deg,#4ade80_0%,#22c55e_42%,#15803d_100%)]"
+            : "bg-[linear-gradient(180deg,#ffb253_0%,#ff6a3d_42%,#ff5a2a_100%)]"
+        }`}
+      />
       <div className="pl-3">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -1152,15 +1481,40 @@ function SubStepCard({
   );
 }
 
+function ConnectionDetail({
+  label,
+  value,
+  emphasize = false,
+}: {
+  label: string;
+  value: string;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</p>
+      <p className={`text-base font-semibold ${emphasize ? "text-[#15803d]" : "text-[#171717]"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
 function ProviderChoiceCard({
   label,
   description,
+  statusLabel,
+  connected,
+  subdued,
   active,
   onClick,
   icon,
 }: {
   label: string;
   description: string;
+  statusLabel?: string;
+  connected?: boolean;
+  subdued?: boolean;
   active?: boolean;
   onClick: () => void;
   icon: ReactNode;
@@ -1169,24 +1523,41 @@ function ProviderChoiceCard({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-start gap-4 rounded-[22px] border px-5 py-5 text-left transition ${
-        active
-          ? "border-[rgba(255,106,61,0.28)] bg-[linear-gradient(180deg,rgba(255,244,238,0.98),rgba(248,236,226,0.98))] shadow-[0_16px_32px_rgba(255,106,61,0.08)]"
-          : "border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,rgba(248,242,235,0.98),rgba(242,235,227,0.98))] hover:border-[rgba(255,106,61,0.18)] hover:bg-[linear-gradient(180deg,rgba(252,246,240,0.98),rgba(246,239,231,0.98))]"
+      className={`flex items-start gap-4 rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
+        connected && active
+          ? "border-[rgba(23,23,23,0.22)] bg-white shadow-[0_16px_32px_rgba(15,23,42,0.08)] ring-1 ring-[rgba(23,23,23,0.06)]"
+          : subdued
+            ? "border-[rgba(29,26,24,0.05)] bg-[rgba(255,255,255,0.62)] opacity-65 hover:opacity-80"
+            : active
+              ? "border-[rgba(29,26,24,0.18)] bg-white shadow-[0_16px_32px_rgba(15,23,42,0.08)]"
+              : "border-[rgba(29,26,24,0.08)] bg-white hover:border-[rgba(29,26,24,0.16)] hover:bg-[rgba(255,255,255,0.96)]"
       }`}
     >
       <div
         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] border ${
-          active
-            ? "border-[rgba(255,106,61,0.18)] bg-[linear-gradient(180deg,#fff2eb,#ffe7dc)] text-[#ff6a3d]"
-            : "border-[rgba(29,26,24,0.08)] bg-white/70 text-[#4a423d]"
+          connected && active
+            ? "border-[#171717] bg-[#171717] text-white shadow-[0_10px_20px_rgba(23,23,23,0.12)]"
+            : active
+              ? "border-[rgba(29,26,24,0.12)] bg-[#f7f3ee] text-[#171717]"
+              : "border-[rgba(29,26,24,0.08)] bg-[#fbfaf8] text-[#4a423d]"
         }`}
       >
         {icon}
       </div>
-      <div>
-        <p className="text-sm font-semibold text-[#171717]">{label}</p>
-        <p className="mt-1 text-sm leading-6 text-[#746d66]">{description}</p>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <p className={`text-sm font-semibold ${connected && active ? "text-[#171717]" : "text-[#171717]"}`}>
+            {label}
+          </p>
+          {statusLabel ? (
+            <span className="inline-flex rounded-full bg-[linear-gradient(180deg,#22c55e,#16a34a)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_10px_20px_rgba(34,197,94,0.18)]">
+              {statusLabel}
+            </span>
+          ) : null}
+        </div>
+        <p className={`mt-1 text-sm leading-6 ${connected && active ? "text-[#5f6470]" : "text-[#746d66]"}`}>
+          {description}
+        </p>
       </div>
     </button>
   );
@@ -1217,6 +1588,7 @@ function GitLabGlyph() {
 function OnboardingTimeline({
   steps,
   activeStep,
+  onStepSelect,
 }: {
   steps: Array<{
     step: (typeof STEP_ORDER)[number];
@@ -1225,6 +1597,7 @@ function OnboardingTimeline({
     complete: boolean;
   }>;
   activeStep: (typeof STEP_ORDER)[number];
+  onStepSelect: (step: (typeof STEP_ORDER)[number]) => void;
 }) {
   return (
     <div className="mx-auto mt-8 max-w-[980px]">
@@ -1240,6 +1613,8 @@ function OnboardingTimeline({
               label={item.label}
               detail={item.detail}
               active={activeStep === item.step}
+              complete={item.complete}
+              onSelect={onStepSelect}
             />
           ))}
         </div>
@@ -1247,12 +1622,15 @@ function OnboardingTimeline({
 
       <div className="grid gap-3 lg:hidden">
         {steps.map((item) => (
-          <div
+          <button
             key={item.step}
-            className="flex items-start gap-3 rounded-[18px] border border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,rgba(255,250,246,0.96),rgba(245,239,232,0.98))] px-4 py-3 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
+            type="button"
+            onClick={() => onStepSelect(item.step)}
+            className="flex w-full items-start gap-3 rounded-[18px] border border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,rgba(255,250,246,0.96),rgba(245,239,232,0.98))] px-4 py-3 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(15,23,42,0.07)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(255,106,61,0.24)]"
           >
             <TimelineDot
               active={activeStep === item.step}
+              complete={item.complete}
               step={item.step}
             />
             <div>
@@ -1261,7 +1639,7 @@ function OnboardingTimeline({
               </p>
               <p className="mt-1 text-xs leading-5 text-[#746d66]">{item.detail}</p>
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -1273,20 +1651,28 @@ function TimelineNode({
   label,
   detail,
   active,
+  complete,
+  onSelect,
 }: {
   step: string;
   label: string;
   detail: string;
   active: boolean;
+  complete: boolean;
+  onSelect: (step: (typeof STEP_ORDER)[number]) => void;
 }) {
   return (
-    <div className="group relative px-1 pt-0 text-center">
+    <button
+      type="button"
+      onClick={() => onSelect(step as (typeof STEP_ORDER)[number])}
+      className="group relative w-full cursor-pointer bg-transparent px-1 pt-0 text-center focus:outline-none"
+    >
       <div className="mx-auto flex w-full flex-col items-center">
         <span className="inline-block text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8178]">
           Step {step}
         </span>
         <div className="relative z-10 mt-2 flex h-14 items-center justify-center overflow-visible">
-          <TimelineDot active={active} step={step} />
+          <TimelineDot active={active} complete={complete} step={step} />
         </div>
         <div className="flex min-h-[86px] w-full flex-col items-center">
           <p className={`mt-1 text-sm font-semibold ${active ? "text-[#171717]" : "text-[#2f241f]"}`}>
@@ -1297,21 +1683,27 @@ function TimelineNode({
           </p>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
 function TimelineDot({
   active,
+  complete,
   step,
 }: {
   active: boolean;
+  complete: boolean;
   step: string;
 }) {
   return (
     <span
-      className={`relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-[rgba(255,106,61,0.24)] bg-[linear-gradient(180deg,#ff9d70_0%,#ff7d4d_56%,#ff6a3d_100%)] text-[11px] font-semibold transition duration-200 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.05] group-hover:shadow-[0_14px_28px_rgba(255,106,61,0.18)] ${
-        active ? "text-white shadow-[0_10px_22px_rgba(15,23,42,0.08)]" : "text-white/92"
+      className={`relative inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border text-[11px] font-semibold transition duration-200 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.05] ${
+        complete
+          ? "border-[rgba(34,197,94,0.24)] bg-[linear-gradient(180deg,#34d399_0%,#22c55e_52%,#16a34a_100%)] text-white group-hover:shadow-[0_14px_28px_rgba(34,197,94,0.22)]"
+          : "border-[rgba(255,106,61,0.24)] bg-[linear-gradient(180deg,#ff9d70_0%,#ff7d4d_56%,#ff6a3d_100%)] text-white/92 group-hover:shadow-[0_14px_28px_rgba(255,106,61,0.18)]"
+      } ${
+        active ? "shadow-[0_10px_22px_rgba(15,23,42,0.08)]" : ""
       }`}
     >
       {step}
@@ -1324,12 +1716,175 @@ function StepStatus({ complete }: { complete?: boolean }) {
     <span
       className={`inline-flex rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
         complete
-          ? "bg-[rgba(22,164,109,0.12)] text-[#116346]"
+          ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white shadow-[0_10px_20px_rgba(34,197,94,0.18)]"
           : "bg-[rgba(255,106,61,0.12)] text-[#9b4c2f]"
       }`}
     >
       {complete ? "Complete" : "In progress"}
     </span>
+  );
+}
+
+function SecretManagerRow({
+  secretRef,
+  menuOpen,
+  showBorder,
+  onToggleMenu,
+  onDelete,
+}: {
+  secretRef: ProjectOnboarding["secret_refs"][number];
+  menuOpen: boolean;
+  showBorder: boolean;
+  onToggleMenu: () => void;
+  onDelete: () => void;
+}) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+
+  return (
+    <div
+      className={`relative flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between ${
+        showBorder ? "border-b border-[rgba(29,26,24,0.08)]" : ""
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold text-[#171717]">{secretRef.label}</p>
+        <p className="mt-1 text-sm text-[#746d66]">Project-wide secret</p>
+      </div>
+      <div className="flex flex-1 flex-col gap-4 sm:flex-row sm:items-center sm:justify-end sm:gap-8">
+        <div className="min-w-[150px]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">Value</p>
+          <p className="mt-2 text-sm tracking-[0.28em] text-[#5f6470]">••••••••••••••••</p>
+        </div>
+        <div className="min-w-[170px]">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">Updated</p>
+          <p className="mt-2 text-sm text-[#5f6470]">{formatSecretTimestamp(secretRef.updated_at)}</p>
+        </div>
+        <div className="self-start sm:self-auto">
+          <button
+            ref={buttonRef}
+            type="button"
+            onClick={onToggleMenu}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white text-[#5f6470] transition hover:border-[rgba(29,26,24,0.14)] hover:text-[#171717]"
+            aria-label={`Open actions for ${secretRef.label}`}
+          >
+            <OverflowMenuGlyph />
+          </button>
+          {menuOpen ? (
+            <SecretActionMenu
+              anchorRef={buttonRef}
+              label={secretRef.label}
+              onDelete={onDelete}
+              onRequestClose={onToggleMenu}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SecretActionMenu({
+  anchorRef,
+  label,
+  onDelete,
+  onRequestClose,
+}: {
+  anchorRef: RefObject<HTMLButtonElement | null>;
+  label: string;
+  onDelete: () => void;
+  onRequestClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    function updatePosition() {
+      const anchor = anchorRef.current;
+      if (!anchor || typeof window === "undefined") {
+        return;
+      }
+      const rect = anchor.getBoundingClientRect();
+      const menuWidth = 150;
+      const viewportPadding = 12;
+      const left = Math.min(
+        Math.max(viewportPadding, rect.right - menuWidth),
+        window.innerWidth - menuWidth - viewportPadding,
+      );
+      setPosition({
+        top: rect.bottom + 8,
+        left,
+      });
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Node;
+      if (menuRef.current?.contains(target) || anchorRef.current?.contains(target)) {
+        return;
+      }
+      onRequestClose();
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [anchorRef, onRequestClose]);
+
+  if (typeof document === "undefined" || position === null) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="fixed z-[80] min-w-[150px] rounded-[16px] border border-[rgba(29,26,24,0.08)] bg-white p-2 shadow-[0_18px_36px_rgba(15,23,42,0.12)]"
+      style={{ top: `${position.top}px`, left: `${position.left}px` }}
+      aria-label={`Actions for ${label}`}
+    >
+      <button
+        type="button"
+        onClick={onDelete}
+        className="flex w-full items-center rounded-[12px] px-3 py-2 text-left text-sm font-medium text-[#b42318] transition hover:bg-[rgba(180,35,24,0.06)]"
+      >
+        Delete secret
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
+function formatSecretTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return "Recently updated";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  }).format(new Date(timestamp));
+}
+
+function PlusMiniGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current stroke-[1.8]">
+      <path d="M8 3.25v9.5M3.25 8h9.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function OverflowMenuGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-current">
+      <circle cx="3" cy="8" r="1.2" />
+      <circle cx="8" cy="8" r="1.2" />
+      <circle cx="13" cy="8" r="1.2" />
+    </svg>
   );
 }
 
@@ -1342,6 +1897,8 @@ function Field({
   className,
   autoComplete,
   helperText,
+  name,
+  suppressPasswordManagers = false,
 }: {
   label: string;
   value: string;
@@ -1351,6 +1908,8 @@ function Field({
   className?: string;
   autoComplete?: string;
   helperText?: string;
+  name?: string;
+  suppressPasswordManagers?: boolean;
 }) {
   return (
     <label className={`block ${className ?? ""}`}>
@@ -1362,10 +1921,20 @@ function Field({
       </span>
       <input
         type={type}
+        name={name}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        autoComplete={autoComplete}
+        autoComplete={suppressPasswordManagers ? (type === "password" ? "new-password" : "off") : autoComplete}
+        spellCheck={suppressPasswordManagers ? false : undefined}
+        autoCapitalize={suppressPasswordManagers ? "off" : undefined}
+        autoCorrect={suppressPasswordManagers ? "off" : undefined}
+        data-form-type={suppressPasswordManagers ? "other" : undefined}
+        data-lpignore={suppressPasswordManagers ? "true" : undefined}
+        data-1p-ignore={suppressPasswordManagers ? "true" : undefined}
+        data-bwignore={suppressPasswordManagers ? "true" : undefined}
+        data-op-ignore={suppressPasswordManagers ? "true" : undefined}
+        data-protonpass-ignore={suppressPasswordManagers ? "true" : undefined}
         className="w-full rounded-[16px] border border-[rgba(29,26,24,0.10)] bg-[rgba(255,250,245,0.82)] px-4 py-3 text-sm text-[#171717] outline-none transition placeholder:text-[#9c9388] focus:border-[rgba(255,106,61,0.36)] focus:bg-white"
       />
     </label>
@@ -1421,7 +1990,7 @@ function ActionButton({
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  variant?: "primary" | "secondary";
+  variant?: "primary" | "secondary" | "success";
 }) {
   return (
     <button
@@ -1431,6 +2000,8 @@ function ActionButton({
       className={`inline-flex items-center justify-center rounded-[16px] px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
         variant === "secondary"
           ? "border border-[rgba(29,26,24,0.08)] bg-[rgba(255,250,245,0.84)] text-[#17385d] hover:border-[rgba(255,106,61,0.2)] hover:bg-[#fff5ef]"
+          : variant === "success"
+            ? "bg-[linear-gradient(180deg,#1fbf68_0%,#16a34a_100%)] text-white shadow-[0_14px_28px_rgba(22,163,74,0.18)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(22,163,74,0.24)]"
           : "bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
       }`}
     >

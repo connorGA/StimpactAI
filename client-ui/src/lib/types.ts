@@ -481,13 +481,17 @@ export type GitLabOAuthStartResponse = {
   authorization_url: string;
 };
 
+export type GitHubAppInstallStartResponse = {
+  integration: ProviderIntegration;
+  installation_url: string;
+};
+
 export type SecretRef = {
   id: string;
   project_id: string;
   label: string;
   description: string | null;
   backend: "aws_secrets_manager";
-  external_ref: string;
   created_at: string;
   updated_at: string;
 };

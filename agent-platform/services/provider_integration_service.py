@@ -5,6 +5,7 @@ import hmac
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from api.core.config import (
@@ -43,6 +44,16 @@ class GitLabCallbackResult:
     integration: ProviderIntegrationRecord
     credentials_secret_ref: SecretRefRecord
     connected_account: ProviderInstallation
+
+
+@dataclass(slots=True)
+class GitHubCallbackResult:
+    integration: ProviderIntegrationRecord
+    connected_account: ProviderInstallation
+    installation_id: str
+    setup_action: str | None
+    redirect_url: str | None
+    synced_repository_count: int
 
 
 @dataclass(slots=True)
@@ -122,6 +133,31 @@ class ProviderIntegrationService:
         )
         return integration, installation
 
+    async def start_github_app_install(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        redirect_url: str,
+    ) -> tuple[ProviderIntegrationRecord, str]:
+        state = str(uuid4())
+        integration = await self._repository.create_provider_integration(
+            provider=ProviderKind.GITHUB,
+            name=name,
+            credentials_secret_ref_id=None,
+            webhook_secret_ref_id=None,
+            aws_region=get_aws_region(),
+            metadata={
+                "project_id": project_id,
+                "redirect_project_id": project_id,
+                "auth_mode": "github_app",
+                "install_state": state,
+                "redirect_url": redirect_url,
+            },
+            status=ProviderIntegrationStatus.DISABLED,
+        )
+        return integration, self._github_client.build_installation_url(state=state)
+
     async def preview_github_callback(
         self,
         *,
@@ -155,6 +191,67 @@ class ProviderIntegrationService:
             account_login=installation.account_login,
             account_type=installation.account_type,
             account_name=installation.account_name,
+        )
+
+    async def complete_github_app_callback(
+        self,
+        *,
+        state: str,
+        installation_id: str,
+        setup_action: str | None,
+    ) -> GitHubCallbackResult:
+        integration = await self._repository.find_provider_integration_by_metadata(
+            provider=ProviderKind.GITHUB,
+            metadata_key="install_state",
+            metadata_value=state,
+        )
+        if integration is None:
+            raise APIError(
+                "GitHub App installation state was not recognized.",
+                status_code=404,
+                code="github_install_state_not_found",
+            )
+
+        metadata = dict(integration.metadata)
+        redirect_url = str(metadata.get("redirect_url")) if metadata.get("redirect_url") is not None else None
+        project_id = self._resolve_project_id(metadata)
+        provisional = integration.model_copy(
+            update={
+                "status": ProviderIntegrationStatus.ACTIVE,
+                "metadata": {
+                    **metadata,
+                    "project_id": project_id,
+                    "auth_mode": "github_app",
+                    "installation_id": installation_id,
+                },
+            }
+        )
+        connected_account = await self._github_client.verify_integration(provisional)
+
+        metadata.pop("install_state", None)
+        metadata["project_id"] = project_id
+        metadata["auth_mode"] = "github_app"
+        metadata["installation_id"] = installation_id
+        metadata["account_login"] = connected_account.account_login
+        metadata["account_type"] = connected_account.account_type
+        metadata["account_name"] = connected_account.account_name
+
+        updated = await self._repository.update_provider_integration(
+            integration.id,
+            status=ProviderIntegrationStatus.ACTIVE,
+            credentials_secret_ref_id=integration.credentials_secret_ref_id,
+            webhook_secret_ref_id=integration.webhook_secret_ref_id,
+            aws_region=integration.aws_region,
+            metadata=metadata,
+        )
+        _synced_integration, repositories = await self.sync_repositories(updated.id)
+        return GitHubCallbackResult(
+            integration=updated,
+            connected_account=connected_account,
+            installation_id=installation_id,
+            setup_action=setup_action,
+            redirect_url=redirect_url,
+            synced_repository_count=len(repositories),
         )
 
     async def start_gitlab_oauth(
@@ -379,7 +476,7 @@ class ProviderIntegrationService:
         return secret_ref
 
     def _require_project_id(self, integration: ProviderIntegrationRecord) -> str:
-        project_id = integration.metadata.get("project_id")
+        project_id = self._resolve_project_id(integration.metadata)
         if project_id is None or not str(project_id).strip():
             raise APIError(
                 f"Provider integration {integration.id} is missing a project id.",
@@ -387,6 +484,59 @@ class ProviderIntegrationService:
                 code="provider_integration_project_missing",
             )
         return str(project_id)
+
+    def _resolve_project_id(self, metadata: dict[str, object]) -> str | None:
+        project_id = metadata.get("project_id")
+        if isinstance(project_id, str) and project_id.strip():
+            return project_id.strip()
+
+        redirect_project_id = metadata.get("redirect_project_id")
+        if isinstance(redirect_project_id, str) and redirect_project_id.strip():
+            return redirect_project_id.strip()
+
+        redirect_url = metadata.get("redirect_url")
+        if isinstance(redirect_url, str) and redirect_url.strip():
+            parsed = urlsplit(redirect_url)
+            query_pairs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            redirect_query_project_id = query_pairs.get("project_id")
+            if isinstance(redirect_query_project_id, str) and redirect_query_project_id.strip():
+                return redirect_query_project_id.strip()
+
+        return None
+
+    def build_callback_redirect_url(
+        self,
+        *,
+        redirect_url: str,
+        provider: ProviderKind,
+        project_id: str,
+        integration_id: str,
+        installation_id: str | None = None,
+        setup_action: str | None = None,
+        synced_repository_count: int | None = None,
+    ) -> str:
+        parsed = urlsplit(redirect_url)
+        query_pairs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query_pairs["provider"] = provider.value
+        query_pairs["provider_status"] = "connected"
+        query_pairs["project_id"] = project_id
+        query_pairs["integration_id"] = integration_id
+        if installation_id is not None:
+            query_pairs["installation_id"] = installation_id
+        if setup_action is not None:
+            query_pairs["setup_action"] = setup_action
+        if synced_repository_count is not None:
+            query_pairs["synced_repositories"] = str(synced_repository_count)
+        query_pairs["step"] = "3"
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(query_pairs),
+                parsed.fragment,
+            )
+        )
 
     def _get_base_url(self, integration: ProviderIntegrationRecord) -> str:
         base_url = integration.metadata.get("gitlab_base_url")

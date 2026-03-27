@@ -138,6 +138,12 @@ WHERE id = $1
 LIMIT 1;
 """
 
+DELETE_SECRET_REF_SQL = """
+DELETE FROM secret_refs
+WHERE id = $1
+RETURNING *;
+"""
+
 INSERT_PROJECT_API_KEY_SQL = """
 INSERT INTO project_api_keys (
     id, project_id, name, key_prefix, key_hash, status
@@ -567,6 +573,12 @@ class ControlPlaneRepository:
 
     async def get_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
         row = await self._fetchrow(GET_SECRET_REF_SQL, secret_ref_id, allow_missing=True)
+        if row is None:
+            return None
+        return SecretRefRecord.from_db_row(row)
+
+    async def delete_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
+        row = await self._fetchrow(DELETE_SECRET_REF_SQL, secret_ref_id, allow_missing=True)
         if row is None:
             return None
         return SecretRefRecord.from_db_row(row)

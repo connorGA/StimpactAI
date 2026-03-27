@@ -138,6 +138,15 @@ def get_public_base_url() -> str | None:
     return get_nonempty_env("AGENT_PLATFORM_PUBLIC_BASE_URL")
 
 
+def get_frontend_base_url() -> str | None:
+    explicit = get_nonempty_env("CLIENT_UI_BASE_URL", "FRONTEND_BASE_URL", "APP_BASE_URL")
+    if explicit is not None:
+        return explicit
+    if is_local_development_environment():
+        return "http://localhost:3000"
+    return None
+
+
 def get_s3_artifact_bucket() -> str | None:
     return get_nonempty_env("AGENT_PLATFORM_S3_ARTIFACT_BUCKET")
 

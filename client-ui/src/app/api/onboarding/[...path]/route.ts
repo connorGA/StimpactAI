@@ -49,6 +49,15 @@ async function proxyOnboardingRequest(
   }
 
   const response = await fetch(targetUrl, init);
+  if (response.status === 204) {
+    return new NextResponse(null, {
+      status: response.status,
+      headers: {
+        "Content-Type":
+          response.headers.get("Content-Type") ?? "application/json",
+      },
+    });
+  }
   const payload = await response.text();
 
   return new NextResponse(payload, {
@@ -68,6 +77,13 @@ export async function GET(
 }
 
 export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxyOnboardingRequest(request, context);
+}
+
+export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> },
 ) {

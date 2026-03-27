@@ -4,9 +4,11 @@ import {
   getIncidents,
   getLatestIncidentAutonomousRunDetail,
   getProjectPolicy,
+  getProjectOnboarding,
   listProviderIntegrations,
   listRepoProfiles,
 } from "@/lib/agent-platform";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 import {
   PageHeader,
@@ -24,6 +26,16 @@ export default async function AutomationsPage() {
         eyebrow="Automations"
         title="Create a project before unlocking automation workflows"
         description="Automation availability depends on a project, provider integration, and repo profile. Finish onboarding first, then this page will reflect live policy and remediation readiness."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Automations"
+        title="Finish onboarding before unlocking automation workflows"
+        description="Automation workflows stay behind the onboarding-first state until the current project has provider connectivity, synced repositories, secrets, and service configuration in place."
       />
     );
   }

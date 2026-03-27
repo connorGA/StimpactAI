@@ -87,7 +87,6 @@ const baseSecretRef = {
   label: "OPENAI_API_KEY",
   description: "Runtime secret",
   backend: "aws_secrets_manager",
-  external_ref: "arn:aws:secretsmanager:us-west-2:123456789012:secret:project-1/openai",
   created_at: "2026-03-20T12:00:00Z",
   updated_at: "2026-03-20T12:00:00Z",
 };
@@ -321,12 +320,47 @@ const server = http.createServer((request, response) => {
         label: payload.label,
         description: payload.description ?? null,
         backend: "aws_secrets_manager",
-        external_ref: `arn:aws:secretsmanager:us-west-2:123456789012:secret:${payload.project_id}/${payload.label}`,
         created_at: "2026-03-21T12:00:00Z",
         updated_at: "2026-03-21T12:00:00Z",
       };
       secretRefs = [...secretRefs, created];
       json(response, created, 201);
+    });
+  }
+
+  if (
+    url.pathname === "/control-plane/projects/project-1/provider-integrations/github-app/start" &&
+    request.method === "POST"
+  ) {
+    return void readJson(request).then((payload) => {
+      const created = {
+        id: `integration-${providerIntegrations.length + 1}`,
+        provider: "github",
+        name: payload.name,
+        status: "disabled",
+        credentials_secret_ref_id: null,
+        webhook_secret_ref_id: null,
+        aws_region: "us-west-2",
+        metadata: {
+          project_id: payload.project_id,
+          redirect_url: payload.redirect_url,
+        },
+        created_at: "2026-03-21T12:00:00Z",
+        updated_at: "2026-03-21T12:00:00Z",
+      };
+      providerIntegrations = [...providerIntegrations, created];
+      providerRepositoriesByIntegration = {
+        ...providerRepositoriesByIntegration,
+        [created.id]: [],
+      };
+      json(
+        response,
+        {
+          integration: created,
+          installation_url: "https://github.com/apps/stimpact/installations/new?state=github-install-state",
+        },
+        201,
+      );
     });
   }
 

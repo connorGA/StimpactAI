@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 
 from api.core.security import (
     build_project_api_key,
@@ -9,6 +10,7 @@ from api.core.security import (
     require_control_plane_access,
     require_project_control_plane_access,
 )
+from api.core.config import get_frontend_base_url
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.core.errors import APIError
 from api.repositories.control_plane_repository import ControlPlaneRepository
@@ -20,6 +22,8 @@ from api.schemas.control_plane import (
     CreateRepoProfileRequest,
     CreateSecretRefRequest,
     CreateGitHubAppIntegrationRequest,
+    StartGitHubAppInstallRequest,
+    GitHubAppInstallStartResponse,
     GitHubCallbackResponse,
     GitLabOAuthCallbackResponse,
     GitLabOAuthStartResponse,
@@ -319,6 +323,24 @@ async def list_secret_refs(
     return [SecretRefResponse.from_record(record) for record in records]
 
 
+@router.delete("/secret-refs/{secret_ref_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_secret_ref(
+    secret_ref_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    writer: SecretsWriter = Depends(get_secrets_writer),
+) -> Response:
+    record = await repository.get_secret_ref(secret_ref_id)
+    if record is None:
+        raise APIError(
+            f"Secret ref {secret_ref_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="secret_ref_not_found",
+        )
+    writer.delete_secret(external_ref=record.external_ref)
+    await repository.delete_secret_ref(secret_ref_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/projects/{project_id}/api-keys",
     response_model=ProjectApiKeyCreateResponse,
@@ -466,6 +488,26 @@ async def create_github_app_integration(
         installation_id=payload.installation_id,
     )
     return ProviderIntegrationResponse.from_record(integration)
+
+
+@router.post(
+    "/provider-integrations/github-app/start",
+    response_model=GitHubAppInstallStartResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_github_app_install(
+    payload: StartGitHubAppInstallRequest,
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> GitHubAppInstallStartResponse:
+    integration, installation_url = await service.start_github_app_install(
+        project_id=payload.project_id,
+        name=payload.name,
+        redirect_url=payload.redirect_url,
+    )
+    return GitHubAppInstallStartResponse(
+        integration=ProviderIntegrationResponse.from_record(integration),
+        installation_url=installation_url,
+    )
 
 
 @router.post(
@@ -625,6 +667,25 @@ async def list_project_secret_refs(
     return await list_secret_refs(project_id=project_id, repository=repository)
 
 
+@project_router.delete("/secret-refs/{secret_ref_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project_secret_ref(
+    project_id: str,
+    secret_ref_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    writer: SecretsWriter = Depends(get_secrets_writer),
+) -> Response:
+    record = await repository.get_secret_ref(secret_ref_id)
+    if record is None or record.project_id != project_id:
+        raise APIError(
+            f"Secret ref {secret_ref_id} was not found for project {project_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="secret_ref_not_found",
+        )
+    writer.delete_secret(external_ref=record.external_ref)
+    await repository.delete_secret_ref(secret_ref_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @project_router.get(
     "/provider-integrations",
     response_model=list[ProviderIntegrationResponse],
@@ -649,6 +710,20 @@ async def create_project_github_app_integration(
 ) -> ProviderIntegrationResponse:
     _assert_project_matches(project_id, payload.project_id)
     return await create_github_app_integration(payload, service=service)
+
+
+@project_router.post(
+    "/provider-integrations/github-app/start",
+    response_model=GitHubAppInstallStartResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_project_github_app_install(
+    project_id: str,
+    payload: StartGitHubAppInstallRequest,
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> GitHubAppInstallStartResponse:
+    _assert_project_matches(project_id, payload.project_id)
+    return await start_github_app_install(payload, service=service)
 
 
 @project_router.post(
@@ -841,14 +916,47 @@ async def get_project_service_sandbox_plan(
 
 @public_router.get(
     "/api/github/callback",
-    response_model=GitHubCallbackResponse,
+    response_model=None,
     status_code=status.HTTP_200_OK,
 )
 async def github_callback(
     installation_id: str | None = Query(default=None),
     setup_action: str | None = Query(default=None),
+    state: str | None = Query(default=None),
     service: ProviderIntegrationService = Depends(get_provider_integration_service),
-) -> GitHubCallbackResponse:
+) -> object:
+    if state is not None and installation_id is not None:
+        result = await service.complete_github_app_callback(
+            state=state,
+            installation_id=installation_id,
+            setup_action=setup_action,
+        )
+        project_id = str(result.integration.metadata.get("project_id", "")).strip()
+        redirect_url = result.redirect_url.strip() if isinstance(result.redirect_url, str) else ""
+        if not redirect_url:
+            frontend_base_url = get_frontend_base_url()
+            if frontend_base_url is not None:
+                redirect_url = f"{frontend_base_url.rstrip('/')}/onboarding"
+                if project_id:
+                    redirect_url = f"{redirect_url}?project_id={project_id}"
+        if redirect_url:
+            return RedirectResponse(
+                url=service.build_callback_redirect_url(
+                    redirect_url=redirect_url,
+                    provider=ProviderKind.GITHUB,
+                    project_id=project_id,
+                    integration_id=result.integration.id,
+                    installation_id=result.installation_id,
+                    setup_action=result.setup_action,
+                    synced_repository_count=result.synced_repository_count,
+                ),
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        raise APIError(
+            "GitHub installation completed but no frontend redirect URL is configured.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="github_redirect_missing",
+        )
     preview = await service.preview_github_callback(
         installation_id=installation_id,
         setup_action=setup_action,

@@ -4,6 +4,7 @@ import { ProjectSetupState } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
+  getProjectOnboarding,
   getIncidentReportingOverview,
   getIncidents,
   getLatestIncidentAutonomousRunDetail,
@@ -14,6 +15,7 @@ import {
   getLiveStatusSummary,
   getServiceHealthRows,
 } from "@/lib/dashboard";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 import type {
   AutonomousRunStatus,
@@ -29,6 +31,16 @@ export async function LiveWorkspacePage() {
         eyebrow="Live workspace"
         title="Create your first project before opening live operations"
         description="The live workspace reads from project-scoped incident data. Finish onboarding first, then this route will show the active warning stream, current system state, and operator updates."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Live workspace"
+        title="Finish onboarding before opening live operations"
+        description="The live workspace stays in onboarding-first mode until provider connection, repositories, secrets, and service mapping are fully configured for the current project."
       />
     );
   }

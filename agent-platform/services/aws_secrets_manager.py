@@ -13,6 +13,7 @@ from api.core.errors import APIError
 
 class SecretsWriter(Protocol):
     def put_secret(self, *, project_id: str, label: str, value: str) -> str: ...
+    def delete_secret(self, *, external_ref: str) -> None: ...
 
 
 class SecretsReader(Protocol):
@@ -94,6 +95,40 @@ class AwsSecretsManagerWriter:
                 "Failed to update secret in AWS Secrets Manager.",
                 status_code=502,
                 code="secrets_manager_write_failed",
+            ) from exc
+
+    def delete_secret(self, *, external_ref: str) -> None:
+        if self._region is None:
+            raise APIError(
+                "AWS region is not configured for Secrets Manager.",
+                status_code=503,
+                code="aws_unconfigured",
+            )
+
+        try:
+            import boto3  # type: ignore
+            from botocore.exceptions import ClientError  # type: ignore
+        except ImportError as exc:  # pragma: no cover - depends on runtime environment
+            raise APIError(
+                "boto3 is not installed for AWS Secrets Manager integration.",
+                status_code=503,
+                code="aws_sdk_unavailable",
+            ) from exc
+
+        client = boto3.client("secretsmanager", region_name=self._region)
+        try:
+            client.delete_secret(
+                SecretId=external_ref,
+                ForceDeleteWithoutRecovery=True,
+            )
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code == "ResourceNotFoundException":
+                return
+            raise APIError(
+                "Failed to delete secret from AWS Secrets Manager.",
+                status_code=502,
+                code="secrets_manager_delete_failed",
             ) from exc
 
 

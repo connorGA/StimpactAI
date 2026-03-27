@@ -82,7 +82,7 @@ from models.sandbox import (
 from shared.events.incident_events import IncidentEvent, IncidentEventType
 from shared.types.telemetry import Environment
 from services.provider_clients import ProviderInstallation
-from services.provider_integration_service import GitHubCallbackPreview, GitLabCallbackResult
+from services.provider_integration_service import GitHubCallbackPreview, GitHubCallbackResult, GitLabCallbackResult
 
 
 def build_test_app() -> FastAPI:
@@ -302,6 +302,13 @@ class StubControlPlaneRepository:
     async def get_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
         return self.secret_ref if secret_ref_id == self.secret_ref.id else None
 
+    async def delete_secret_ref(self, secret_ref_id: str) -> SecretRefRecord | None:
+        if secret_ref_id != self.secret_ref.id:
+            return None
+        deleted = self.secret_ref
+        self.secret_ref = self.secret_ref.model_copy(update={"id": "deleted-secret"})
+        return deleted
+
     async def create_project_api_key(
         self,
         *,
@@ -459,6 +466,9 @@ class StubSecretsWriter:
         assert value == "super-secret-value"
         return "arn:aws:secretsmanager:us-east-1:123456789012:secret:stimpact/project-1/OPENAI_API_KEY"
 
+    def delete_secret(self, *, external_ref: str) -> None:
+        assert external_ref.startswith("arn:aws:secretsmanager:")
+
 
 class StubProviderIntegrationService:
     def __init__(self) -> None:
@@ -520,6 +530,22 @@ class StubProviderIntegrationService:
             account_name="Acme",
         )
 
+    async def start_github_app_install(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        redirect_url: str,
+    ) -> tuple[ProviderIntegrationRecord, str]:
+        assert project_id == "project-1"
+        assert name == "ScaleProject GitHub"
+        assert redirect_url == "http://localhost:3000/onboarding?provider=github&step=3"
+        integration = self.integration.model_copy(update={"status": ProviderIntegrationStatus.DISABLED})
+        return (
+            integration,
+            "https://github.com/apps/stimpact/installations/new?state=github-install-state-1",
+        )
+
     async def start_gitlab_oauth(
         self,
         *,
@@ -579,6 +605,63 @@ class StubProviderIntegrationService:
             account_login="acme",
             account_type="Organization",
             account_name="Acme",
+        )
+
+    async def complete_github_app_callback(
+        self,
+        *,
+        state: str,
+        installation_id: str,
+        setup_action: str | None,
+    ) -> GitHubCallbackResult:
+        assert state == "github-install-state-1"
+        assert installation_id == "117170229"
+        assert setup_action == "install"
+        integration = self.integration.model_copy(
+            update={
+                "metadata": {
+                    **self.integration.metadata,
+                    "project_id": "project-1",
+                }
+            }
+        )
+        return GitHubCallbackResult(
+            integration=integration,
+            connected_account=ProviderInstallation(
+                external_id="117170229",
+                account_login="acme",
+                account_type="Organization",
+                account_name="Acme",
+            ),
+            installation_id="117170229",
+            setup_action="install",
+            redirect_url="http://localhost:3000/onboarding?provider=github&step=3",
+            synced_repository_count=4,
+        )
+
+    def build_callback_redirect_url(
+        self,
+        *,
+        redirect_url: str,
+        provider: ProviderKind,
+        project_id: str,
+        integration_id: str,
+        installation_id: str | None = None,
+        setup_action: str | None = None,
+        synced_repository_count: int | None = None,
+    ) -> str:
+        assert redirect_url == "http://localhost:3000/onboarding?provider=github&step=3"
+        assert provider is ProviderKind.GITHUB
+        assert project_id == "project-1"
+        assert integration_id == "integration-1"
+        assert installation_id == "117170229"
+        assert setup_action == "install"
+        assert synced_repository_count == 4
+        return (
+            "http://localhost:3000/onboarding"
+            "?provider=github&provider_status=connected&project_id=project-1"
+            "&integration_id=integration-1&installation_id=117170229"
+            "&setup_action=install&synced_repositories=4&step=3"
         )
 
     def verify_github_webhook(self, *, body: bytes, signature_header: str | None) -> None:
@@ -1383,7 +1466,7 @@ def test_create_secret_ref_writes_to_secret_manager_and_returns_metadata() -> No
     body = response.json()
     assert body["project_id"] == "project-1"
     assert body["backend"] == "aws_secrets_manager"
-    assert body["external_ref"].startswith("arn:aws:secretsmanager:")
+    assert "external_ref" not in body
 
 
 def test_create_repo_profile_returns_profile_with_secret_refs() -> None:
@@ -1463,6 +1546,26 @@ def test_create_github_app_integration_returns_verified_record() -> None:
     body = response.json()
     assert body["provider"] == "github"
     assert body["metadata"]["installation_id"] == "117170229"
+
+
+def test_start_github_app_install_returns_installation_url() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_provider_integration_service] = StubProviderIntegrationService
+
+    client = TestClient(app)
+    response = client.post(
+        "/control-plane/projects/project-1/provider-integrations/github-app/start",
+        json={
+            "project_id": "project-1",
+            "name": "ScaleProject GitHub",
+            "redirect_url": "http://localhost:3000/onboarding?provider=github&step=3",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["integration"]["provider"] == "github"
+    assert body["installation_url"].startswith("https://github.com/apps/stimpact/installations/new")
 
 
 def test_start_gitlab_oauth_returns_authorization_url() -> None:
@@ -1547,6 +1650,17 @@ def test_project_secret_ref_route_rejects_mismatched_project_id() -> None:
     assert response.json()["error"]["code"] == "project_mismatch"
 
 
+def test_delete_project_secret_ref_returns_no_content() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_control_plane_repository] = StubControlPlaneRepository
+    app.dependency_overrides[get_secrets_writer] = StubSecretsWriter
+
+    client = TestClient(app)
+    response = client.delete("/control-plane/projects/project-1/secret-refs/secret-1")
+
+    assert response.status_code == 204
+
+
 def test_project_onboarding_route_accepts_project_api_key_when_admin_auth_enabled(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "admin-token")
     repository = StubControlPlaneRepository()
@@ -1609,6 +1723,27 @@ def test_github_callback_returns_installation_preview() -> None:
     body = response.json()
     assert body["provider"] == "github"
     assert body["account_login"] == "acme"
+
+
+def test_github_callback_redirects_back_to_onboarding_when_state_is_present() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_provider_integration_service] = StubProviderIntegrationService
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/github/callback",
+        params={
+            "installation_id": "117170229",
+            "setup_action": "install",
+            "state": "github-install-state-1",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("http://localhost:3000/onboarding")
+    assert "provider_status=connected" in response.headers["location"]
+    assert "synced_repositories=4" in response.headers["location"]
 
 
 def test_github_webhook_accepts_verified_payload() -> None:

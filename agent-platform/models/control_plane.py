@@ -118,9 +118,6 @@ class ProviderIntegrationRecord(BaseModel):
 
     @classmethod
     def from_db_row(cls, row: Any) -> "ProviderIntegrationRecord":
-        metadata = row["metadata"]
-        if not isinstance(metadata, dict):
-            metadata = {}
         return cls(
             id=str(row["id"]),
             provider=ProviderKind(str(row["provider"])),
@@ -137,7 +134,7 @@ class ProviderIntegrationRecord(BaseModel):
                 else None
             ),
             aws_region=row["aws_region"],
-            metadata=metadata,
+            metadata=_decode_json_object(row["metadata"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

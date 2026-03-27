@@ -4,10 +4,12 @@ import {
   getIncidentReportingOverview,
   getIncidents,
   getLatestIncidentAutonomousRunDetail,
+  getProjectOnboarding,
 } from "@/lib/agent-platform";
 import {
   calculateLinePath,
 } from "@/lib/dashboard";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +22,16 @@ export default async function MetricsPage() {
         eyebrow="Metrics and reporting"
         title="Create a project before loading reporting views"
         description="Metrics are generated from project-scoped incident and runtime data. Complete onboarding first, then this route will populate with trend reporting and readiness summaries."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Metrics and reporting"
+        title="Finish onboarding before loading reporting views"
+        description="Metrics and reporting remain in the onboarding-first state until the current project has a connected provider, synced repositories, secrets, and deployable service mappings."
       />
     );
   }

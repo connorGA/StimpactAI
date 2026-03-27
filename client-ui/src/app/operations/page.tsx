@@ -2,8 +2,14 @@ import Link from "next/link";
 
 import { PageHeader, ProjectSetupState, SectionCard, StatCard } from "@/components/dashboard-ui";
 import { SeverityBadge } from "@/components/severity-badge";
-import { getHealthReadiness, getIncidents, getLatestIncidentAutonomousRunDetail } from "@/lib/agent-platform";
+import {
+  getHealthReadiness,
+  getIncidents,
+  getLatestIncidentAutonomousRunDetail,
+  getProjectOnboarding,
+} from "@/lib/agent-platform";
 import { countOpenIncidents, formatTimestamp } from "@/lib/dashboard";
+import { isProjectOnboardingComplete } from "@/lib/onboarding";
 import { resolvePrimaryProjectId } from "@/lib/project-context";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +22,16 @@ export default async function OperationsPage() {
         eyebrow="Operations"
         title="Create a project before using the response workflow"
         description="The operations surface is built around project-scoped incidents, handoff state, and repair activity. Complete onboarding first to activate this workflow."
+      />
+    );
+  }
+  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
+    return (
+      <ProjectSetupState
+        eyebrow="Operations"
+        title="Finish onboarding before using the response workflow"
+        description="Operations stays locked to the onboarding-first state until the current project has a connected provider, synced repository access, secrets, and mapped services."
       />
     );
   }

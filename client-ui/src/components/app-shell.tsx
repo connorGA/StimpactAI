@@ -15,6 +15,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [pendingNavHref, setPendingNavHref] = useState<string | null>(null);
 
   const isPublicRoute =
     pathname === "/" || pathname === "/login" || pathname === "/signup";
@@ -57,6 +58,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [isPublicRoute]);
+
+  useEffect(() => {
+    if (!pendingNavHref) {
+      return;
+    }
+    if (pathname === pendingNavHref || pathname.startsWith(`${pendingNavHref}/`)) {
+      setPendingNavHref(null);
+    }
+  }, [pathname, pendingNavHref]);
+
+  function handleShellNavigate(href: string) {
+    if (pathname === href || pathname.startsWith(`${href}/`)) {
+      setPendingNavHref(null);
+      return;
+    }
+    setPendingNavHref(href);
+  }
 
   async function handleLogout() {
     await fetch("/api/auth/logout", {
@@ -110,7 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }`}
       >
         <div className="flex-1 overflow-y-auto px-4 py-5">
-          <AppShellNav compact={false} />
+          <AppShellNav compact={false} pendingHref={pendingNavHref} onNavigate={handleShellNavigate} />
         </div>
 
         <button
@@ -153,15 +171,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             onLogout={handleLogout}
           />
           <div className="mt-4">
-            <AppShellNav mobile />
+            <AppShellNav mobile pendingHref={pendingNavHref} onNavigate={handleShellNavigate} />
           </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 lg:px-8 lg:pb-10 lg:pt-[5.5rem]">
           <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-6">
-            {children}
+            {pendingNavHref ? <WorkspaceRouteLoading href={pendingNavHref} /> : children}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceRouteLoading({ href }: { href: string }) {
+  void href;
+
+  return (
+    <div className="flex min-h-[520px] items-center justify-center">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <span className="inline-flex h-9 w-9 animate-spin rounded-full border-2 border-[rgba(23,56,93,0.18)] border-t-[rgba(255,106,61,0.88)]" />
+        <p className="text-sm font-medium text-[#746d66]">Loading..</p>
       </div>
     </div>
   );

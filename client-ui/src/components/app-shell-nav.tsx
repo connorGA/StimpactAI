@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 type AppShellNavProps = {
   mobile?: boolean;
   compact?: boolean;
+  pendingHref?: string | null;
+  onNavigate?: (href: string) => void;
 };
 
 const navItems = [
@@ -62,6 +64,8 @@ const navItems = [
 export function AppShellNav({
   mobile = false,
   compact = false,
+  pendingHref = null,
+  onNavigate,
 }: AppShellNavProps) {
   const pathname = usePathname();
 
@@ -70,6 +74,7 @@ export function AppShellNav({
       <nav className="flex gap-2 overflow-x-auto lg:hidden">
         {navItems.map((item) => {
           const isActive =
+            pendingHref === item.href ||
             pathname === item.href ||
             pathname.startsWith(`${item.href}/`);
 
@@ -77,6 +82,7 @@ export function AppShellNav({
             <Link
               key={item.href}
               href={item.href}
+              onClick={() => onNavigate?.(item.href)}
               className={`vault-nav-link min-w-fit rounded-xl border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#f5f8ff,#e8f0fb)] px-4 py-2 text-sm font-medium shadow-[0_8px_20px_rgba(15,23,42,0.04)] transition ${
                 isActive ? "vault-nav-link-active" : ""
               }`}
@@ -95,6 +101,7 @@ export function AppShellNav({
         <nav className="space-y-1.5">
           {navItems.map((item) => {
             const isActive =
+              pendingHref === item.href ||
               pathname === item.href ||
               pathname.startsWith(`${item.href}/`);
 
@@ -102,6 +109,7 @@ export function AppShellNav({
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => onNavigate?.(item.href)}
                 className={`vault-sidebar-link vault-nav-link block -mx-2 px-4 py-3 transition ${
                   isActive ? "vault-nav-link-active vault-sidebar-link-active" : ""
                 }`}
