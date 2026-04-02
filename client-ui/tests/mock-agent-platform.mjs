@@ -1,4 +1,5 @@
 import http from "node:http";
+import { SignJWT } from "jose";
 
 const incident = {
   id: "incident-1",
@@ -79,6 +80,67 @@ const policy = {
   runbook_executor_enabled: false,
   created_at: "2026-03-20T12:00:00Z",
   updated_at: "2026-03-20T12:00:00Z",
+};
+
+const user = {
+  id: "user-1",
+  email: "connor@example.com",
+  full_name: "Connor GA",
+  email_verified_at: "2026-03-20T12:00:00Z",
+  created_at: "2026-03-20T12:00:00Z",
+  updated_at: "2026-03-20T12:00:00Z",
+};
+
+const organization = {
+  id: "org-1",
+  name: "Stimpact",
+  slug: "stimpact",
+  created_at: "2026-03-20T12:00:00Z",
+  updated_at: "2026-03-20T12:00:00Z",
+};
+
+const projectSummary = {
+  id: "project-1",
+  organization_id: "org-1",
+  slug: "synthetic-soul-songs",
+  name: "Synthetic Soul Songs",
+  created_by_user_id: "user-1",
+  created_at: "2026-03-20T12:00:00Z",
+  updated_at: "2026-03-20T12:00:00Z",
+};
+
+const session = {
+  access_token: await new SignJWT({
+    org_id: "org-1",
+    role: "owner",
+    type: "session",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject("user-1")
+    .setIssuedAt(Math.floor(Date.now() / 1000))
+    .setExpirationTime("7d")
+    .sign(new TextEncoder().encode("stimpact-dev-session-secret")),
+  user,
+  organization,
+  role: "owner",
+  memberships: [
+    {
+      organization,
+      role: "owner",
+    },
+  ],
+  projects: [projectSummary],
+  subscription: {
+    id: "subscription-1",
+    organization_id: "org-1",
+    plan: "scale",
+    status: "active",
+    included_projects: 3,
+    additional_project_price_cents: 3000,
+    seat_policy: "unlimited",
+    created_at: "2026-03-20T12:00:00Z",
+    updated_at: "2026-03-20T12:00:00Z",
+  },
 };
 
 const baseSecretRef = {
@@ -167,6 +229,69 @@ let providerRepositoriesByIntegration = {
   "integration-1": [structuredClone(baseProviderRepository)],
 };
 let repoProfiles = [structuredClone(baseRepoProfile)];
+const sdkBootstrapStrategy = {
+  id: "nextjs-app-router",
+  language: "typescript",
+  framework: "Next.js App Router",
+  summary: "Initialize the Stimpact SDK from the app router entrypoint and expose the required env vars.",
+  confidence: "high",
+  pr_supported: true,
+  target_subpath: "apps/web",
+  entrypoints: ["apps/web/src/app/layout.tsx"],
+  assumptions: [],
+  blockers: [],
+  planned_files: [
+    {
+      path: "apps/web/src/app/layout.tsx",
+      action: "update",
+      reason: "Attach the SDK initialization to the app entrypoint.",
+    },
+    {
+      path: "apps/web/.env.example",
+      action: "update",
+      reason: "Document the required Stimpact environment variables.",
+    },
+  ],
+  env_vars: [
+    {
+      name: "NEXT_PUBLIC_STIMPACT_BASE_URL",
+      example_value: "https://stimpact.example.com",
+      description: "Public Stimpact platform URL.",
+    },
+    {
+      name: "STIMPACT_PROJECT_ID",
+      example_value: "project-1",
+      description: "Project identifier used by the SDK.",
+    },
+    {
+      name: "STIMPACT_SERVICE_NAME",
+      example_value: "web-app",
+      description: "Logical service name for telemetry attribution.",
+    },
+    {
+      name: "STIMPACT_ENVIRONMENT",
+      example_value: "production",
+      description: "Deployment environment name.",
+    },
+  ],
+  install_command: "pnpm add @stimpact/sdk",
+  package_name: "@stimpact/sdk",
+  manual_steps: [
+    {
+      title: "Install the SDK",
+      content: "Run `pnpm add @stimpact/sdk` from the app workspace.",
+    },
+    {
+      title: "Initialize at startup",
+      content: "Import and initialize the SDK from `src/app/layout.tsx`.",
+    },
+  ],
+  preview_snippet:
+    "import { initStimpact } from '@stimpact/sdk';\n\ninitStimpact({ baseUrl: '<public-stimpact-url>', projectId: '<project-id>' });",
+  source: "deterministic",
+  evidence: ["Detected app router layout at apps/web/src/app/layout.tsx"],
+  confidence_reason: "The repo contains a supported Next.js App Router entrypoint.",
+};
 
 function buildOnboardingResponse(projectId) {
   const integrations = providerIntegrations
@@ -197,11 +322,34 @@ function buildOnboardingResponse(projectId) {
 
   return {
     project_id: projectId,
+    platform_base_url: "https://stimpact.example.com",
     policy,
+    onboarding_state: {
+      project_id: projectId,
+      policy_reviewed: false,
+      sdk_setup_status: "pending",
+      sdk_setup_provider_repository_id: null,
+      sdk_setup_change_request_url: null,
+      created_at: "2026-03-20T12:00:00Z",
+      updated_at: "2026-03-20T12:00:00Z",
+    },
+    operational_readiness: {
+      has_provider_connection: integrations.length > 0,
+      has_synced_repositories: integrations.some((item) => item.repositories.length > 0),
+      has_secrets: projectSecretRefs.length > 0,
+      has_repo_profiles: projectRepoProfiles.length > 0,
+      has_services: false,
+      has_active_api_keys: true,
+      policy_reviewed: false,
+      sdk_setup_ready: false,
+      complete: false,
+    },
     secret_refs: projectSecretRefs,
     api_keys: [projectApiKey],
     integrations,
     repo_profiles: projectRepoProfiles,
+    project_services: [],
+    telemetry_heartbeats: [],
     suggested_next_steps: suggestedNextSteps,
   };
 }
@@ -284,6 +432,14 @@ const server = http.createServer((request, response) => {
     });
   }
 
+  if (url.pathname === "/auth/me") {
+    return json(response, session);
+  }
+
+  if (url.pathname === "/auth/login" && request.method === "POST") {
+    return json(response, session);
+  }
+
   if (url.pathname === "/control-plane/provider-integrations") {
     return json(response, providerIntegrations);
   }
@@ -310,6 +466,174 @@ const server = http.createServer((request, response) => {
 
   if (url.pathname === "/control-plane/projects/project-1/onboarding") {
     return json(response, buildOnboardingResponse("project-1"));
+  }
+
+  if (
+    url.pathname ===
+      "/control-plane/projects/project-1/provider-repositories/provider-repo-1/repo-profile-defaults" &&
+    request.method === "GET"
+  ) {
+    return json(response, {
+      runtime_kind: "node",
+      base_image: "public.ecr.aws/docker/library/node:20",
+      install_command: "pnpm install --frozen-lockfile",
+      reproduce_command: "pnpm --dir apps/web run test",
+      verify_command: "pnpm --dir apps/web run test",
+      detected_from: ["package.json and lockfile", "package.json scripts in apps/web"],
+      warnings: [
+        "This repository looks like a monorepo. If frontend and backend deploy separately, map them as separate services.",
+      ],
+      monorepo: true,
+    });
+  }
+
+  if (url.pathname === "/control-plane/projects/project-1/sdk-bootstrap/plan" && request.method === "POST") {
+    return void readJson(request).then((payload) => {
+      if (!payload.project_id || !payload.provider_repository_id || !payload.service_name || !payload.base_url) {
+        return json(
+          response,
+          {
+            detail: "Missing required SDK bootstrap plan fields.",
+          },
+          400,
+        );
+      }
+      json(response, {
+        runtime: "node",
+        warnings: [],
+        strategies: [
+          {
+            ...sdkBootstrapStrategy,
+            env_vars: sdkBootstrapStrategy.env_vars.map((item) =>
+              item.name === "STIMPACT_SERVICE_NAME"
+                ? { ...item, example_value: payload.service_name }
+                : item.name === "STIMPACT_ENVIRONMENT"
+                  ? { ...item, example_value: payload.environment ?? "production" }
+                  : item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
+                    ? { ...item, example_value: payload.base_url }
+                    : item.name === "STIMPACT_PROJECT_ID"
+                      ? { ...item, example_value: payload.project_id }
+                      : item,
+            ),
+          },
+        ],
+        recommended_strategy_id: sdkBootstrapStrategy.id,
+        requires_confirmation: true,
+      });
+    });
+  }
+
+  if (url.pathname === "/control-plane/projects/project-1/sdk-bootstrap/preview" && request.method === "POST") {
+    return void readJson(request).then((payload) => {
+      if (
+        !payload.project_id ||
+        !payload.provider_repository_id ||
+        !payload.service_name ||
+        !payload.base_url
+      ) {
+        return json(
+          response,
+          {
+            detail: "Missing required SDK bootstrap preview fields.",
+          },
+          400,
+        );
+      }
+      const selectedStrategyId = payload.strategy_id ?? sdkBootstrapStrategy.id;
+      const attempt = {
+        strategy_id: selectedStrategyId,
+        patch_source: "deterministic",
+        patch_generated: true,
+        patch_applied: true,
+        verification: {
+          status: "passed",
+          command: "review-generated-patch",
+          summary: "Patch applied in a temp checkout and passed focused verification.",
+          output: null,
+        },
+        preview_available: true,
+        change_request_allowed: true,
+        changed_files: ["apps/web/src/app/layout.tsx", "apps/web/.env.example"],
+        warnings: [],
+        failure_stage: null,
+        failure_reason: null,
+        rejection_reason_code: null,
+        attempt_number: 2,
+        candidate_id: selectedStrategyId,
+        generation_duration_ms: 320,
+        apply_duration_ms: 90,
+        verification_duration_ms: 120,
+      };
+      json(response, {
+        run_id: "sdk-run-1",
+        selected_strategy_id: selectedStrategyId,
+        strategy: {
+          ...sdkBootstrapStrategy,
+          env_vars: sdkBootstrapStrategy.env_vars.map((item) =>
+            item.name === "STIMPACT_SERVICE_NAME"
+              ? { ...item, example_value: payload.service_name }
+              : item.name === "STIMPACT_ENVIRONMENT"
+                ? { ...item, example_value: payload.environment ?? "production" }
+                : item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
+                  ? { ...item, example_value: payload.base_url }
+                  : item.name === "STIMPACT_PROJECT_ID"
+                    ? { ...item, example_value: payload.project_id }
+                    : item,
+          ),
+        },
+        pull_request: {
+          branch_name: "stimpact/sdk-bootstrap-preview",
+          title: "Add Stimpact SDK bootstrap",
+          description: "## Summary\n- initialize the Stimpact SDK in the app router entrypoint",
+          commit_message: "Add Stimpact SDK bootstrap",
+        },
+        patch_diff:
+          "diff --git a/apps/web/src/app/layout.tsx b/apps/web/src/app/layout.tsx\n+import { initStimpact } from '@stimpact/sdk';\n+initStimpact({ baseUrl: 'https://stimpact.example.com', projectId: 'project-1' });\n",
+        attempt,
+        attempts: [
+          {
+            strategy_id: "javascript-react-scripts:apps/web:src/index.tsx",
+            patch_source: "llm",
+            patch_generated: false,
+            patch_applied: false,
+            verification: {
+              status: "skipped",
+              command: null,
+              summary: "First candidate did not produce a reviewable patch.",
+              output: null,
+            },
+            preview_available: false,
+            change_request_allowed: false,
+            changed_files: [],
+            warnings: ["First candidate was rejected before preview."],
+            failure_stage: "generation",
+            failure_reason: "First candidate did not produce a reviewable patch.",
+            rejection_reason_code: "empty_patch",
+            attempt_number: 1,
+            candidate_id: "javascript-react-scripts:apps/web:src/index.tsx",
+            generation_duration_ms: 120,
+            apply_duration_ms: null,
+            verification_duration_ms: null,
+          },
+          attempt,
+        ],
+      });
+    });
+  }
+
+  if (
+    url.pathname === "/control-plane/projects/project-1/telemetry-verification" &&
+    request.method === "GET"
+  ) {
+    return json(response, {
+      service: url.searchParams.get("service") ?? "web-app",
+      environment: url.searchParams.get("environment") ?? "production",
+      status: "unseen",
+      last_seen_at: null,
+      commit_sha: null,
+      stale_after_seconds: 300,
+      heartbeat: null,
+    });
   }
 
   if (url.pathname === "/control-plane/projects/project-1/secret-refs" && request.method === "POST") {

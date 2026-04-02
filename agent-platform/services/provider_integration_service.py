@@ -501,10 +501,23 @@ class ProviderIntegrationService:
             repository,
             credentials_secret_ref=credentials_secret_ref,
         )
-        return infer_repo_profile_from_clone(
-            clone_url=access.secret_value,
-            default_branch=repository.default_branch,
-        )
+        try:
+            return infer_repo_profile_from_clone(
+                clone_url=access.secret_value,
+                default_branch=repository.default_branch or "main",
+            )
+        except APIError as exc:
+            if exc.code not in {"repo_profile_inference_git_failed", "repo_profile_inference_timeout"}:
+                raise
+            raise APIError(
+                (
+                    f"Unable to inspect {repository.name} automatically. "
+                    "The repo connection succeeded, but command inference could not finish. "
+                    f"{exc.message}"
+                ),
+                status_code=exc.status_code,
+                code=exc.code,
+            ) from exc
 
     def verify_github_webhook(self, *, body: bytes, signature_header: str | None) -> None:
         secret = get_github_webhook_secret()

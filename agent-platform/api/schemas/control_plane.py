@@ -261,6 +261,37 @@ class SdkBootstrapStrategyResponse(BaseModel):
     confidence_reason: str | None = None
 
 
+class SdkBootstrapVerificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    command: str | None = None
+    summary: str | None = None
+    output: str | None = None
+
+
+class SdkBootstrapPatchAttemptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_id: str
+    patch_source: str
+    patch_generated: bool
+    patch_applied: bool
+    verification: SdkBootstrapVerificationResponse
+    preview_available: bool
+    change_request_allowed: bool
+    changed_files: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    failure_stage: str | None = None
+    failure_reason: str | None = None
+    rejection_reason_code: str | None = None
+    attempt_number: int | None = None
+    candidate_id: str | None = None
+    generation_duration_ms: int | None = None
+    apply_duration_ms: int | None = None
+    verification_duration_ms: int | None = None
+
+
 class SdkBootstrapPlanPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -318,10 +349,13 @@ class SdkBootstrapPullRequestPreviewResponse(BaseModel):
 class SdkBootstrapPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    run_id: str
     selected_strategy_id: str
     strategy: SdkBootstrapStrategyResponse
     pull_request: SdkBootstrapPullRequestPreviewResponse
-    patch_diff: str
+    patch_diff: str | None = None
+    attempt: SdkBootstrapPatchAttemptResponse
+    attempts: list[SdkBootstrapPatchAttemptResponse] = Field(default_factory=list)
 
 
 class CreateSdkBootstrapChangeRequestRequest(BaseModel):
@@ -366,6 +400,7 @@ class CreateSdkBootstrapChangeRequestRequest(BaseModel):
 class SdkBootstrapChangeRequestResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    run_id: str | None = None
     api_key: ProjectApiKeyResponse
     plaintext_key: str
     branch_name: str
@@ -373,6 +408,7 @@ class SdkBootstrapChangeRequestResponse(BaseModel):
     change_request_url: str
     reference_id: str | None = None
     mergeable: bool | None = None
+    final_attempt: SdkBootstrapPatchAttemptResponse | None = None
     onboarding_state: ProjectOnboardingStateResponse
 
 

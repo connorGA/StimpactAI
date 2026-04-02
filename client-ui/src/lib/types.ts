@@ -492,6 +492,33 @@ export type SdkBootstrapPlanPreview = {
   requires_confirmation: boolean;
 };
 
+export type SdkBootstrapVerification = {
+  status: string;
+  command: string | null;
+  summary: string | null;
+  output: string | null;
+};
+
+export type SdkBootstrapPatchAttempt = {
+  strategy_id: string;
+  patch_source: string;
+  patch_generated: boolean;
+  patch_applied: boolean;
+  verification: SdkBootstrapVerification;
+  preview_available: boolean;
+  change_request_allowed: boolean;
+  changed_files: string[];
+  warnings: string[];
+  failure_stage: string | null;
+  failure_reason: string | null;
+  rejection_reason_code: string | null;
+  attempt_number: number | null;
+  candidate_id: string | null;
+  generation_duration_ms: number | null;
+  apply_duration_ms: number | null;
+  verification_duration_ms: number | null;
+};
+
 export type SdkBootstrapPullRequestPreview = {
   branch_name: string;
   title: string;
@@ -500,13 +527,17 @@ export type SdkBootstrapPullRequestPreview = {
 };
 
 export type SdkBootstrapPreview = {
+  run_id: string;
   selected_strategy_id: string;
   strategy: SdkBootstrapStrategy;
   pull_request: SdkBootstrapPullRequestPreview;
-  patch_diff: string;
+  patch_diff: string | null;
+  attempt: SdkBootstrapPatchAttempt;
+  attempts: SdkBootstrapPatchAttempt[];
 };
 
 export type SdkBootstrapChangeRequestResponse = {
+  run_id: string | null;
   api_key: ProjectApiKey;
   plaintext_key: string;
   branch_name: string;
@@ -514,6 +545,7 @@ export type SdkBootstrapChangeRequestResponse = {
   change_request_url: string;
   reference_id: string | null;
   mergeable: boolean | null;
+  final_attempt: SdkBootstrapPatchAttempt | null;
   onboarding_state: ProjectOnboardingState;
 };
 

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api.core.errors import register_exception_handlers
+from api.core.errors import APIError, register_exception_handlers
 from api.core.security import get_security_control_plane_repository, hash_api_key
 from api.events.publisher import IncidentEventPublisher
 from api.routes.control_plane import (
@@ -1824,6 +1824,34 @@ def test_infer_project_repo_profile_defaults_returns_suggestions() -> None:
     assert body["monorepo"] is True
 
 
+def test_infer_project_repo_profile_defaults_returns_actionable_error() -> None:
+    class FailingProviderIntegrationService(StubProviderIntegrationService):
+        async def infer_repo_profile_defaults(
+            self,
+            *,
+            project_id: str,
+            provider_repository_id: str,
+        ) -> RepoProfileInferenceResult:
+            raise APIError(
+                "Unable to inspect billing-api automatically. The repo connection succeeded, but command inference could not finish.",
+                status_code=502,
+                code="repo_profile_inference_git_failed",
+            )
+
+    app = build_test_app()
+    app.dependency_overrides[get_provider_integration_service] = FailingProviderIntegrationService
+
+    client = TestClient(app)
+    response = client.get(
+        "/control-plane/projects/project-1/provider-repositories/provider-repo-1/repo-profile-defaults",
+    )
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"]["code"] == "repo_profile_inference_git_failed"
+    assert "repo connection succeeded" in body["error"]["message"]
+
+
 def test_project_onboarding_returns_aggregated_project_state() -> None:
     app = build_test_app()
     repository = StubControlPlaneRepository()
@@ -2165,9 +2193,12 @@ def test_sdk_bootstrap_change_request_creates_key_and_updates_onboarding_state(m
     from services.sdk_bootstrap import (
         SdkBootstrapManualStep,
         SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
         SdkBootstrapPlan,
         SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
         SdkBootstrapStrategy,
+        SdkBootstrapVerification,
     )
     import api.routes.control_plane as control_plane_module
 
@@ -2211,8 +2242,86 @@ def test_sdk_bootstrap_change_request_creates_key_and_updates_onboarding_state(m
     )
     monkeypatch.setattr(
         control_plane_module,
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="javascript",
+                warnings=[],
+                recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+                requires_confirmation=False,
+                strategies=[
+                    SdkBootstrapStrategy(
+                        id="javascript-next:.:src/app/layout.tsx",
+                        language="javascript",
+                        framework="Next.js",
+                        summary="Inject browser auto-capture into the app shell.",
+                        confidence="high",
+                        pr_supported=True,
+                        target_subpath=".",
+                        entrypoints=["src/app/layout.tsx"],
+                        assumptions=["src/app/layout.tsx is the main browser shell."],
+                        blockers=[],
+                        planned_files=[
+                            SdkBootstrapPlannedFile(
+                                path="package.json",
+                                action="update",
+                                reason="Add dependency.",
+                            )
+                        ],
+                        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                    )
+                ],
+            ),
+            selected_strategy_id="javascript-next:.:src/app/layout.tsx",
+            strategy=SdkBootstrapStrategy(
+                id="javascript-next:.:src/app/layout.tsx",
+                language="javascript",
+                framework="Next.js",
+                summary="Inject browser auto-capture into the app shell.",
+                confidence="high",
+                pr_supported=True,
+                target_subpath=".",
+                entrypoints=["src/app/layout.tsx"],
+                assumptions=["src/app/layout.tsx is the main browser shell."],
+                blockers=[],
+                planned_files=[
+                    SdkBootstrapPlannedFile(
+                        path="package.json",
+                        action="update",
+                        reason="Add dependency.",
+                    )
+                ],
+                manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+            ),
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/package.json b/package.json\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id="javascript-next:.:src/app/layout.tsx",
+                    patch_source="deterministic",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                    preview_available=True,
+                    change_request_allowed=True,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        control_plane_module,
         "build_sdk_bootstrap_patch_from_clone",
-        lambda **_: SdkBootstrapPatch(patch_diff="diff --git a/package.json b/package.json\n"),
+        lambda **_: SdkBootstrapPatch(
+            patch_diff="diff --git a/package.json b/package.json\n",
+            attempt=SdkBootstrapPatchAttempt(
+                strategy_id="javascript-next:.:src/app/layout.tsx",
+                patch_source="deterministic",
+                patch_generated=True,
+                patch_applied=True,
+                verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                preview_available=True,
+                change_request_allowed=True,
+            ),
+        ),
     )
 
     response = client.post(
@@ -2231,9 +2340,11 @@ def test_sdk_bootstrap_change_request_creates_key_and_updates_onboarding_state(m
 
     assert response.status_code == 201
     body = response.json()
+    assert body["run_id"] is not None
     assert body["plaintext_key"].startswith("stimp_live_")
     assert body["branch_name"] == "stimpact/sdk-bootstrap-preview-1234"
     assert body["change_request_url"] == "https://github.com/acme/billing-api/pull/42"
+    assert body["final_attempt"]["verification"]["status"] == "passed"
     assert repository.project_onboarding_state.sdk_setup_status is ProjectSdkSetupStatus.CHANGE_REQUEST
 
 
@@ -2242,9 +2353,12 @@ def test_sdk_bootstrap_preview_returns_patch_and_pr_metadata(monkeypatch) -> Non
     from services.sdk_bootstrap import (
         SdkBootstrapManualStep,
         SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
         SdkBootstrapPlan,
         SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
         SdkBootstrapStrategy,
+        SdkBootstrapVerification,
     )
     import api.routes.control_plane as control_plane_module
 
@@ -2258,46 +2372,82 @@ def test_sdk_bootstrap_preview_returns_patch_and_pr_metadata(monkeypatch) -> Non
 
     monkeypatch.setattr(
         control_plane_module,
-        "plan_sdk_bootstrap_from_clone",
-        lambda **_: SdkBootstrapPlan(
-            runtime="javascript",
-            warnings=[],
-            recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
-            requires_confirmation=False,
-            strategies=[
-                SdkBootstrapStrategy(
-                    id="javascript-next:.:src/app/layout.tsx",
-                    language="javascript",
-                    framework="Next.js",
-                    summary="Inject browser auto-capture into the app shell.",
-                    confidence="high",
-                    pr_supported=True,
-                    target_subpath=".",
-                    entrypoints=["src/app/layout.tsx"],
-                    assumptions=["src/app/layout.tsx is the main browser shell."],
-                    blockers=[],
-                    planned_files=[
-                        SdkBootstrapPlannedFile(
-                            path="src/app/layout.tsx",
-                            action="update",
-                            reason="Mount the provider in the root shell.",
-                        )
-                    ],
-                    manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
-                    install_command="npm install @stimpact/sdk",
-                    package_name="@stimpact/sdk",
-                    preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
-                    source="llm",
-                    evidence=["src/app/layout.tsx", "package.json"],
-                    confidence_reason="The root layout is the browser shell.",
-                )
-            ],
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="javascript",
+                warnings=[],
+                recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+                requires_confirmation=False,
+                strategies=[
+                    SdkBootstrapStrategy(
+                        id="javascript-next:.:src/app/layout.tsx",
+                        language="javascript",
+                        framework="Next.js",
+                        summary="Inject browser auto-capture into the app shell.",
+                        confidence="high",
+                        pr_supported=True,
+                        target_subpath=".",
+                        entrypoints=["src/app/layout.tsx"],
+                        assumptions=["src/app/layout.tsx is the main browser shell."],
+                        blockers=[],
+                        planned_files=[
+                            SdkBootstrapPlannedFile(
+                                path="src/app/layout.tsx",
+                                action="update",
+                                reason="Mount the provider in the root shell.",
+                            )
+                        ],
+                        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                        install_command="npm install @stimpact/sdk",
+                        package_name="@stimpact/sdk",
+                        preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+                        source="llm",
+                        evidence=["src/app/layout.tsx", "package.json"],
+                        confidence_reason="The root layout is the browser shell.",
+                    )
+                ],
+            ),
+            selected_strategy_id="javascript-next:.:src/app/layout.tsx",
+            strategy=SdkBootstrapStrategy(
+                id="javascript-next:.:src/app/layout.tsx",
+                language="javascript",
+                framework="Next.js",
+                summary="Inject browser auto-capture into the app shell.",
+                confidence="high",
+                pr_supported=True,
+                target_subpath=".",
+                entrypoints=["src/app/layout.tsx"],
+                assumptions=["src/app/layout.tsx is the main browser shell."],
+                blockers=[],
+                planned_files=[
+                    SdkBootstrapPlannedFile(
+                        path="src/app/layout.tsx",
+                        action="update",
+                        reason="Mount the provider in the root shell.",
+                    )
+                ],
+                manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                install_command="npm install @stimpact/sdk",
+                package_name="@stimpact/sdk",
+                preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+                source="llm",
+                evidence=["src/app/layout.tsx", "package.json"],
+                confidence_reason="The root layout is the browser shell.",
+            ),
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/src/app/layout.tsx b/src/app/layout.tsx\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id="javascript-next:.:src/app/layout.tsx",
+                    patch_source="llm",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                    preview_available=True,
+                    change_request_allowed=True,
+                ),
+            ),
         ),
-    )
-    monkeypatch.setattr(
-        control_plane_module,
-        "build_sdk_bootstrap_patch_from_clone",
-        lambda **_: SdkBootstrapPatch(patch_diff="diff --git a/src/app/layout.tsx b/src/app/layout.tsx\n"),
     )
 
     response = client.post(
@@ -2323,6 +2473,9 @@ def test_sdk_bootstrap_preview_returns_patch_and_pr_metadata(monkeypatch) -> Non
     assert body["pull_request"]["branch_name"].startswith("stimpact/sdk-bootstrap-")
     assert body["pull_request"]["title"] == "Add Stimpact telemetry bootstrap for Next.js"
     assert body["patch_diff"].startswith("diff --git")
+    assert body["run_id"]
+    assert body["attempt"]["verification"]["status"] == "passed"
+    assert len(body["attempts"]) >= 1
 
 
 def test_sdk_bootstrap_plan_preview_returns_detected_strategies(monkeypatch) -> None:
@@ -2409,9 +2562,13 @@ def test_sdk_bootstrap_change_request_requires_preview_branch_name(monkeypatch) 
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
     from services.sdk_bootstrap import (
         SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
         SdkBootstrapPlan,
         SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
         SdkBootstrapStrategy,
+        SdkBootstrapVerification,
     )
     import api.routes.control_plane as control_plane_module
 
@@ -2425,37 +2582,75 @@ def test_sdk_bootstrap_change_request_requires_preview_branch_name(monkeypatch) 
 
     monkeypatch.setattr(
         control_plane_module,
-        "plan_sdk_bootstrap_from_clone",
-        lambda **_: SdkBootstrapPlan(
-            runtime="javascript",
-            warnings=[],
-            recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
-            requires_confirmation=False,
-            strategies=[
-                SdkBootstrapStrategy(
-                    id="javascript-next:.:src/app/layout.tsx",
-                    language="javascript",
-                    framework="Next.js",
-                    summary="Inject browser auto-capture into the app shell.",
-                    confidence="high",
-                    pr_supported=True,
-                    target_subpath=".",
-                    entrypoints=["src/app/layout.tsx"],
-                    assumptions=[],
-                    blockers=[],
-                    planned_files=[
-                        SdkBootstrapPlannedFile(
-                            path="src/app/layout.tsx",
-                            action="update",
-                            reason="Mount the provider in the root shell.",
-                        )
-                    ],
-                    manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
-                    install_command="npm install @stimpact/sdk",
-                    package_name="@stimpact/sdk",
-                    preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
-                )
-            ],
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="javascript",
+                warnings=[],
+                recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+                requires_confirmation=False,
+                strategies=[
+                    SdkBootstrapStrategy(
+                        id="javascript-next:.:src/app/layout.tsx",
+                        language="javascript",
+                        framework="Next.js",
+                        summary="Inject browser auto-capture into the app shell.",
+                        confidence="high",
+                        pr_supported=True,
+                        target_subpath=".",
+                        entrypoints=["src/app/layout.tsx"],
+                        assumptions=[],
+                        blockers=[],
+                        planned_files=[
+                            SdkBootstrapPlannedFile(
+                                path="src/app/layout.tsx",
+                                action="update",
+                                reason="Mount the provider in the root shell.",
+                            )
+                        ],
+                        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                        install_command="npm install @stimpact/sdk",
+                        package_name="@stimpact/sdk",
+                        preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+                    )
+                ],
+            ),
+            selected_strategy_id="javascript-next:.:src/app/layout.tsx",
+            strategy=SdkBootstrapStrategy(
+                id="javascript-next:.:src/app/layout.tsx",
+                language="javascript",
+                framework="Next.js",
+                summary="Inject browser auto-capture into the app shell.",
+                confidence="high",
+                pr_supported=True,
+                target_subpath=".",
+                entrypoints=["src/app/layout.tsx"],
+                assumptions=[],
+                blockers=[],
+                planned_files=[
+                    SdkBootstrapPlannedFile(
+                        path="src/app/layout.tsx",
+                        action="update",
+                        reason="Mount the provider in the root shell.",
+                    )
+                ],
+                manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                install_command="npm install @stimpact/sdk",
+                package_name="@stimpact/sdk",
+                preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+            ),
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/src/app/layout.tsx b/src/app/layout.tsx\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id="javascript-next:.:src/app/layout.tsx",
+                    patch_source="deterministic",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                    preview_available=True,
+                    change_request_allowed=True,
+                ),
+            ),
         ),
     )
 
@@ -2475,3 +2670,100 @@ def test_sdk_bootstrap_change_request_requires_preview_branch_name(monkeypatch) 
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "sdk_bootstrap_preview_required"
+
+
+def test_sdk_bootstrap_change_request_blocks_unverified_preview(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
+        SdkBootstrapStrategy,
+        SdkBootstrapVerification,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    strategy = SdkBootstrapStrategy(
+        id="javascript-next:.:src/app/layout.tsx",
+        language="javascript",
+        framework="Next.js",
+        summary="Inject browser auto-capture into the app shell.",
+        confidence="high",
+        pr_supported=True,
+        target_subpath=".",
+        entrypoints=["src/app/layout.tsx"],
+        assumptions=[],
+        blockers=[],
+        planned_files=[
+            SdkBootstrapPlannedFile(
+                path="src/app/layout.tsx",
+                action="update",
+                reason="Mount the provider in the root shell.",
+            )
+        ],
+        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+        install_command="npm install @stimpact/sdk",
+        package_name="@stimpact/sdk",
+        preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+    )
+    monkeypatch.setattr(
+        control_plane_module,
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="javascript",
+                warnings=[],
+                recommended_strategy_id=strategy.id,
+                requires_confirmation=False,
+                strategies=[strategy],
+            ),
+            selected_strategy_id=strategy.id,
+            strategy=strategy,
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/src/app/layout.tsx b/src/app/layout.tsx\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id=strategy.id,
+                    patch_source="deterministic",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(
+                        status="failed",
+                        summary="Generated patch did not pass focused verification.",
+                    ),
+                    preview_available=True,
+                    change_request_allowed=False,
+                    failure_stage="verification",
+                    failure_reason="Generated patch did not pass focused verification.",
+                ),
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/change-request",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "api_key_name": "Telemetry bootstrap",
+            "service_name": "billing-web",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "strategy_id": strategy.id,
+            "branch_name": "stimpact/sdk-bootstrap-preview-1234",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "sdk_bootstrap_preview_verification_failed"

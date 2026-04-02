@@ -91,13 +91,73 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
             ),
         ],
     ),
+    "javascript-react-scripts": SdkFrameworkSpec(
+        id="javascript-react-scripts",
+        language="javascript",
+        label="React SPA",
+        package_name="@stimpact/sdk",
+        install_command="npm install @stimpact/sdk",
+        env_vars=[
+            SdkEnvVarSpec(
+                name="REACT_APP_STIMPACT_BASE_URL",
+                example_value="https://stimpact.example.com",
+                description="Public Stimpact telemetry base URL.",
+            ),
+            SdkEnvVarSpec(
+                name="REACT_APP_STIMPACT_PROJECT_ID",
+                example_value="billing-prod",
+                description="Project identifier used for telemetry routing.",
+            ),
+            SdkEnvVarSpec(
+                name="REACT_APP_STIMPACT_API_KEY",
+                example_value="stimp_live_replace_me",
+                description="Project API key created during onboarding.",
+            ),
+            SdkEnvVarSpec(
+                name="REACT_APP_STIMPACT_SERVICE",
+                example_value="web-app",
+                description="Service name attached to captured incidents.",
+            ),
+            SdkEnvVarSpec(
+                name="REACT_APP_STIMPACT_ENVIRONMENT",
+                example_value="production",
+                description="Runtime environment tag.",
+            ),
+        ],
+    ),
     "javascript-generic": SdkFrameworkSpec(
         id="javascript-generic",
         language="javascript",
         label="JavaScript application",
         package_name="@stimpact/sdk",
         install_command="npm install @stimpact/sdk",
-        env_vars=[],
+        env_vars=[
+            SdkEnvVarSpec(
+                name="STIMPACT_BASE_URL",
+                example_value="https://stimpact.example.com",
+                description="Public Stimpact telemetry base URL.",
+            ),
+            SdkEnvVarSpec(
+                name="STIMPACT_PROJECT_ID",
+                example_value="billing-prod",
+                description="Project identifier used for telemetry routing.",
+            ),
+            SdkEnvVarSpec(
+                name="STIMPACT_API_KEY",
+                example_value="stimp_live_replace_me",
+                description="Project API key created during onboarding.",
+            ),
+            SdkEnvVarSpec(
+                name="STIMPACT_SERVICE",
+                example_value="billing-api",
+                description="Service name attached to captured incidents.",
+            ),
+            SdkEnvVarSpec(
+                name="STIMPACT_ENVIRONMENT",
+                example_value="production",
+                description="Runtime environment tag.",
+            ),
+        ],
     ),
     "python-fastapi": SdkFrameworkSpec(
         id="python-fastapi",

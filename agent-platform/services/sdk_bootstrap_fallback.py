@@ -2,21 +2,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 import re
+import subprocess
 
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from services.sdk_catalog import SdkFrameworkSpec, get_framework_spec
 
-_MAX_FALLBACK_PATCH_FILES = 4
-_MAX_FALLBACK_PATCH_LINES = 220
+_MAX_FALLBACK_PATCH_FILES = 6
+_MAX_FALLBACK_PATCH_LINES = 320
 _ALLOWED_PATCH_EXTENSIONS = {
     ".js",
     ".jsx",
     ".ts",
     ".tsx",
+    ".mjs",
+    ".cjs",
+    ".mts",
+    ".cts",
     ".py",
     ".json",
     ".toml",
@@ -31,12 +37,15 @@ _BLOCKED_PATCH_FILENAMES = {
     "pnpm-lock.yaml",
 }
 _SUPPORTED_FRAMEWORK_IDS = {
+    "javascript-next",
+    "javascript-react-scripts",
     "javascript-generic",
     "javascript-vite-react",
     "python-fastapi",
     "python-flask",
     "python-generic",
 }
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -77,6 +86,24 @@ class SdkBootstrapFallbackPlanner:
         project_id: str,
         base_url: str,
     ) -> SdkBootstrapFallbackProposal | None:
+        proposals = self.plan_candidates(
+            repo_dir=repo_dir,
+            service_name=service_name,
+            environment=environment,
+            project_id=project_id,
+            base_url=base_url,
+        )
+        return proposals[0] if proposals else None
+
+    def plan_candidates(
+        self,
+        *,
+        repo_dir: Path,
+        service_name: str,
+        environment: str,
+        project_id: str,
+        base_url: str,
+    ) -> list[SdkBootstrapFallbackProposal]:
         prompt_payload = self._build_prompt_payload(
             repo_dir=repo_dir,
             service_name=service_name,
@@ -85,7 +112,8 @@ class SdkBootstrapFallbackPlanner:
             base_url=base_url,
         )
         if not prompt_payload["candidate_files"]:
-            return None
+            logger.info("sdk_bootstrap_fallback_rejected reason=no_candidate_files")
+            return []
 
         completion = self._client.chat.completions.create(
             model=self._model,
@@ -96,15 +124,18 @@ class SdkBootstrapFallbackPlanner:
                     "content": (
                         "You are planning a safe SDK bootstrap patch for Stimpact. "
                         "Use only the grounded repo context provided. "
-                        "Return raw JSON with a single key named proposal. "
-                        "The proposal must describe one best candidate strategy. "
-                        "Only propose a PR-capable patch when you can identify a concrete runtime entrypoint and keep the diff small. "
+                        "Return raw JSON with a key named proposals containing up to 3 ranked candidate strategies. "
+                        "Each proposal must describe one plausible runtime insertion surface. "
+                        "Prefer concrete, executable candidates over giving up early. "
+                        "Only propose a PR-capable patch when you can identify a concrete runtime entrypoint and keep the diff localized. "
                         "Never touch lockfiles, generated assets, tests, CI, docker, or unrelated files. "
                         "Allowed modified surfaces are existing runtime entrypoints, package/dependency manifests, .env.example, "
                         "and at most one small helper file whose filename contains 'stimpact'. "
-                        "The patch_diff must be a valid unified diff touching no more than 4 files and 220 changed lines total. "
-                        "Use framework_id from this allowlist only: javascript-generic, javascript-vite-react, python-fastapi, python-flask, python-generic. "
-                        "If confidence is low or the repo is ambiguous, set pr_supported to false, explain blockers, and leave patch_diff empty."
+                        f"The patch_diff must be a valid unified diff touching no more than {_MAX_FALLBACK_PATCH_FILES} files "
+                        f"and {_MAX_FALLBACK_PATCH_LINES} changed lines total. "
+                        f"Use framework_id from this allowlist only: {', '.join(sorted(_SUPPORTED_FRAMEWORK_IDS))}. "
+                        "If a proposal is ambiguous, keep it reviewable with blockers instead of inventing unrelated edits. "
+                        "If confidence is low or the repo is ambiguous, you may set pr_supported to false, explain blockers, and leave patch_diff empty."
                     ),
                 },
                 {
@@ -116,17 +147,28 @@ class SdkBootstrapFallbackPlanner:
         )
         content = completion.choices[0].message.content
         if not content:
-            return None
+            return []
 
         try:
             payload = _FallbackResponse.model_validate(json.loads(_extract_json_object(content)))
         except (ValidationError, ValueError, TypeError) as exc:
             raise ValueError("OpenAI returned an invalid SDK bootstrap fallback response.") from exc
 
-        proposal = payload.proposal
-        if proposal is None:
-            return None
-        return self._validate_proposal(repo_dir=repo_dir, proposal=proposal)
+        raw_proposals = list(payload.proposals)
+        if payload.proposal is not None:
+            raw_proposals.insert(0, payload.proposal)
+        validated: list[SdkBootstrapFallbackProposal] = []
+        seen_keys: set[tuple[str, str]] = set()
+        for proposal in raw_proposals:
+            validated_proposal = self._validate_proposal(repo_dir=repo_dir, proposal=proposal)
+            if validated_proposal is None:
+                continue
+            dedupe_key = (validated_proposal.framework_id, validated_proposal.entrypoint)
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            validated.append(validated_proposal)
+        return validated[:3]
 
     def _build_prompt_payload(
         self,
@@ -153,7 +195,9 @@ class SdkBootstrapFallbackPlanner:
                 _serialize_framework(get_framework_spec(framework_id))
                 for framework_id in sorted(_SUPPORTED_FRAMEWORK_IDS)
             ],
+            "repo_topology": _collect_repo_topology(repo_dir),
             "manifests": _collect_manifest_context(repo_dir),
+            "package_scripts": _collect_package_scripts(repo_dir),
             "candidate_files": _collect_candidate_files(repo_dir),
         }
 
@@ -164,13 +208,28 @@ class SdkBootstrapFallbackPlanner:
         proposal: _FallbackProposal,
     ) -> SdkBootstrapFallbackProposal | None:
         if proposal.framework_id not in _SUPPORTED_FRAMEWORK_IDS:
+            logger.info(
+                "sdk_bootstrap_fallback_rejected reason=unsupported_framework framework_id=%s entrypoint=%s",
+                proposal.framework_id,
+                proposal.entrypoint,
+            )
             return None
 
         entrypoint = _normalize_repo_relative_path(proposal.entrypoint)
         if entrypoint is None:
+            logger.info(
+                "sdk_bootstrap_fallback_rejected reason=invalid_entrypoint_path framework_id=%s raw_entrypoint=%s",
+                proposal.framework_id,
+                proposal.entrypoint,
+            )
             return None
         entrypoint_path = repo_dir / entrypoint
         if not entrypoint_path.exists():
+            logger.info(
+                "sdk_bootstrap_fallback_rejected reason=missing_entrypoint framework_id=%s entrypoint=%s",
+                proposal.framework_id,
+                entrypoint,
+            )
             return None
 
         target_subpath = proposal.target_subpath.strip() or "."
@@ -193,8 +252,25 @@ class SdkBootstrapFallbackPlanner:
             if diff_details is None:
                 pr_supported = False
                 patch_diff = None
+                logger.info(
+                    "sdk_bootstrap_fallback_rejected reason=patch_guardrails framework_id=%s entrypoint=%s planned_files=%s",
+                    proposal.framework_id,
+                    entrypoint,
+                    len(proposal.planned_files),
+                )
                 blockers.append(
                     "Model-assisted patch did not pass Stimpact's path and diff guardrails, so manual setup is safer."
+                )
+            elif not _patch_applies_cleanly(repo_dir=repo_dir, patch_diff=patch_diff):
+                pr_supported = False
+                patch_diff = None
+                logger.info(
+                    "sdk_bootstrap_fallback_rejected reason=patch_apply_check framework_id=%s entrypoint=%s",
+                    proposal.framework_id,
+                    entrypoint,
+                )
+                blockers.append(
+                    "Model-assisted patch could not be applied cleanly in a temp checkout, so manual setup is safer."
                 )
             elif not planned_files:
                 planned_files = [
@@ -264,6 +340,7 @@ class _FallbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal: _FallbackProposal | None = None
+    proposals: list[_FallbackProposal] = Field(default_factory=list, max_length=3)
 
 
 @dataclass(slots=True)
@@ -276,9 +353,12 @@ def _collect_manifest_context(repo_dir: Path) -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     for relative_path in (
         "package.json",
+        "package-lock.json",
         "pyproject.toml",
         "requirements.txt",
+        "requirements.in",
         "requirements-dev.txt",
+        "Pipfile",
         "setup.py",
     ):
         for path in repo_dir.rglob(relative_path):
@@ -290,27 +370,103 @@ def _collect_manifest_context(repo_dir: Path) -> list[dict[str, object]]:
                     "content": _truncate_text(path.read_text(encoding="utf-8", errors="ignore"), max_chars=5000),
                 }
             )
-            if len(manifests) >= 8:
+            if len(manifests) >= 12:
                 return manifests
     return manifests
 
 
+def _collect_package_scripts(repo_dir: Path) -> list[dict[str, object]]:
+    scripts: list[dict[str, object]] = []
+    for path in repo_dir.rglob("package.json"):
+        if _should_skip_path(path):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except json.JSONDecodeError:
+            continue
+        package_scripts = payload.get("scripts")
+        if not isinstance(package_scripts, dict):
+            continue
+        scripts.append(
+            {
+                "path": path.relative_to(repo_dir).as_posix(),
+                "scripts": {str(key): str(value) for key, value in package_scripts.items()},
+            }
+        )
+        if len(scripts) >= 12:
+            break
+    return scripts
+
+
+def _collect_repo_topology(repo_dir: Path) -> dict[str, object]:
+    package_roots: list[str] = []
+    python_roots: list[str] = []
+    notable_dirs: list[str] = []
+    package_managers: set[str] = set()
+    for path in repo_dir.rglob("*"):
+        if _should_skip_path(path):
+            continue
+        if path.is_dir():
+            relative_dir = path.relative_to(repo_dir).as_posix()
+            if Path(relative_dir).name.lower() in {
+                "app",
+                "apps",
+                "src",
+                "pages",
+                "frontend",
+                "backend",
+                "client",
+                "server",
+                "web",
+                "ui",
+                "api",
+                "services",
+                "packages",
+            }:
+                notable_dirs.append(relative_dir)
+            continue
+        relative_path = path.relative_to(repo_dir).as_posix()
+        if path.name == "package.json":
+            package_roots.append(str(Path(relative_path).parent).replace("\\", "/") or ".")
+        if path.name in {"pyproject.toml", "requirements.txt", "requirements.in", "setup.py", "Pipfile"}:
+            python_roots.append(str(Path(relative_path).parent).replace("\\", "/") or ".")
+        if path.name == "pnpm-lock.yaml":
+            package_managers.add("pnpm")
+        elif path.name == "yarn.lock":
+            package_managers.add("yarn")
+        elif path.name == "package-lock.json":
+            package_managers.add("npm")
+        elif path.name == "bun.lockb":
+            package_managers.add("bun")
+    return {
+        "package_roots": sorted(dict.fromkeys(package_roots))[:12],
+        "python_roots": sorted(dict.fromkeys(python_roots))[:12],
+        "notable_directories": sorted(dict.fromkeys(notable_dirs))[:20],
+        "package_managers": sorted(package_managers),
+    }
+
+
 def _collect_candidate_files(repo_dir: Path) -> list[dict[str, object]]:
+    script_path_hints = _collect_script_path_hints(repo_dir)
     candidates: list[tuple[int, Path, str]] = []
     for path in repo_dir.rglob("*"):
         if _should_skip_path(path) or not path.is_file():
             continue
         suffix = path.suffix.lower()
-        if suffix not in {".js", ".jsx", ".ts", ".tsx", ".py"}:
+        if suffix not in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".py"}:
             continue
         source = path.read_text(encoding="utf-8", errors="ignore")
-        score, reason = _score_candidate_file(path.relative_to(repo_dir).as_posix(), source)
+        score, reason = _score_candidate_file(
+            path.relative_to(repo_dir).as_posix(),
+            source,
+            script_path_hints=script_path_hints,
+        )
         if score <= 0:
             continue
         candidates.append((score, path, reason))
 
     selected: list[dict[str, object]] = []
-    for _, path, reason in sorted(candidates, key=lambda item: (-item[0], item[1].as_posix()))[:10]:
+    for _, path, reason in sorted(candidates, key=lambda item: (-item[0], item[1].as_posix()))[:16]:
         selected.append(
             {
                 "path": path.relative_to(repo_dir).as_posix(),
@@ -321,31 +477,126 @@ def _collect_candidate_files(repo_dir: Path) -> list[dict[str, object]]:
     return selected
 
 
-def _score_candidate_file(relative_path: str, source: str) -> tuple[int, str]:
+def _collect_script_path_hints(repo_dir: Path) -> set[str]:
+    hints: set[str] = set()
+    path_pattern = re.compile(r"(?P<path>(?:\.?/)?(?:src|app|apps|packages|services|server|client|web|api)[\w./-]*\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts|py))")
+    for path in repo_dir.rglob("package.json"):
+        if _should_skip_path(path):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except json.JSONDecodeError:
+            continue
+        scripts = payload.get("scripts")
+        if not isinstance(scripts, dict):
+            continue
+        package_dir = path.parent
+        for command in scripts.values():
+            if not isinstance(command, str):
+                continue
+            for match in path_pattern.finditer(command):
+                candidate = match.group("path").lstrip("./")
+                resolved_candidates = [
+                    (repo_dir / candidate).resolve(),
+                    (package_dir / candidate).resolve(),
+                ]
+                for absolute in resolved_candidates:
+                    try:
+                        relative = absolute.relative_to(repo_dir.resolve()).as_posix()
+                    except ValueError:
+                        continue
+                    if absolute.exists():
+                        hints.add(relative)
+                        break
+    return hints
+
+
+def _score_candidate_file(relative_path: str, source: str, *, script_path_hints: set[str]) -> tuple[int, str]:
     score = 0
     reasons: list[str] = []
     lower_path = relative_path.lower()
     lower_source = source.lower()
     stem = Path(relative_path).stem.lower()
-    if stem in {"main", "app", "index", "server", "client", "bootstrap", "run"}:
+    if stem in {"main", "app", "index", "server", "client", "bootstrap", "run", "layout", "_app", "root", "entry"}:
         score += 3
         reasons.append("entrypoint-like filename")
-    if "reactdom.createRoot" in source or "reactdom.render" in source or "createRoot(" in source:
+    if lower_path.endswith(
+        (
+            "/layout.tsx",
+            "/layout.jsx",
+            "/layout.js",
+            "/layout.ts",
+            "/pages/_app.tsx",
+            "/pages/_app.jsx",
+            "/pages/_app.js",
+            "/src/pages/_app.tsx",
+            "/src/pages/_app.jsx",
+            "/src/pages/_app.js",
+            "/root.tsx",
+            "/root.jsx",
+            "/root.ts",
+            "/root.js",
+        )
+    ):
+        score += 4
+        reasons.append("next root shell detected")
+    if (
+        "reactdom.createroot" in lower_source
+        or "reactdom.render" in lower_source
+        or "createroot(" in lower_source
+        or "hydrateRoot(".lower() in lower_source
+    ):
         score += 4
         reasons.append("react mount detected")
+    if "document.getelementbyid(" in lower_source or "root.render(" in lower_source:
+        score += 2
+        reasons.append("browser root bootstrap detected")
+    if "export default function rootlayout" in lower_source or "<body" in lower_source:
+        score += 3
+        reasons.append("app shell layout detected")
     if "fastapi(" in lower_source:
         score += 4
         reasons.append("fastapi app detected")
     if "flask(" in lower_source:
         score += 4
         reasons.append("flask app detected")
+    if "app = fastapi(" in lower_source or "app = flask(" in lower_source or "application = flask(" in lower_source:
+        score += 2
+        reasons.append("python app object detected")
     if "__name__ == \"__main__\"" in source or "__name__ == '__main__'" in source:
         score += 2
         reasons.append("python executable entrypoint")
+    if "uvicorn.run(" in lower_source or "gunicorn" in lower_source:
+        score += 2
+        reasons.append("python server startup detected")
     if "render(" in source or "mount(" in source or "app =" in lower_source:
         score += 1
         reasons.append("runtime bootstrap signal")
-    if lower_path.endswith(("/main.tsx", "/main.jsx", "/main.ts", "/main.js", "/app.py", "/main.py", "/server.py")):
+    if relative_path in script_path_hints:
+        score += 4
+        reasons.append("referenced by package scripts")
+    if lower_path.endswith(
+        (
+            "/main.tsx",
+            "/main.jsx",
+            "/main.ts",
+            "/main.js",
+            "/bootstrap.tsx",
+            "/bootstrap.jsx",
+            "/bootstrap.ts",
+            "/bootstrap.js",
+            "/client.tsx",
+            "/client.jsx",
+            "/client.ts",
+            "/client.js",
+            "/entry.client.tsx",
+            "/entry.client.jsx",
+            "/app.py",
+            "/main.py",
+            "/server.py",
+            "/run.py",
+        )
+    ):
         score += 2
     return score, ", ".join(dict.fromkeys(reasons))
 
@@ -396,10 +647,36 @@ def _validate_patch_diff(*, repo_dir: Path, entrypoint: str, patch_diff: str) ->
     return _DiffDetails(paths=unique_paths, changed_line_count=changed_line_count)
 
 
+def _patch_applies_cleanly(*, repo_dir: Path, patch_diff: str) -> bool:
+    if not (repo_dir / ".git").exists():
+        return True
+    try:
+        result = subprocess.run(
+            ["git", "apply", "--check", "--whitespace=nowarn", "-"],
+            cwd=repo_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+            input=patch_diff,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
 def _is_allowed_patch_surface(*, repo_dir: Path, relative_path: str) -> bool:
     path = Path(relative_path)
     suffix = path.suffix.lower()
-    if suffix not in _ALLOWED_PATCH_EXTENSIONS and path.name not in {"package.json", "pyproject.toml", ".env.example", "setup.py"}:
+    if suffix not in _ALLOWED_PATCH_EXTENSIONS and path.name not in {
+        "package.json",
+        "pyproject.toml",
+        ".env.example",
+        "setup.py",
+        "requirements.txt",
+        "requirements.in",
+        "Pipfile",
+    }:
         return False
     if path.name in _BLOCKED_PATCH_FILENAMES:
         return False
@@ -410,7 +687,9 @@ def _is_allowed_patch_surface(*, repo_dir: Path, relative_path: str) -> bool:
         return False
     if absolute.exists():
         return True
-    if path.name == ".env.example":
+    if path.name == ".env.example" or (
+        path.name.startswith(".env.") and any(token in path.name for token in ("example", "sample", "template"))
+    ):
         return True
     return "stimpact" in path.name.lower()
 

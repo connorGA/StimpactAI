@@ -1,4 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function loginToWorkspace(page: Page) {
+  await page.goto("/login?next=/onboarding");
+  await page.getByLabel(/Work email/i).fill("connor@example.com");
+  await page.getByLabel(/^Password$/i).fill("test-password");
+  await page.getByRole("button", { name: /Log in to live workspace/i }).click();
+}
 
 test("control center shows live project policy", async ({ page }) => {
   await page.goto("/control-center");
@@ -32,27 +39,85 @@ test("metrics page shows automation health module", async ({ page }) => {
 });
 
 test("onboarding page supports project setup workflow", async ({ page }) => {
-  await page.goto("/onboarding");
+  await loginToWorkspace(page);
 
+  await expect(page.getByRole("heading", { name: /Set up your project in one guided flow/i })).toBeVisible();
+  await expect(page.getByText(/Detected from the connected repo/i)).toBeVisible();
+  await expect(page.getByText(/package\.json scripts in apps\/web/i)).toBeVisible();
   await expect(
-    page.getByRole("heading", {
-      name: /Connect a project, store secrets securely, and prepare sandbox execution/i,
-    }),
+    page.getByText(/Saved repo profile values are shown below\. Compare them against fresh suggestions/i),
   ).toBeVisible();
+  await expect(page.getByLabel(/Verify command/i)).toHaveValue("pytest");
+  await expect(page.getByLabel(/Install command/i)).toHaveValue("pip install -r requirements.txt");
+  await expect(
+    page.getByText(/Fresh repo suggestion: pnpm --dir apps\/web run test/i),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Fresh repo suggestion: pnpm install --frozen-lockfile/i),
+  ).toBeVisible();
+});
 
-  await page.getByRole("button", { name: /Bootstrap/i }).click();
-  await expect(page.getByText(/Project onboarding state loaded/i)).toBeVisible();
+test("onboarding automatic sdk setup requests plan and preview", async ({ page }) => {
+  await loginToWorkspace(page);
 
-  await page.getByRole("button", { name: /Connect GitHub/i }).click();
-  await expect(page.getByText(/GitHub integration connected/i)).toBeVisible();
+  await page.locator("#onboarding-step-6").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(750);
 
-  await page.getByLabel(/Secret value/i).fill("super-secret-value");
-  await page.getByRole("button", { name: /Store secret/i }).click();
-  await expect(page.getByText(/Secret stored in AWS Secrets Manager/i)).toBeVisible();
+  const startAutomaticAttempt = page.getByRole("button", { name: /Start automatic attempt/i });
+  await startAutomaticAttempt.scrollIntoViewIfNeeded();
+  await expect(startAutomaticAttempt).toBeVisible();
+  await expect(page.getByText(/^Idle$/)).toBeVisible();
 
-  await page.getByRole("button", { name: /Sync repos/i }).first().click();
-  await expect(page.getByText(/Provider repositories synced/i)).toBeVisible();
+  const planResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    response.url().includes("/api/onboarding/projects/project-1/sdk-bootstrap/plan") &&
+    response.status() === 200,
+  );
+  const previewResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    response.url().includes("/api/onboarding/projects/project-1/sdk-bootstrap/preview") &&
+    response.status() === 200,
+  );
 
-  await page.getByRole("button", { name: /Create repo profile/i }).click();
-  await expect(page.getByText(/Repo profile created/i)).toBeVisible();
+  await startAutomaticAttempt.click();
+
+  await planResponsePromise;
+  await previewResponsePromise;
+
+  await expect(page.getByText(/^Ready for review$/).first()).toBeVisible();
+  await expect(
+    page.getByText(/Multiple plausible SDK surfaces were detected\. Review the selected strategy/i),
+  ).toBeVisible();
+  await expect(page.getByText(/Selected strategy review/i)).toBeVisible();
+  await expect(page.getByText(/Patch verification/i)).toBeVisible();
+  await expect(page.getByText(/Verification passed/i)).toBeVisible();
+  await expect(page.getByText(/Attempt history/i)).toBeVisible();
+  await expect(page.getByText(/Tried 2 candidate surfaces before selecting the best available result\./i)).toBeVisible();
+  await expect(page.getByText(/high confidence/i).first()).toBeVisible();
+  await expect(page.getByText(/Add Stimpact SDK bootstrap/i)).toBeVisible();
+  await expect(page.getByText("stimpact/sdk-bootstrap-preview", { exact: true })).toBeVisible();
+});
+
+test("onboarding manual sdk setup shows exact guided instructions", async ({ page }) => {
+  await loginToWorkspace(page);
+
+  await page.locator("#onboarding-step-6").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(750);
+
+  const startAutomaticAttempt = page.getByRole("button", { name: /Start automatic attempt/i });
+  const planResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    response.url().includes("/api/onboarding/projects/project-1/sdk-bootstrap/plan") &&
+    response.status() === 200,
+  );
+  await startAutomaticAttempt.click();
+  await planResponsePromise;
+
+  await page.getByRole("button", { name: /Manual installation mode/i }).click();
+
+  await expect(page.getByText(/Do these in order/i)).toBeVisible();
+  await expect(page.getByText("Install the SDK dependency", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Add the required environment variables", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/Wire the SDK into apps\/web\/src\/app\/layout\.tsx/i).first()).toBeVisible();
+  await expect(page.getByText("Verify the first heartbeat", { exact: true }).first()).toBeVisible();
 });

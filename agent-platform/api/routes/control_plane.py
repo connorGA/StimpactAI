@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -64,10 +65,12 @@ from api.schemas.control_plane import (
     SdkBootstrapManualStepResponse,
     SdkBootstrapChangeRequestResponse,
     SdkBootstrapPlanPreviewResponse,
+    SdkBootstrapPatchAttemptResponse,
     SdkBootstrapPreviewResponse,
     SdkBootstrapPlannedFileResponse,
     SdkBootstrapPullRequestPreviewResponse,
     SdkBootstrapStrategyResponse,
+    SdkBootstrapVerificationResponse,
     UpdateProjectPolicyRequest,
     UpdateProjectOnboardingStateRequest,
     UpdateProjectServiceRequest,
@@ -83,9 +86,11 @@ from services.provider_integration_service import ProviderIntegrationService
 from services.sdk_bootstrap import (
     SDK_BOOTSTRAP_API_KEY_PLACEHOLDER,
     SdkBootstrapPlan,
+    SdkBootstrapPatchAttempt,
     SdkBootstrapStrategy,
     build_sdk_bootstrap_patch_from_clone,
     plan_sdk_bootstrap_from_clone,
+    prepare_sdk_bootstrap_preview_from_clone,
 )
 from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner
 
@@ -101,6 +106,7 @@ project_router = APIRouter(
 )
 public_router = APIRouter(tags=["provider-callbacks"])
 TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS = 900
+logger = logging.getLogger(__name__)
 
 
 def get_control_plane_repository(
@@ -291,6 +297,33 @@ def _build_sdk_bootstrap_plan_response(plan: SdkBootstrapPlan) -> SdkBootstrapPl
     )
 
 
+def _build_sdk_bootstrap_patch_attempt_response(attempt: SdkBootstrapPatchAttempt) -> SdkBootstrapPatchAttemptResponse:
+    return SdkBootstrapPatchAttemptResponse(
+        strategy_id=attempt.strategy_id,
+        patch_source=attempt.patch_source,
+        patch_generated=attempt.patch_generated,
+        patch_applied=attempt.patch_applied,
+        verification=SdkBootstrapVerificationResponse(
+            status=attempt.verification.status,
+            command=attempt.verification.command,
+            summary=attempt.verification.summary,
+            output=attempt.verification.output,
+        ),
+        preview_available=attempt.preview_available,
+        change_request_allowed=attempt.change_request_allowed,
+        changed_files=list(attempt.changed_files),
+        warnings=list(attempt.warnings),
+        failure_stage=attempt.failure_stage,
+        failure_reason=attempt.failure_reason,
+        rejection_reason_code=attempt.rejection_reason_code,
+        attempt_number=attempt.attempt_number,
+        candidate_id=attempt.candidate_id,
+        generation_duration_ms=attempt.generation_duration_ms,
+        apply_duration_ms=attempt.apply_duration_ms,
+        verification_duration_ms=attempt.verification_duration_ms,
+    )
+
+
 def _resolve_sdk_bootstrap_strategy(
     *,
     plan: SdkBootstrapPlan,
@@ -317,6 +350,55 @@ def _resolve_sdk_bootstrap_strategy(
             code="sdk_bootstrap_strategy_not_found",
         )
     return selected_strategy_id, selected_strategy
+
+
+def _log_sdk_bootstrap_plan(
+    *,
+    project_id: str,
+    provider_repository_id: str,
+    plan: SdkBootstrapPlan,
+) -> None:
+    recommended = next((item for item in plan.strategies if item.id == plan.recommended_strategy_id), None)
+    pr_supported_count = sum(1 for item in plan.strategies if item.pr_supported)
+    llm_strategy_count = sum(1 for item in plan.strategies if item.source == "llm")
+    manual_only_count = sum(1 for item in plan.strategies if not item.pr_supported)
+    logger.info(
+        "sdk_bootstrap_plan project_id=%s provider_repository_id=%s runtime=%s strategies=%s pr_supported=%s manual_only=%s fallback_used=%s requires_confirmation=%s recommended_strategy_id=%s recommended_framework=%s recommended_blockers=%s warnings=%s",
+        project_id,
+        provider_repository_id,
+        plan.runtime or "unknown",
+        len(plan.strategies),
+        pr_supported_count,
+        manual_only_count,
+        llm_strategy_count > 0,
+        plan.requires_confirmation,
+        plan.recommended_strategy_id,
+        recommended.framework if recommended is not None else "none",
+        len(recommended.blockers) if recommended is not None else 0,
+        len(plan.warnings),
+    )
+
+
+def _log_sdk_bootstrap_strategy_event(
+    *,
+    event: str,
+    project_id: str,
+    provider_repository_id: str,
+    strategy: SdkBootstrapStrategy,
+) -> None:
+    logger.info(
+        "%s project_id=%s provider_repository_id=%s strategy_id=%s framework=%s source=%s confidence=%s pr_supported=%s blockers=%s planned_files=%s",
+        event,
+        project_id,
+        provider_repository_id,
+        strategy.id,
+        strategy.framework,
+        strategy.source,
+        strategy.confidence,
+        strategy.pr_supported,
+        len(strategy.blockers),
+        len(strategy.planned_files),
+    )
 
 
 def _build_sdk_bootstrap_pr_metadata(
@@ -716,6 +798,11 @@ async def preview_project_sdk_bootstrap_plan(
         base_url=payload.base_url,
         fallback_planner=fallback_planner,
     )
+    _log_sdk_bootstrap_plan(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+        plan=plan,
+    )
     return _build_sdk_bootstrap_plan_response(plan)
 
 
@@ -758,42 +845,62 @@ async def preview_project_sdk_bootstrap_change_request(
         project_id=project_id,
         provider_repository_id=payload.provider_repository_id,
     )
-    plan = plan_sdk_bootstrap_from_clone(
+    prepared_preview = prepare_sdk_bootstrap_preview_from_clone(
         clone_url=clone_url,
         default_branch=provider_repository.default_branch,
         project_id=project_id,
         service_name=payload.service_name,
         environment=payload.environment,
         base_url=payload.base_url,
-        fallback_planner=fallback_planner,
-    )
-    selected_strategy_id, selected_strategy = _resolve_sdk_bootstrap_strategy(
-        plan=plan,
         strategy_id=payload.strategy_id,
-    )
-    if not selected_strategy.pr_supported:
-        raise APIError(
-            f"{selected_strategy.framework} must be completed manually for this repository. Automatic PR generation is not enabled for the selected strategy.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="sdk_bootstrap_strategy_requires_manual_setup",
-        )
-    branch_name = f"stimpact/sdk-bootstrap-{uuid4().hex[:8]}"
-    bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
-        clone_url=clone_url,
-        default_branch=provider_repository.default_branch,
-        project_id=project_id,
-        service_name=payload.service_name,
-        environment=payload.environment,
-        base_url=payload.base_url,
-        strategy_id=selected_strategy_id,
         api_key=SDK_BOOTSTRAP_API_KEY_PLACEHOLDER,
         fallback_planner=fallback_planner,
     )
+    _log_sdk_bootstrap_plan(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+        plan=prepared_preview.plan,
+    )
+    _log_sdk_bootstrap_strategy_event(
+        event="sdk_bootstrap_preview_selected",
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+        strategy=prepared_preview.strategy,
+    )
+    branch_name = f"stimpact/sdk-bootstrap-{uuid4().hex[:8]}"
+    logger.info(
+        "sdk_bootstrap_preview_ready project_id=%s provider_repository_id=%s strategy_id=%s run_id=%s branch_name=%s attempts=%s patch_lines=%s preview_available=%s change_request_allowed=%s verification_status=%s failure_stage=%s generation_ms=%s apply_ms=%s verification_ms=%s",
+        project_id,
+        payload.provider_repository_id,
+        prepared_preview.selected_strategy_id,
+        prepared_preview.run.run_id,
+        branch_name,
+        len(prepared_preview.run.attempts),
+        len(prepared_preview.patch.patch_diff.splitlines()) if prepared_preview.patch.patch_diff else 0,
+        prepared_preview.patch.attempt.preview_available,
+        prepared_preview.patch.attempt.change_request_allowed,
+        prepared_preview.patch.attempt.verification.status,
+        prepared_preview.patch.attempt.failure_stage,
+        prepared_preview.patch.attempt.generation_duration_ms,
+        prepared_preview.patch.attempt.apply_duration_ms,
+        prepared_preview.patch.attempt.verification_duration_ms,
+    )
+    attempt_responses = [
+        _build_sdk_bootstrap_patch_attempt_response(item)
+        for item in (
+            prepared_preview.run.attempts
+            if prepared_preview.run.attempts
+            else ([prepared_preview.patch.attempt] if prepared_preview.patch.attempt is not None else [])
+        )
+    ]
     return SdkBootstrapPreviewResponse(
-        selected_strategy_id=selected_strategy_id,
-        strategy=_build_sdk_bootstrap_strategy_response(selected_strategy),
-        pull_request=_build_sdk_bootstrap_pr_metadata(strategy=selected_strategy, branch_name=branch_name),
-        patch_diff=bootstrap_patch.patch_diff,
+        run_id=prepared_preview.run.run_id,
+        selected_strategy_id=prepared_preview.selected_strategy_id,
+        strategy=_build_sdk_bootstrap_strategy_response(prepared_preview.strategy),
+        pull_request=_build_sdk_bootstrap_pr_metadata(strategy=prepared_preview.strategy, branch_name=branch_name),
+        patch_diff=prepared_preview.patch.patch_diff,
+        attempt=_build_sdk_bootstrap_patch_attempt_response(prepared_preview.patch.attempt),
+        attempts=attempt_responses,
     )
 
 
@@ -814,30 +921,40 @@ async def create_project_sdk_bootstrap_change_request(
         project_id=project_id,
         provider_repository_id=payload.provider_repository_id,
     )
-    plan = plan_sdk_bootstrap_from_clone(
+    prepared_preview = prepare_sdk_bootstrap_preview_from_clone(
         clone_url=clone_url,
         default_branch=provider_repository.default_branch,
         project_id=project_id,
         service_name=payload.service_name,
         environment=payload.environment,
         base_url=payload.base_url,
+        strategy_id=payload.strategy_id,
+        api_key=SDK_BOOTSTRAP_API_KEY_PLACEHOLDER,
         fallback_planner=fallback_planner,
     )
-    selected_strategy_id, selected_strategy = _resolve_sdk_bootstrap_strategy(
-        plan=plan,
-        strategy_id=payload.strategy_id,
+    _log_sdk_bootstrap_plan(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+        plan=prepared_preview.plan,
     )
-    if not selected_strategy.pr_supported:
-        raise APIError(
-            f"{selected_strategy.framework} must be completed manually for this repository. Automatic PR generation is not enabled for the selected strategy.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="sdk_bootstrap_strategy_requires_manual_setup",
-        )
+    _log_sdk_bootstrap_strategy_event(
+        event="sdk_bootstrap_change_request_selected",
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+        strategy=prepared_preview.strategy,
+    )
     if not payload.branch_name:
         raise APIError(
             "Preview the SDK bootstrap PR draft and approve it before creating the real provider PR.",
             status_code=status.HTTP_409_CONFLICT,
             code="sdk_bootstrap_preview_required",
+        )
+    if not prepared_preview.patch.attempt.change_request_allowed or prepared_preview.patch.patch_diff is None:
+        raise APIError(
+            prepared_preview.patch.attempt.failure_reason
+            or "Automatic SDK setup could not produce a verified reviewable patch for this repository.",
+            status_code=status.HTTP_409_CONFLICT,
+            code="sdk_bootstrap_preview_verification_failed",
         )
     plaintext_key, key_prefix = build_project_api_key()
     bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
@@ -847,9 +964,21 @@ async def create_project_sdk_bootstrap_change_request(
         service_name=payload.service_name,
         environment=payload.environment,
         base_url=payload.base_url,
-        strategy_id=selected_strategy_id,
+        strategy_id=prepared_preview.selected_strategy_id,
         api_key=plaintext_key,
         fallback_planner=fallback_planner,
+    )
+    logger.info(
+        "sdk_bootstrap_change_request_ready project_id=%s provider_repository_id=%s strategy_id=%s branch_name=%s patch_lines=%s verification_status=%s generation_ms=%s apply_ms=%s verification_ms=%s",
+        project_id,
+        payload.provider_repository_id,
+        prepared_preview.selected_strategy_id,
+        payload.branch_name,
+        len(bootstrap_patch.patch_diff.splitlines()) if bootstrap_patch.patch_diff else 0,
+        bootstrap_patch.attempt.verification.status if bootstrap_patch.attempt is not None else "unknown",
+        bootstrap_patch.attempt.generation_duration_ms if bootstrap_patch.attempt is not None else None,
+        bootstrap_patch.attempt.apply_duration_ms if bootstrap_patch.attempt is not None else None,
+        bootstrap_patch.attempt.verification_duration_ms if bootstrap_patch.attempt is not None else None,
     )
     api_key_record = await repository.create_project_api_key(
         project_id=project_id,
@@ -857,11 +986,11 @@ async def create_project_sdk_bootstrap_change_request(
         key_prefix=key_prefix,
         key_hash=hash_api_key(plaintext_key),
     )
-    pr_metadata = _build_sdk_bootstrap_pr_metadata(strategy=selected_strategy, branch_name=payload.branch_name)
+    pr_metadata = _build_sdk_bootstrap_pr_metadata(strategy=prepared_preview.strategy, branch_name=payload.branch_name)
     writeback = await service.propose_patch_writeback(
         provider_repository_id=payload.provider_repository_id,
         branch_name=pr_metadata.branch_name,
-        patch_diff=bootstrap_patch.patch_diff,
+        patch_diff=bootstrap_patch.patch_diff or "",
         title=pr_metadata.title,
         description=pr_metadata.description,
         commit_message=pr_metadata.commit_message,
@@ -875,6 +1004,7 @@ async def create_project_sdk_bootstrap_change_request(
         sdk_setup_change_request_url=writeback.change_request_url,
     )
     return SdkBootstrapChangeRequestResponse(
+        run_id=prepared_preview.run.run_id,
         api_key=ProjectApiKeyResponse.from_record(api_key_record),
         plaintext_key=plaintext_key,
         branch_name=writeback.branch_name,
@@ -882,6 +1012,11 @@ async def create_project_sdk_bootstrap_change_request(
         change_request_url=writeback.change_request_url,
         reference_id=writeback.reference_id,
         mergeable=writeback.mergeable,
+        final_attempt=(
+            _build_sdk_bootstrap_patch_attempt_response(bootstrap_patch.attempt)
+            if bootstrap_patch.attempt is not None
+            else None
+        ),
         onboarding_state=ProjectOnboardingStateResponse.from_record(onboarding_state),
     )
 

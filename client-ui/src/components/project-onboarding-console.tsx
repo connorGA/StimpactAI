@@ -63,6 +63,7 @@ type OnboardingEditorSnapshot = {
   serviceType:
     | "frontend"
     | "backend"
+    | "fullstack"
     | "api"
     | "worker"
     | "cron"
@@ -83,9 +84,9 @@ type OnboardingEditorSnapshot = {
   stepFivePreviewMode: "single" | "multi" | null;
   showStepFiveAdvanced: boolean;
   repoProfileInference: RepoProfileInference | null;
+  repoProfileInferenceError: string | null;
   telemetryKeyName: string;
   telemetryKeyPlaintext: string | null;
-  sdkServiceName: string;
   sdkEnvironment: string;
   sdkSetupMode: "automatic" | "manual";
   sdkBootstrapPlan: SdkBootstrapPlanPreview | null;
@@ -265,14 +266,15 @@ export function ProjectOnboardingConsole() {
   const [stepFivePreviewMode, setStepFivePreviewMode] = useState<"single" | "multi" | null>(null);
   const [showStepFiveAdvanced, setShowStepFiveAdvanced] = useState(false);
   const [repoProfileInference, setRepoProfileInference] = useState<RepoProfileInference | null>(null);
+  const [repoProfileInferenceError, setRepoProfileInferenceError] = useState<string | null>(null);
   const [telemetryKeyName, setTelemetryKeyName] = useState("");
   const [telemetryKeyPlaintext, setTelemetryKeyPlaintext] = useState<string | null>(null);
   const [copiedTelemetryKey, setCopiedTelemetryKey] = useState(false);
-  const [sdkServiceName, setSdkServiceName] = useState("");
   const [sdkEnvironment, setSdkEnvironment] = useState("production");
   const [sdkSetupMode, setSdkSetupMode] = useState<"automatic" | "manual">("automatic");
   const [sdkBootstrapPlan, setSdkBootstrapPlan] = useState<SdkBootstrapPlanPreview | null>(null);
   const [sdkBootstrapPreview, setSdkBootstrapPreview] = useState<SdkBootstrapPreview | null>(null);
+  const [sdkLatestBootstrapPreview, setSdkLatestBootstrapPreview] = useState<SdkBootstrapPreview | null>(null);
   const [telemetryVerification, setTelemetryVerification] = useState<ProjectTelemetryVerification | null>(null);
   const [selectedSdkStrategyId, setSelectedSdkStrategyId] = useState("");
   const [dismissedSdkPreviewStrategyId, setDismissedSdkPreviewStrategyId] = useState<string | null>(null);
@@ -389,13 +391,20 @@ export function ProjectOnboardingConsole() {
   const effectiveServiceRepository =
     repositories.find((repository) => repository.id === effectiveServiceRepoProfile?.provider_repository_id) ?? null;
   const suggestedRepositoryId = effectiveServiceRepoProfile?.provider_repository_id ?? selectedRepositoryId;
+  const effectiveSdkServiceName = effectiveProjectService?.name?.trim() || serviceName.trim() || "web-app";
   const sdkTargetRepositoryId = effectiveServiceRepository?.id ?? suggestedRepositoryId;
-  const shouldLoadStepFiveData = activeStep === "5" || editingStepKey === "5";
+  const shouldLoadStepFiveData =
+    activeStep === "5" || editingStepKey === "5" || Boolean(selectedRepositoryId) || Boolean(effectiveServiceRepoProfile);
   const shouldLoadStepSixData = activeStep === "6" || editingStepKey === "6";
   const shouldRunAutomaticSdkWorkflow =
-    shouldLoadStepSixData &&
     sdkSetupMode === "automatic" &&
     (sdkAutomaticRequested || onboardingState?.sdk_setup_status === "change_request");
+  const savedProfileSuggestionMatchesVerify =
+    Boolean(effectiveServiceRepoProfile && repoProfileInference?.verify_command) &&
+    (repoProfileInference?.verify_command ?? "") === verifyCommand;
+  const savedProfileSuggestionMatchesInstall =
+    Boolean(effectiveServiceRepoProfile && repoProfileInference?.install_command) &&
+    (repoProfileInference?.install_command ?? "") === installCommand;
   const hasIncompleteRepoSecretMount =
     repoSecretMounts.some(
       (draft) =>
@@ -599,21 +608,10 @@ export function ProjectOnboardingConsole() {
   }, [currentProject, telemetryKeyName]);
 
   useEffect(() => {
-    if (!sdkServiceName.trim()) {
-      setSdkServiceName(effectiveProjectService?.name || serviceName || "web-app");
-    }
-  }, [effectiveProjectService?.name, sdkServiceName, serviceName]);
-
-  useEffect(() => {
     setCopiedTelemetryKey(false);
   }, [telemetryKeyPlaintext]);
 
   useEffect(() => {
-    const strategy =
-      sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
-      sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
-      sdkBootstrapPlan?.strategies[0] ??
-      null;
     setSdkSetupMode((current) => {
       if (onboardingState?.sdk_setup_status === "manual" || onboardingState?.sdk_setup_status === "deferred") {
         return "manual";
@@ -629,9 +627,10 @@ export function ProjectOnboardingConsole() {
   }, [onboardingState?.sdk_setup_status, sdkBootstrapPlan, selectedSdkStrategyId]);
 
   useEffect(() => {
-    if (!projectId.trim() || !sdkTargetRepositoryId || !platformBaseUrl || !sdkServiceName.trim()) {
+    if (!projectId.trim() || !sdkTargetRepositoryId || !platformBaseUrl || !effectiveSdkServiceName.trim()) {
       setSdkBootstrapPlan(null);
       setSdkBootstrapPreview(null);
+      setSdkLatestBootstrapPreview(null);
       setSelectedSdkStrategyId("");
       setDismissedSdkPreviewStrategyId(null);
       setLoadingSdkBootstrapPlan(false);
@@ -648,7 +647,7 @@ export function ProjectOnboardingConsole() {
       projectId.trim(),
       sdkTargetRepositoryId,
       platformBaseUrl,
-      sdkServiceName.trim(),
+      effectiveSdkServiceName.trim(),
       sdkEnvironment.trim() || "production",
     ].join("|");
     if (sdkBootstrapPlanKeyRef.current === requestKey && sdkBootstrapPlan) {
@@ -668,7 +667,7 @@ export function ProjectOnboardingConsole() {
         body: JSON.stringify({
           project_id: projectId.trim(),
           provider_repository_id: sdkTargetRepositoryId,
-          service_name: sdkServiceName.trim(),
+          service_name: effectiveSdkServiceName.trim(),
           environment: sdkEnvironment.trim() || "production",
           base_url: platformBaseUrl,
         }),
@@ -710,6 +709,7 @@ export function ProjectOnboardingConsole() {
         }
         setSdkBootstrapPlan(null);
         setSdkBootstrapPreview(null);
+        setSdkLatestBootstrapPreview(null);
         setSelectedSdkStrategyId("");
         setDismissedSdkPreviewStrategyId(null);
         setSdkAutomationStage("idle");
@@ -731,7 +731,7 @@ export function ProjectOnboardingConsole() {
     shouldRunAutomaticSdkWorkflow,
     sdkBootstrapPlan,
     sdkEnvironment,
-    sdkServiceName,
+    effectiveSdkServiceName,
     sdkTargetRepositoryId,
   ]);
 
@@ -748,10 +748,8 @@ export function ProjectOnboardingConsole() {
       !shouldRunAutomaticSdkWorkflow ||
       sdkSetupMode !== "automatic" ||
       !strategy ||
-      !strategy.pr_supported ||
       dismissedSdkPreviewStrategyId === strategy.id
     ) {
-      setSdkBootstrapPreview(null);
       setLoadingSdkBootstrapPreview(false);
       return;
     }
@@ -760,7 +758,7 @@ export function ProjectOnboardingConsole() {
       projectId.trim(),
       sdkTargetRepositoryId,
       platformBaseUrl,
-      sdkServiceName.trim() || serviceName || "web-app",
+      effectiveSdkServiceName.trim(),
       sdkEnvironment.trim() || "production",
       strategy.id,
     ].join("|");
@@ -781,10 +779,11 @@ export function ProjectOnboardingConsole() {
         body: JSON.stringify({
           project_id: projectId.trim(),
           provider_repository_id: sdkTargetRepositoryId,
-          service_name: sdkServiceName.trim() || serviceName || "web-app",
+          service_name: effectiveSdkServiceName.trim(),
           environment: sdkEnvironment.trim() || "production",
           base_url: platformBaseUrl,
-          strategy_id: strategy.id,
+          strategy_id:
+            strategy.pr_supported && !sdkBootstrapPlan?.requires_confirmation ? strategy.id : null,
         }),
       },
     )
@@ -794,6 +793,7 @@ export function ProjectOnboardingConsole() {
         }
         sdkBootstrapPreviewKeyRef.current = requestKey;
         setSdkBootstrapPreview(payload);
+        setSdkLatestBootstrapPreview(payload);
         setSdkAutomationStage("ready");
       })
       .catch((error) => {
@@ -824,16 +824,15 @@ export function ProjectOnboardingConsole() {
     sdkBootstrapPlan,
     sdkBootstrapPreview?.selected_strategy_id,
     sdkEnvironment,
-    sdkServiceName,
     sdkSetupMode,
     sdkTargetRepositoryId,
     selectedSdkStrategyId,
-    serviceName,
+    effectiveSdkServiceName,
     shouldRunAutomaticSdkWorkflow,
   ]);
 
   const loadTelemetryVerification = useCallback(async () => {
-    if (!projectId.trim() || !(sdkServiceName.trim() || serviceName.trim())) {
+    if (!projectId.trim() || !effectiveSdkServiceName.trim()) {
       setTelemetryVerification(null);
       setLoadingTelemetryVerification(false);
       telemetryVerificationKeyRef.current = "";
@@ -845,7 +844,7 @@ export function ProjectOnboardingConsole() {
     }
     const requestKey = [
       projectId.trim(),
-      sdkServiceName.trim() || serviceName.trim(),
+      effectiveSdkServiceName.trim(),
       sdkEnvironment.trim() || "production",
     ].join("|");
     if (telemetryVerificationKeyRef.current === requestKey && telemetryVerification) {
@@ -855,7 +854,7 @@ export function ProjectOnboardingConsole() {
     setLoadingTelemetryVerification(true);
     try {
       const params = new URLSearchParams({
-        service: sdkServiceName.trim() || serviceName.trim(),
+        service: effectiveSdkServiceName.trim(),
         environment: sdkEnvironment.trim() || "production",
       });
       const payload = await requestJson<ProjectTelemetryVerification>(
@@ -870,7 +869,7 @@ export function ProjectOnboardingConsole() {
     } finally {
       setLoadingTelemetryVerification(false);
     }
-  }, [projectId, sdkEnvironment, sdkServiceName, serviceName, shouldLoadStepSixData, telemetryVerification]);
+  }, [projectId, sdkEnvironment, effectiveSdkServiceName, shouldLoadStepSixData, telemetryVerification]);
 
   useEffect(() => {
     void loadTelemetryVerification();
@@ -906,9 +905,10 @@ export function ProjectOnboardingConsole() {
   }, [effectiveServiceRepoProfile, effectiveStepFiveMode, state?.secret_refs]);
 
   useEffect(() => {
-    if (!projectId.trim() || !suggestedRepositoryId || effectiveServiceRepoProfile) {
+    if (!projectId.trim() || !suggestedRepositoryId) {
       setLoadingRepoProfileInference(false);
       setRepoProfileInference(null);
+      setRepoProfileInferenceError(null);
       repoProfileInferenceKeyRef.current = "";
       return;
     }
@@ -918,12 +918,18 @@ export function ProjectOnboardingConsole() {
     }
 
     const requestKey = [projectId.trim(), suggestedRepositoryId].join("|");
-    if (repoProfileInferenceKeyRef.current === requestKey && repoProfileInference) {
+    if (repoProfileInferenceKeyRef.current === requestKey) {
       setLoadingRepoProfileInference(false);
+      setRepoProfileInferenceError(null);
       return;
     }
 
     let cancelled = false;
+    const shouldClearStaleInference = repoProfileInferenceKeyRef.current !== requestKey;
+    if (shouldClearStaleInference) {
+      setRepoProfileInference(null);
+    }
+    setRepoProfileInferenceError(null);
     setLoadingRepoProfileInference(true);
     void requestJson<RepoProfileInference>(
       `projects/${encodeURIComponent(projectId.trim())}/provider-repositories/${encodeURIComponent(
@@ -937,17 +943,25 @@ export function ProjectOnboardingConsole() {
         }
         repoProfileInferenceKeyRef.current = requestKey;
         setRepoProfileInference(inference);
-        setRuntimeKind(inference.runtime_kind);
-        setBaseImage(inference.base_image ?? "");
-        setInstallCommand(inference.install_command ?? "");
-        setReproduceCommand(inference.reproduce_command ?? inference.verify_command ?? "");
-        setVerifyCommand(inference.verify_command ?? "");
+        setRepoProfileInferenceError(null);
+        if (!effectiveServiceRepoProfile) {
+          setRuntimeKind(inference.runtime_kind);
+          setBaseImage(inference.base_image ?? "");
+          setInstallCommand(inference.install_command ?? "");
+          setReproduceCommand(inference.reproduce_command ?? inference.verify_command ?? "");
+          setVerifyCommand(inference.verify_command ?? "");
+        }
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) {
           return;
         }
-        setRepoProfileInference(null);
+        if (shouldClearStaleInference) {
+          setRepoProfileInference(null);
+        }
+        setRepoProfileInferenceError(
+          error instanceof Error ? error.message : "Unable to inspect the connected repo for default commands.",
+        );
       })
       .finally(() => {
         if (!cancelled) {
@@ -961,7 +975,6 @@ export function ProjectOnboardingConsole() {
   }, [
     effectiveServiceRepoProfile,
     projectId,
-    repoProfileInference,
     shouldLoadStepFiveData,
     suggestedRepositoryId,
   ]);
@@ -1024,7 +1037,6 @@ export function ProjectOnboardingConsole() {
       showStepFiveAdvanced,
       telemetryKeyName,
       telemetryKeyPlaintext,
-      sdkServiceName,
       sdkEnvironment,
       sdkSetupMode,
       sdkBootstrapPlan: sdkBootstrapPlan
@@ -1070,6 +1082,7 @@ export function ProjectOnboardingConsole() {
             warnings: [...repoProfileInference.warnings],
           }
         : null,
+      repoProfileInferenceError,
     };
   }
 
@@ -1103,7 +1116,6 @@ export function ProjectOnboardingConsole() {
     setShowStepFiveAdvanced(snapshot.showStepFiveAdvanced);
     setTelemetryKeyName(snapshot.telemetryKeyName);
     setTelemetryKeyPlaintext(snapshot.telemetryKeyPlaintext);
-    setSdkServiceName(snapshot.sdkServiceName);
     setSdkEnvironment(snapshot.sdkEnvironment);
     setSdkSetupMode(snapshot.sdkSetupMode);
     setSdkBootstrapPlan(
@@ -1159,6 +1171,7 @@ export function ProjectOnboardingConsole() {
           }
         : null,
     );
+    setRepoProfileInferenceError(snapshot.repoProfileInferenceError);
   }
 
   function beginStepEditing(stepKey: StepEditKey) {
@@ -1644,6 +1657,13 @@ export function ProjectOnboardingConsole() {
       setErrorMessage("Wait for the SDK bootstrap preview to finish before approving PR creation.");
       return;
     }
+    if (!sdkBootstrapPreview.attempt.change_request_allowed) {
+      setErrorMessage(
+        sdkBootstrapPreview.attempt.failure_reason ??
+          "This SDK patch still needs manual review before a PR can be created.",
+      );
+      return;
+    }
     if (!platformBaseUrl) {
       setErrorMessage("A public Stimpact platform URL is required before generating an SDK bootstrap PR.");
       return;
@@ -1657,10 +1677,10 @@ export function ProjectOnboardingConsole() {
             project_id: projectId.trim(),
             provider_repository_id: sdkTargetRepositoryId,
             api_key_name: telemetryKeyName.trim() || "Project telemetry key",
-            service_name: sdkServiceName.trim() || serviceName || "web-app",
+            service_name: effectiveSdkServiceName.trim(),
             environment: sdkEnvironment.trim() || "production",
             base_url: platformBaseUrl,
-            strategy_id: selectedSdkStrategy.id,
+            strategy_id: sdkBootstrapPreview.selected_strategy_id,
             branch_name: sdkBootstrapPreview.pull_request.branch_name,
           }),
         },
@@ -1678,14 +1698,13 @@ export function ProjectOnboardingConsole() {
     setSdkAutomaticRequested(false);
     setSdkAutomationStage("idle");
     setDismissedSdkPreviewStrategyId(selectedSdkStrategy?.id ?? null);
-    setSdkBootstrapPreview(null);
     setShowSdkManualFallbackDialog(false);
   }
 
   function startAutomaticSdkWorkflow() {
     sdkManualFallbackDialogKeyRef.current = "";
     setSdkSetupMode("automatic");
-    if (!sdkTargetRepositoryId || !platformBaseUrl || !projectId.trim() || !sdkServiceName.trim()) {
+    if (!sdkTargetRepositoryId || !platformBaseUrl || !projectId.trim() || !effectiveSdkServiceName.trim()) {
       setSdkAutomaticRequested(false);
       setSdkAutomationStage("idle");
       setShowSdkManualFallbackDialog(false);
@@ -1695,6 +1714,7 @@ export function ProjectOnboardingConsole() {
     setSdkAutomaticRequested(true);
     setDismissedSdkPreviewStrategyId(null);
     setSdkBootstrapPreview(null);
+    setSdkLatestBootstrapPreview(null);
     setSdkAutomationStage("planning");
     setShowSdkManualFallbackDialog(false);
     setErrorMessage(null);
@@ -1705,6 +1725,7 @@ export function ProjectOnboardingConsole() {
     setSdkAutomaticRequested(false);
     setSdkAutomationStage("idle");
     setSdkBootstrapPreview(null);
+    setSdkLatestBootstrapPreview(null);
     setShowSdkManualFallbackDialog(false);
     setErrorMessage(null);
   }
@@ -1714,7 +1735,6 @@ export function ProjectOnboardingConsole() {
     setSdkSetupMode("manual");
     setSdkAutomaticRequested(false);
     setSdkAutomationStage("idle");
-    setSdkBootstrapPreview(null);
     setShowSdkManualFallbackDialog(false);
     setErrorMessage(null);
   }
@@ -1815,21 +1835,53 @@ export function ProjectOnboardingConsole() {
         : loadingTelemetryVerification
           ? "Checking heartbeat"
           : "Waiting for first heartbeat";
+  const sdkRepositoryLabel = sdkTargetRepositoryId
+    ? (() => {
+        const repository = repositories.find((candidate) => candidate.id === sdkTargetRepositoryId);
+        return repository ? `${repository.owner}/${repository.name}` : sdkTargetRepositoryId;
+      })()
+    : "Choose and configure a repository first";
+  const sdkPlannerRuntimeLabel = sdkBootstrapPlan?.runtime ?? "Waiting for repository signal";
   const selectedSdkStrategy =
     sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
     sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
     sdkBootstrapPlan?.strategies[0] ??
     null;
+  const sdkPreviewAttempts =
+    sdkBootstrapPreview?.attempts ??
+    sdkLatestBootstrapPreview?.attempts ??
+    (sdkBootstrapPreview?.attempt ? [sdkBootstrapPreview.attempt] : sdkLatestBootstrapPreview?.attempt ? [sdkLatestBootstrapPreview.attempt] : []);
+  const sdkPatchAttempt = sdkBootstrapPreview?.attempt ?? sdkLatestBootstrapPreview?.attempt ?? null;
   const automaticSdkAvailable = Boolean(selectedSdkStrategy?.pr_supported);
+  const sdkAutomationStageLabel =
+    sdkAutomationStage === "planning"
+      ? "Thinking"
+      : sdkAutomationStage === "previewing"
+        ? "Drafting preview"
+        : sdkAutomationStage === "ready"
+          ? sdkPatchAttempt?.verification.status === "failed"
+            ? "Verification blocked"
+            : sdkPatchAttempt?.verification.status === "needs_review"
+              ? "Ready with review notes"
+              : "Ready for review"
+          : sdkAutomationStage === "manual_only"
+            ? "Manual only"
+            : "Idle";
   const automaticModePrimaryMessage =
     sdkAutomationStage === "planning"
       ? "Stimpact is inspecting the repository, checking deterministic entrypoints first, and only using the guarded model fallback if no safe hardcoded match is found."
       : sdkAutomationStage === "previewing"
-        ? "Stimpact found a candidate runtime surface and is now drafting the exact patch preview and PR metadata for your review."
+        ? "Stimpact found a candidate runtime surface and is now generating, applying, and verifying the patch before it prepares the final preview."
         : sdkAutomationStage === "ready"
-          ? selectedSdkStrategy?.source === "llm"
-            ? "This preview came from the model-assisted fallback. The model suggested the runtime surface, then Stimpact applied guardrails before showing you the patch."
-            : "This preview came from the deterministic planner. Stimpact matched a supported runtime surface without needing the model fallback."
+          ? sdkPatchAttempt?.verification.status === "passed"
+            ? "The candidate patch was generated, applied in a temp checkout, and passed focused verification before Stimpact exposed this preview."
+            : sdkPatchAttempt?.verification.status === "needs_review"
+              ? "The candidate patch was generated and applied successfully, but Stimpact could only complete a limited verification pass. Review the preview notes before approving anything."
+              : sdkPatchAttempt?.verification.status === "failed"
+                ? "Stimpact generated and applied the patch, but verification failed. Review the preview and fallback guidance before deciding whether to proceed manually."
+                : selectedSdkStrategy?.source === "llm"
+                  ? "This preview came from the model-assisted fallback. The model suggested the runtime surface, then Stimpact applied guardrails before showing you the patch."
+                  : "This preview came from the deterministic planner. Stimpact matched a supported runtime surface without needing the model fallback."
           : sdkAutomationStage === "manual_only"
             ? "Stimpact inspected the repository but did not find a safe automatic patch path, so it kept you on the manual route."
             : "Choose automatic mode to let Stimpact inspect the repo, attempt a safe SDK integration, and prepare a reviewable PR preview.";
@@ -1851,7 +1903,7 @@ export function ProjectOnboardingConsole() {
     {
       id: "decide",
       label: "Choose integration path",
-      detail: "Prefer deterministic matching, then try the guarded LLM fallback only if needed.",
+      detail: "Rank deterministic and model-assisted candidates, then keep trying until one is reviewable.",
       state:
         sdkAutomationStage === "previewing" ||
         sdkAutomationStage === "ready" ||
@@ -1862,11 +1914,11 @@ export function ProjectOnboardingConsole() {
             : "pending",
     },
     {
-      id: "preview",
-      label: "Draft patch preview",
-      detail: "Generate the exact diff and PR metadata before you approve anything.",
+      id: "draft",
+      label: "Draft patch",
+      detail: "Generate the exact diff from the selected runtime surface.",
       state:
-        sdkAutomationStage === "ready"
+        sdkPatchAttempt?.patch_generated
           ? "complete"
           : sdkAutomationStage === "previewing"
             ? "active"
@@ -1874,7 +1926,112 @@ export function ProjectOnboardingConsole() {
               ? "blocked"
               : "pending",
     },
+    {
+      id: "apply",
+      label: "Apply patch",
+      detail: "Replay the change in a temp checkout to prove it applies cleanly.",
+      state:
+        sdkPatchAttempt?.patch_applied
+          ? "complete"
+          : sdkPatchAttempt?.failure_stage === "apply"
+            ? "blocked"
+            : sdkAutomationStage === "previewing" && sdkPatchAttempt?.patch_generated
+              ? "active"
+              : "pending",
+    },
+    {
+      id: "verify",
+      label: "Verify patch",
+      detail: "Run a focused verification check before allowing PR creation.",
+      state:
+        sdkPatchAttempt?.verification.status === "passed" || sdkPatchAttempt?.verification.status === "needs_review"
+          ? "complete"
+          : sdkPatchAttempt?.verification.status === "failed"
+            ? "blocked"
+            : sdkAutomationStage === "previewing" && sdkPatchAttempt?.patch_applied
+              ? "active"
+              : "pending",
+    },
   ] as const;
+  const sdkAutomationSummaryItems = [
+    { label: "Target service", value: effectiveSdkServiceName },
+    { label: "Target repository", value: sdkRepositoryLabel },
+    { label: "Planner runtime", value: sdkPlannerRuntimeLabel },
+  ] as const;
+  const sdkEntryPointLabel = selectedSdkStrategy?.entrypoints[0] ?? "the detected runtime entrypoint";
+  const sdkSelectedStrategyBlockers = selectedSdkStrategy?.blockers ?? [];
+  const sdkAttemptWarnings = sdkPatchAttempt?.warnings ?? [];
+  const sdkRequiresConfirmationMessage = sdkBootstrapPlan?.requires_confirmation
+    ? "Multiple plausible SDK surfaces were detected. Review the selected strategy before creating the PR so the agent patches the right runtime entrypoint."
+    : null;
+  const sdkStrategyConfidenceLabel = selectedSdkStrategy ? `${selectedSdkStrategy.confidence} confidence` : "Waiting for strategy";
+  const sdkManualBlockers = selectedSdkStrategy?.blockers ?? [];
+  const sdkAgentFeedItems = [
+    {
+      id: "requested",
+      thought: sdkAutomaticRequested
+        ? `Automatic attempt started for ${effectiveSdkServiceName}.`
+        : "Waiting for you to start the automatic attempt.",
+      state: sdkAutomaticRequested ? "complete" : "pending",
+    },
+    {
+      id: "inspected",
+      thought: sdkBootstrapPlan
+        ? `Repository inspection finished for ${sdkRepositoryLabel}.`
+        : "Inspecting repository manifests, entrypoints, and runtime signals.",
+      state:
+        sdkBootstrapPlan || sdkAutomationStage === "previewing" || sdkAutomationStage === "ready" || sdkAutomationStage === "manual_only"
+          ? "complete"
+          : sdkAutomationStage === "planning"
+            ? "active"
+            : "pending",
+    },
+    {
+      id: "strategy",
+      thought: selectedSdkStrategy
+        ? `Selected ${selectedSdkStrategy.framework} at ${sdkEntryPointLabel}.`
+        : sdkAutomationStage === "manual_only"
+          ? "No safe automatic integration strategy was confirmed for this repository."
+          : "Choosing the safest SDK integration strategy from the inspection results.",
+      state:
+        sdkAutomationStage === "manual_only"
+          ? "blocked"
+          : selectedSdkStrategy && sdkBootstrapPlan
+            ? "complete"
+            : sdkBootstrapPlan
+              ? "active"
+              : "pending",
+    },
+    {
+      id: "preview",
+      thought:
+        sdkPatchAttempt?.verification.status === "passed"
+          ? `Prepared review-ready PR preview on ${sdkBootstrapPreview?.pull_request.branch_name ?? "the proposed branch"}.`
+          : sdkPatchAttempt?.verification.status === "needs_review"
+            ? "Prepared a preview, but this patch still needs human review before PR creation."
+            : sdkPatchAttempt?.verification.status === "failed"
+              ? "Generated a preview, but verification failed before PR creation could be approved."
+              : sdkAutomationStage === "manual_only"
+                ? "Automatic preview stopped because this repository needs manual setup."
+                : "Generating the exact patch diff and PR metadata for review.",
+      state:
+        sdkPatchAttempt?.verification.status === "failed"
+          ? "blocked"
+          : sdkAutomationStage === "manual_only"
+            ? "blocked"
+            : sdkBootstrapPreview || sdkAutomationStage === "ready"
+              ? "complete"
+              : sdkAutomationStage === "previewing"
+                ? "active"
+                : "pending",
+    },
+  ] as const;
+  const sdkActiveThought =
+    sdkAgentFeedItems.find((item) => item.state === "active")?.thought ??
+    sdkAgentFeedItems.find((item) => item.state === "blocked")?.thought ??
+    sdkAgentFeedItems.findLast((item) => item.state === "complete")?.thought ??
+    sdkAgentFeedItems[0]?.thought ??
+    "";
   const selectedManualFallbackStrategy =
     sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
     sdkBootstrapPlan?.strategies[0] ??
@@ -1890,7 +2047,7 @@ export function ProjectOnboardingConsole() {
                 : item.name.includes("API_KEY")
                   ? "stimp_live_replace_me"
                   : item.name.includes("SERVICE")
-                    ? sdkServiceName || serviceName || "web-app"
+                    ? effectiveSdkServiceName
                     : item.name.includes("ENVIRONMENT")
                       ? sdkEnvironment || "production"
                       : item.example_value;
@@ -1898,9 +2055,42 @@ export function ProjectOnboardingConsole() {
         })
         .join("\n")
     : "";
+  const sdkAutomaticFailureExplanation =
+    sdkPatchAttempt?.failure_reason ??
+    sdkPatchAttempt?.verification.summary ??
+    sdkAttemptWarnings[0] ??
+    null;
+  const sdkAttemptHistorySummary =
+    sdkPreviewAttempts.length > 1
+      ? `Tried ${sdkPreviewAttempts.length} candidate surfaces before selecting the best available result.`
+      : sdkPreviewAttempts.length === 1
+        ? "Tried 1 candidate surface."
+        : null;
   const sdkCodeSnippet = (selectedSdkStrategy?.preview_snippet ?? "")
     .replaceAll("<public-stimpact-url>", platformBaseUrl || "<public-stimpact-url>")
     .replaceAll("<project-id>", projectId || "<project-id>");
+  const sdkManualActionItems = [
+    {
+      title: "Install the SDK dependency",
+      detail: "Run this in the detected app before making any code changes.",
+      code: selectedSdkStrategy?.install_command ?? "# Install the SDK with your package manager",
+    },
+    {
+      title: "Add the required environment variables",
+      detail: "Set these values in your local and deployed environment configuration.",
+      code: sdkEnvironmentSnippet || "# No environment variables detected",
+    },
+    {
+      title: `Wire the SDK into ${sdkEntryPointLabel}`,
+      detail: "Use this starter snippet in the app entrypoint the planner identified for this service.",
+      code: sdkCodeSnippet || "# No starter snippet available",
+    },
+    {
+      title: "Verify the first heartbeat",
+      detail: "Deploy or run the updated service, trigger the app once, then come back here and confirm telemetry is arriving for this exact service and environment.",
+      code: `Service: ${effectiveSdkServiceName}\nEnvironment: ${sdkEnvironment || "production"}`,
+    },
+  ] as const;
   const canCompleteSingleRepoSetup =
     Boolean(serviceName.trim()) &&
     Boolean(serviceSlug.trim()) &&
@@ -2514,11 +2704,24 @@ export function ProjectOnboardingConsole() {
             <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
               Inspecting the connected repo for install and verify commands...
             </div>
-          ) : repoProfileInference ? (
+          ) : null}
+
+          {!loadingRepoProfileInference && repoProfileInferenceError ? (
+            <div className="mt-4 rounded-[20px] border border-[rgba(255,106,61,0.16)] bg-[rgba(255,106,61,0.08)] p-4">
+              <p className="text-sm font-semibold text-[#8f4b31]">Repo inspection needs review</p>
+              <p className="mt-1 text-sm leading-6 text-[#8f4b31]">{repoProfileInferenceError}</p>
+            </div>
+          ) : null}
+
+          {!loadingRepoProfileInference && repoProfileInference ? (
             <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-4">
               <p className="text-sm font-semibold text-[#171717]">Detected from the connected repo</p>
               <p className="mt-1 text-sm leading-6 text-[#746d66]">
-                Suggested from {repoProfileInference.detected_from.join(", ") || "the repository structure"}.
+                {effectiveServiceRepoProfile
+                  ? `Saved repo profile values are shown below. Compare them against fresh suggestions from ${
+                      repoProfileInference.detected_from.join(", ") || "the repository structure"
+                    } before saving edits.`
+                  : `Suggested from ${repoProfileInference.detected_from.join(", ") || "the repository structure"}.`}
               </p>
               {repoProfileInference.warnings.length ? (
                 <div className="mt-3 space-y-2">
@@ -2622,9 +2825,17 @@ export function ProjectOnboardingConsole() {
                   placeholder="npm test or pytest"
                   className="md:col-span-2"
                   helperText={
-                    repoProfileInference?.verify_command
-                      ? "Detected automatically. Review it if this repo has more than one deployable surface."
-                      : "This is the main command the sandbox should use to confirm the fix worked."
+                    effectiveServiceRepoProfile
+                      ? savedProfileSuggestionMatchesVerify
+                        ? "Showing the saved repo profile value."
+                        : repoProfileInference?.verify_command
+                          ? `Showing the saved profile value. Fresh repo suggestion: ${repoProfileInference.verify_command}`
+                          : "Showing the saved repo profile value."
+                      : repoProfileInference?.verify_command
+                        ? "Detected automatically. Review it if this repo has more than one deployable surface."
+                        : repoProfileInferenceError
+                          ? "We could not infer this automatically from the connected repo."
+                          : "This is the main command the sandbox should use to confirm the fix worked."
                   }
                 />
                 <Field
@@ -2634,9 +2845,17 @@ export function ProjectOnboardingConsole() {
                   placeholder="npm install or pip install -r requirements.txt"
                   className="md:col-span-2"
                   helperText={
-                    repoProfileInference?.install_command
-                      ? "Detected automatically from the connected repo."
-                      : undefined
+                    effectiveServiceRepoProfile
+                      ? savedProfileSuggestionMatchesInstall
+                        ? "Showing the saved repo profile value."
+                        : repoProfileInference?.install_command
+                          ? `Showing the saved profile value. Fresh repo suggestion: ${repoProfileInference.install_command}`
+                          : "Showing the saved repo profile value."
+                      : repoProfileInference?.install_command
+                        ? "Detected automatically from the connected repo."
+                        : repoProfileInferenceError
+                          ? "Add the install command manually if repo inspection could not determine it."
+                          : undefined
                   }
                 />
               </div>
@@ -2680,9 +2899,17 @@ export function ProjectOnboardingConsole() {
                     placeholder="pip install -r requirements.txt"
                     className="md:col-span-2"
                     helperText={
-                      repoProfileInference?.install_command
-                        ? "Detected automatically from the connected repo."
-                        : undefined
+                      effectiveServiceRepoProfile
+                        ? savedProfileSuggestionMatchesInstall
+                          ? "Showing the saved repo profile value."
+                          : repoProfileInference?.install_command
+                            ? `Showing the saved profile value. Fresh repo suggestion: ${repoProfileInference.install_command}`
+                            : "Showing the saved repo profile value."
+                        : repoProfileInference?.install_command
+                          ? "Detected automatically from the connected repo."
+                          : repoProfileInferenceError
+                            ? "Add the install command manually if repo inspection could not determine it."
+                            : undefined
                     }
                   />
                   <Field
@@ -2692,9 +2919,17 @@ export function ProjectOnboardingConsole() {
                     placeholder="pytest"
                     className="md:col-span-2"
                     helperText={
-                      repoProfileInference?.verify_command
-                        ? "Detected automatically from the connected repo. Adjust it if this repo contains multiple services."
-                        : undefined
+                      effectiveServiceRepoProfile
+                        ? savedProfileSuggestionMatchesVerify
+                          ? "Showing the saved repo profile value."
+                          : repoProfileInference?.verify_command
+                            ? `Showing the saved profile value. Fresh repo suggestion: ${repoProfileInference.verify_command}`
+                            : "Showing the saved repo profile value."
+                        : repoProfileInference?.verify_command
+                          ? "Detected automatically from the connected repo. Adjust it if this repo contains multiple services."
+                          : repoProfileInferenceError
+                            ? "We could not infer this automatically from the connected repo."
+                            : undefined
                     }
                   />
                 </div>
@@ -2911,7 +3146,7 @@ export function ProjectOnboardingConsole() {
                 <ReadOnlyField label="Active keys" value={String(activeApiKeys.length)} />
                 <ReadOnlyField
                   label="Target service"
-                  value={sdkServiceName.trim() || serviceName || "web-app"}
+                  value={effectiveSdkServiceName}
                 />
                 <ReadOnlyField
                   label="Environment"
@@ -3015,149 +3250,235 @@ export function ProjectOnboardingConsole() {
                   <div className="flex flex-col gap-2">
                     <p className="text-sm font-semibold text-[#171717]">Automatic bootstrap PR</p>
                     <p className="text-sm leading-6 text-[#746d66]">
-                      Review the exact repository surface Stimpact found, then approve the generated
-                      bootstrap PR only if it looks correct.
+                      Let Stimpact actively inspect the repo, choose the safest SDK surface, and
+                      prepare a reviewable PR preview before anything is approved.
                     </p>
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field
-                      label="Service name"
-                      value={sdkServiceName}
-                      onChange={setSdkServiceName}
-                      placeholder="web-app"
-                    />
-                    <Field
-                      label="Environment"
-                      value={sdkEnvironment}
-                      onChange={setSdkEnvironment}
-                      placeholder="production"
-                    />
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <ReadOnlyField
-                      label="Target repository"
-                      value={
-                        sdkTargetRepositoryId
-                          ? (() => {
-                              const repository = repositories.find((candidate) => candidate.id === sdkTargetRepositoryId);
-                              return repository ? `${repository.owner}/${repository.name}` : sdkTargetRepositoryId;
-                            })()
-                          : "Choose and configure a repository first"
-                      }
-                    />
-                    <ReadOnlyField
-                      label="Planner runtime"
-                      value={sdkBootstrapPlan?.runtime ?? "Waiting for repository signal"}
-                    />
-                  </div>
-                  <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#fffdfb,#fff7f1)] px-4 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className={`inline-flex h-9 w-9 items-center justify-center rounded-full border ${
-                            sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                              ? "border-[rgba(255,106,61,0.18)] bg-[rgba(255,106,61,0.12)]"
-                              : sdkAutomationStage === "ready"
-                                ? "border-[rgba(34,197,94,0.18)] bg-[rgba(34,197,94,0.12)]"
-                                : sdkAutomationStage === "manual_only"
-                                  ? "border-[rgba(29,26,24,0.08)] bg-[rgba(29,26,24,0.06)]"
-                                  : "border-[rgba(17,24,39,0.08)] bg-white/80"
-                          }`}
-                        >
-                          <span
-                            className={`inline-flex h-4 w-4 rounded-full ${
-                              sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                                ? "animate-spin border-2 border-[rgba(255,106,61,0.25)] border-t-[rgba(255,90,42,0.96)]"
-                                : sdkAutomationStage === "ready"
-                                  ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)]"
-                                  : sdkAutomationStage === "manual_only"
-                                    ? "bg-[rgba(29,26,24,0.22)]"
-                                    : "bg-[rgba(23,23,23,0.14)]"
-                            }`}
-                          />
-                        </span>
-                        <div>
-                          <p className="text-sm font-semibold text-[#171717]">Automatic setup activity</p>
-                          <p className="text-xs uppercase tracking-[0.16em] text-[#8a8178]">
-                            {sdkAutomationStage === "planning"
-                              ? "Thinking"
-                              : sdkAutomationStage === "previewing"
-                                ? "Drafting preview"
-                                : sdkAutomationStage === "ready"
-                                  ? "Ready for review"
-                                  : sdkAutomationStage === "manual_only"
-                                    ? "Manual only"
-                                    : "Idle"}
+                  <div className="relative overflow-hidden rounded-[30px] border border-[rgba(44,97,255,0.16)] bg-[linear-gradient(135deg,rgba(255,248,244,0.98)_0%,rgba(255,255,255,0.98)_38%,rgba(242,247,255,0.98)_100%)] px-6 py-6 shadow-[0_28px_70px_rgba(33,97,255,0.10)]">
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#ff6a3d_0%,#ff8a3d_28%,#2d7ff9_72%,#173fbe_100%)]" />
+                    <div className="pointer-events-none absolute -left-10 top-6 h-32 w-32 rounded-full bg-[rgba(255,106,61,0.18)] blur-3xl" />
+                    <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-[rgba(45,127,249,0.16)] blur-3xl" />
+                    <div className="relative">
+                      <div className="flex flex-wrap items-start justify-between gap-5">
+                        <div className="max-w-3xl">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#ff6a3d]">
+                            Agent-guided setup
+                          </p>
+                          <h3 className="mt-2 text-[1.25rem] font-semibold tracking-[-0.02em] text-[#13213a]">
+                            Stimpact can configure this SDK path for you
+                          </h3>
+                          <p className="mt-2 text-sm leading-6 text-[#49566c]">
+                            The agent inspects the connected codebase, selects the safest integration
+                            path, and prepares a reviewable PR preview before anything is written.
                           </p>
                         </div>
-                      </div>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                          sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                            ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                            : sdkAutomationStage === "ready"
-                              ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                              : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
-                        }`}
-                      >
-                        {selectedSdkStrategy?.source === "llm"
-                          ? "LLM fallback in play"
-                          : "Deterministic first"}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-[#746d66]">{automaticModePrimaryMessage}</p>
-                    <div className="mt-4 overflow-hidden rounded-full bg-[rgba(17,24,39,0.06)]">
-                      <div
-                        className={`h-2 rounded-full transition-all duration-500 ${
-                          sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                            ? "w-2/3 animate-pulse bg-[linear-gradient(90deg,#ff754b_0%,#ff5a2a_55%,#ffd1c1_100%)]"
-                            : sdkAutomationStage === "ready"
-                              ? "w-full bg-[linear-gradient(90deg,#22c55e,#16a34a)]"
-                              : sdkAutomationStage === "manual_only"
-                                ? "w-full bg-[rgba(29,26,24,0.16)]"
-                                : "w-0 bg-transparent"
-                        }`}
-                      />
-                    </div>
-                    <div className="mt-4 grid gap-3">
-                      {automaticWorkflowItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className={`flex items-start gap-3 rounded-[16px] border px-4 py-3 ${
-                            item.state === "active"
-                              ? "border-[rgba(255,106,61,0.18)] bg-[rgba(255,255,255,0.96)] shadow-[0_12px_26px_rgba(255,106,61,0.08)]"
-                              : "border-[rgba(17,24,39,0.06)] bg-white/80"
-                          }`}
-                        >
-                          <span
-                            className={`mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
-                              item.state === "complete"
-                                ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                                : item.state === "active"
-                                  ? "bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white animate-pulse"
-                                  : item.state === "blocked"
-                                    ? "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
-                                    : "bg-[rgba(23,23,23,0.06)] text-[#8a8178]"
+                        {sdkSetupMode === "automatic" && !sdkAutomaticRequested ? (
+                          <ActionButton
+                            label="Start automatic attempt"
+                            onClick={startAutomaticSdkWorkflow}
+                            disabled={loading || !sdkTargetRepositoryId || !platformBaseUrl}
+                          />
+                        ) : (
+                          <div
+                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                              sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                ? "bg-[rgba(255,106,61,0.12)] text-[#d64e1d]"
+                                : sdkAutomationStage === "ready"
+                                  ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
+                                  : "bg-[rgba(19,33,58,0.08)] text-[#516075]"
                             }`}
                           >
-                            {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
+                            <span
+                              className={`inline-flex h-2.5 w-2.5 rounded-full ${
+                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                  ? "animate-pulse bg-[#ff6a3d]"
+                                  : sdkAutomationStage === "ready"
+                                    ? "bg-white"
+                                    : "bg-[rgba(19,33,58,0.26)]"
+                              }`}
+                            />
+                            {sdkAutomationStageLabel}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-6 flex flex-wrap gap-x-8 gap-y-4 border-y border-[rgba(19,33,58,0.08)] py-4">
+                        {sdkAutomationSummaryItems.map((item) => (
+                          <div key={item.label} className="min-w-[11rem] flex-1">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                              {item.label}
+                            </p>
+                            <p className="mt-1.5 text-sm font-semibold text-[#13213a]">{item.value}</p>
+                          </div>
+                        ))}
+                        <label className="min-w-[11rem] flex-1 sm:max-w-[14rem]">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                            Environment
                           </span>
-                          <div>
-                            <p className="text-sm font-semibold text-[#171717]">{item.label}</p>
-                            <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.detail}</p>
+                          <input
+                            value={sdkEnvironment}
+                            onChange={(event) => setSdkEnvironment(event.target.value)}
+                            placeholder="production"
+                            className="mt-1.5 w-full rounded-[14px] border border-[rgba(45,127,249,0.18)] bg-white/92 px-4 py-3 text-sm text-[#13213a] shadow-[0_6px_20px_rgba(45,127,249,0.08)] outline-none transition placeholder:text-[#8f99aa] focus:border-[rgba(255,106,61,0.48)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.10)]"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.95fr)] xl:divide-x xl:divide-[rgba(19,33,58,0.08)]">
+                        <div className="xl:pr-8">
+                          <div className="flex items-start gap-4">
+                            <span
+                              className={`inline-flex h-12 w-12 items-center justify-center rounded-full border ${
+                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                  ? "border-[rgba(255,106,61,0.24)] bg-[rgba(255,106,61,0.10)]"
+                                  : sdkAutomationStage === "ready"
+                                    ? "border-[rgba(45,127,249,0.24)] bg-[rgba(45,127,249,0.12)]"
+                                    : sdkAutomationStage === "manual_only"
+                                      ? "border-[rgba(19,33,58,0.12)] bg-[rgba(19,33,58,0.06)]"
+                                      : "border-[rgba(19,33,58,0.12)] bg-white/90"
+                              }`}
+                            >
+                              <span
+                                className={`inline-flex h-5 w-5 rounded-full ${
+                                  sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                    ? "animate-spin border-2 border-[rgba(255,106,61,0.25)] border-t-[#ff6a3d]"
+                                    : sdkAutomationStage === "ready"
+                                      ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)]"
+                                      : sdkAutomationStage === "manual_only"
+                                        ? "bg-[rgba(19,33,58,0.24)]"
+                                        : "bg-[rgba(19,33,58,0.16)]"
+                                }`}
+                              />
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-[#13213a]">Automatic setup activity</p>
+                              <p className="text-xs uppercase tracking-[0.18em] text-[#6f7b90]">
+                                {sdkAutomationStageLabel}
+                              </p>
+                            </div>
+                          </div>
+
+                          <p className="mt-4 text-sm leading-6 text-[#49566c]">
+                            {automaticModePrimaryMessage}
+                          </p>
+
+                          <div className="mt-5 border-l-4 border-[#ff6a3d] pl-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#ff6a3d]">
+                              Current agent focus
+                            </p>
+                            <p
+                              className={`mt-2 text-base font-semibold text-[#13213a] ${
+                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                  ? "animate-pulse"
+                                  : ""
+                              }`}
+                            >
+                              {sdkActiveThought}
+                            </p>
+                          </div>
+
+                          <div className="mt-5 overflow-hidden rounded-full bg-[rgba(23,63,190,0.08)]">
+                            <div
+                              className={`h-2 rounded-full transition-all duration-500 ${
+                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                  ? "w-2/3 animate-pulse bg-[linear-gradient(90deg,#ff6a3d_0%,#ff9447_28%,#2d7ff9_78%,#173fbe_100%)]"
+                                  : sdkAutomationStage === "ready"
+                                    ? "w-full bg-[linear-gradient(90deg,#2d7ff9,#173fbe)]"
+                                    : sdkAutomationStage === "manual_only"
+                                      ? "w-full bg-[rgba(19,33,58,0.18)]"
+                                      : "w-0 bg-transparent"
+                              }`}
+                            />
+                          </div>
+
+                          <div className="mt-6 grid gap-4 md:grid-cols-3">
+                            {automaticWorkflowItems.map((item) => (
+                              <div key={item.id} className="border-l-2 border-[rgba(19,33,58,0.10)] pl-4">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                                      item.state === "complete"
+                                        ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
+                                        : item.state === "active"
+                                          ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
+                                          : item.state === "blocked"
+                                            ? "bg-[rgba(19,33,58,0.10)] text-[#516075]"
+                                            : "bg-[rgba(19,33,58,0.06)] text-[#6f7b90]"
+                                    }`}
+                                  >
+                                    {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
+                                  </span>
+                                  <p className="text-sm font-semibold text-[#13213a]">{item.label}</p>
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-[#49566c]">{item.detail}</p>
+                              </div>
+                            ))}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                    {sdkSetupMode === "automatic" && !sdkAutomaticRequested ? (
-                      <div className="mt-4">
-                        <ActionButton
-                          label="Start automatic attempt"
-                          onClick={startAutomaticSdkWorkflow}
-                          disabled={loading || !sdkTargetRepositoryId || !platformBaseUrl}
-                        />
+
+                        <div className="xl:pl-8">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-[#13213a]">Live agent feed</p>
+                              <p className="mt-1 text-sm leading-6 text-[#49566c]">
+                                Watch the setup agent move through repository analysis and preview
+                                generation in real time.
+                              </p>
+                            </div>
+                            {(sdkAutomationStage === "planning" || sdkAutomationStage === "previewing") && (
+                              <span className="rounded-full bg-[rgba(45,127,249,0.12)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#173fbe]">
+                                Live
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-5 space-y-4">
+                            {sdkAgentFeedItems.map((item, index) => (
+                              <div
+                                key={`${index}-${item.thought}`}
+                                className={`border-l-4 pl-4 ${
+                                  item.state === "active"
+                                    ? "border-[#ff6a3d]"
+                                    : item.state === "complete"
+                                      ? "border-[#2d7ff9]"
+                                      : item.state === "blocked"
+                                        ? "border-[rgba(19,33,58,0.18)]"
+                                        : "border-[rgba(19,33,58,0.10)]"
+                                }`}
+                              >
+                                <div className="flex items-start gap-3">
+                                  <span
+                                    className={`mt-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                                      item.state === "active"
+                                        ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
+                                        : item.state === "complete"
+                                          ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
+                                          : item.state === "blocked"
+                                            ? "bg-[rgba(19,33,58,0.10)] text-[#516075]"
+                                            : "bg-[rgba(19,33,58,0.06)] text-[#6f7b90]"
+                                    }`}
+                                  >
+                                    {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
+                                  </span>
+                                  <div className="min-w-0 border-b border-[rgba(19,33,58,0.06)] pb-4">
+                                    <p className="text-sm font-medium leading-6 text-[#13213a]">{item.thought}</p>
+                                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                                      {item.state === "active"
+                                        ? "Working now"
+                                        : item.state === "complete"
+                                          ? "Completed"
+                                          : item.state === "blocked"
+                                            ? "Stopped"
+                                            : "Queued"}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    ) : null}
+                    </div>
                   </div>
                   {!platformBaseUrl ? (
                     <p className="rounded-[16px] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-[#8f4b31]">
@@ -3180,6 +3501,11 @@ export function ProjectOnboardingConsole() {
                         </p>
                       ))}
                     </div>
+                  ) : null}
+                  {sdkRequiresConfirmationMessage ? (
+                    <p className="rounded-[16px] border border-[rgba(45,127,249,0.14)] bg-[rgba(242,247,255,0.92)] px-4 py-3 text-sm text-[#214a8b]">
+                      {sdkRequiresConfirmationMessage}
+                    </p>
                   ) : null}
                   {sdkBootstrapPlan?.strategies.length ? (
                     <div className="grid gap-3">
@@ -3241,9 +3567,53 @@ export function ProjectOnboardingConsole() {
                       this repository.
                     </p>
                   )}
+                  {selectedSdkStrategy ? (
+                    <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] px-4 py-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-[#171717]">Selected strategy review</p>
+                        <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                          {sdkStrategyConfidenceLabel}
+                        </span>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                            sdkPatchAttempt?.verification.status === "failed"
+                              ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                              : selectedSdkStrategy.pr_supported
+                              ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                              : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                          }`}
+                        >
+                          {sdkPatchAttempt?.verification.status === "failed"
+                            ? "Verification blocked"
+                            : selectedSdkStrategy.pr_supported
+                              ? "Preview can be generated"
+                              : "Preview blocked"}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-[#5f6470]">{selectedSdkStrategy.summary}</p>
+                      {selectedSdkStrategy.confidence_reason ? (
+                        <p className="mt-3 text-sm leading-6 text-[#5f6470]">
+                          <span className="font-semibold text-[#171717]">Why this surface:</span>{" "}
+                          {selectedSdkStrategy.confidence_reason}
+                        </p>
+                      ) : null}
+                      {sdkSelectedStrategyBlockers.length ? (
+                        <div className="mt-4 rounded-[16px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-4 py-4">
+                          <p className="text-sm font-semibold text-[#171717]">Why automatic stopped here</p>
+                          <div className="mt-3 space-y-2">
+                            {sdkSelectedStrategyBlockers.map((item) => (
+                              <p key={item} className="text-sm leading-6 text-[#8f4b31]">
+                                {item}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {loadingSdkBootstrapPreview ? (
                     <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
-                      Building the exact bootstrap PR preview for the selected strategy...
+                      Building the exact bootstrap PR preview for the selected strategy and verifying it in a temp checkout...
                     </p>
                   ) : sdkBootstrapPreview ? (
                     <>
@@ -3271,10 +3641,19 @@ export function ProjectOnboardingConsole() {
                               ? "Model-assisted strategy"
                               : "Deterministic strategy"}
                           </span>
+                          <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                            {sdkBootstrapPreview.strategy.confidence} confidence
+                          </span>
                         </div>
                         {sdkBootstrapPreview.strategy.confidence_reason ? (
                           <p className="mt-3 text-sm leading-6 text-[#746d66]">
                             {sdkBootstrapPreview.strategy.confidence_reason}
+                          </p>
+                        ) : null}
+                        {sdkBootstrapPlan?.requires_confirmation ? (
+                          <p className="mt-3 rounded-[14px] bg-[rgba(242,247,255,0.92)] px-3 py-2 text-sm text-[#214a8b]">
+                            Review required: this repository exposed multiple plausible SDK surfaces,
+                            so the agent is showing you the chosen target before PR creation.
                           </p>
                         ) : null}
                         {sdkBootstrapPreview.strategy.evidence.length ? (
@@ -3284,7 +3663,125 @@ export function ProjectOnboardingConsole() {
                             ))}
                           </ul>
                         ) : null}
+                        {sdkBootstrapPreview.strategy.blockers.length ? (
+                          <div className="mt-3 rounded-[14px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-3 py-3">
+                            <p className="text-sm font-semibold text-[#171717]">Guardrails or blockers</p>
+                            <div className="mt-2 space-y-2">
+                              {sdkBootstrapPreview.strategy.blockers.map((item) => (
+                                <p key={item} className="text-sm leading-6 text-[#8f4b31]">
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
+                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-[#171717]">Patch verification</p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              sdkBootstrapPreview.attempt.verification.status === "passed"
+                                ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                  ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
+                                  : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                            }`}
+                          >
+                            {sdkBootstrapPreview.attempt.verification.status === "passed"
+                              ? "Verification passed"
+                              : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                ? "Needs review"
+                                : "Verification failed"}
+                          </span>
+                        </div>
+                        <div className="mt-4 grid gap-4 md:grid-cols-3">
+                          <ReadOnlyField
+                            label="Patch drafted"
+                            value={sdkBootstrapPreview.attempt.patch_generated ? "Yes" : "No"}
+                          />
+                          <ReadOnlyField
+                            label="Patch applied"
+                            value={sdkBootstrapPreview.attempt.patch_applied ? "Yes" : "No"}
+                          />
+                          <ReadOnlyField
+                            label="Failure stage"
+                            value={sdkBootstrapPreview.attempt.failure_stage ?? "None"}
+                          />
+                        </div>
+                        {sdkBootstrapPreview.attempt.verification.summary ? (
+                          <p className="mt-4 text-sm leading-6 text-[#5f6470]">
+                            {sdkBootstrapPreview.attempt.verification.summary}
+                          </p>
+                        ) : null}
+                        {sdkBootstrapPreview.attempt.verification.command ? (
+                          <CodePanel
+                            title="Verification command"
+                            code={sdkBootstrapPreview.attempt.verification.command}
+                          />
+                        ) : null}
+                        {sdkBootstrapPreview.attempt.verification.output ? (
+                          <CodePanel
+                            title="Verification output"
+                            code={sdkBootstrapPreview.attempt.verification.output}
+                          />
+                        ) : null}
+                        {sdkBootstrapPreview.attempt.warnings.length ? (
+                          <div className="mt-4 rounded-[14px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-3 py-3">
+                            <p className="text-sm font-semibold text-[#171717]">Preview warnings</p>
+                            <div className="mt-2 space-y-2">
+                              {sdkBootstrapPreview.attempt.warnings.map((item) => (
+                                <p key={item} className="text-sm leading-6 text-[#8f4b31]">
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {sdkPreviewAttempts.length ? (
+                        <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
+                          <p className="text-sm font-semibold text-[#171717]">Attempt history</p>
+                          {sdkAttemptHistorySummary ? (
+                            <p className="mt-2 text-sm leading-6 text-[#5f6470]">{sdkAttemptHistorySummary}</p>
+                          ) : null}
+                          <div className="mt-4 space-y-3">
+                            {sdkPreviewAttempts.map((item) => (
+                              <div
+                                key={`${item.candidate_id ?? item.strategy_id}-${item.attempt_number ?? 0}`}
+                                className="rounded-[14px] border border-[rgba(17,24,39,0.08)] px-3 py-3"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-semibold text-[#171717]">
+                                    Attempt {item.attempt_number ?? "?"}
+                                  </p>
+                                  <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                                    {item.candidate_id ?? item.strategy_id}
+                                  </span>
+                                  <span
+                                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                      item.change_request_allowed
+                                        ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                        : item.preview_available
+                                          ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
+                                          : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                    }`}
+                                  >
+                                    {item.change_request_allowed
+                                      ? "Reviewable"
+                                      : item.preview_available
+                                        ? "Preview with warnings"
+                                        : "Rejected"}
+                                  </span>
+                                </div>
+                                {item.failure_reason ? (
+                                  <p className="mt-2 text-sm leading-6 text-[#5f6470]">{item.failure_reason}</p>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
                         <p className="text-sm font-semibold text-[#171717]">Files Stimpact will change</p>
                         <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
@@ -3297,7 +3794,10 @@ export function ProjectOnboardingConsole() {
                       </div>
                       <div className="grid gap-4 lg:grid-cols-2">
                         <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
-                        <CodePanel title="Patch preview" code={sdkBootstrapPreview.patch_diff} />
+                        <CodePanel
+                          title="Patch preview"
+                          code={sdkBootstrapPreview.patch_diff ?? "# Patch preview is unavailable for this attempt"}
+                        />
                       </div>
                     </>
                   ) : automaticSdkAvailable ? (
@@ -3321,6 +3821,7 @@ export function ProjectOnboardingConsole() {
                         !selectedSdkStrategy ||
                         !selectedSdkStrategy.pr_supported ||
                         !sdkBootstrapPreview ||
+                        !sdkBootstrapPreview.attempt.change_request_allowed ||
                         loadingSdkBootstrapPreview
                       }
                     />
@@ -3347,61 +3848,65 @@ export function ProjectOnboardingConsole() {
                   <div className="flex flex-col gap-2">
                     <p className="text-sm font-semibold text-[#171717]">Manual installation</p>
                     <p className="text-sm leading-6 text-[#746d66]">
-                      Follow these instructions to install the SDK yourself and place it in the
-                      correct runtime entrypoint for this service.
+                      Follow these exact steps to install the SDK yourself, wire it into the detected
+                      runtime entrypoint, and then verify telemetry is live.
                     </p>
                   </div>
                   {selectedSdkStrategy ? (
                     <>
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-4 md:grid-cols-3">
                         <ReadOnlyField label="Framework" value={selectedSdkStrategy.framework} />
-                        <ReadOnlyField
-                          label="Install command"
-                          value={selectedSdkStrategy.install_command ?? "Install manually"}
-                        />
+                        <ReadOnlyField label="Detected entrypoint" value={sdkEntryPointLabel} />
+                        <ReadOnlyField label="Target service" value={effectiveSdkServiceName} />
                       </div>
-                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-[#171717]">Planner details</p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                              selectedSdkStrategy.source === "llm"
-                                ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                                : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
-                            }`}
-                          >
-                            {selectedSdkStrategy.source === "llm"
-                              ? "Model-assisted strategy"
-                              : "Deterministic strategy"}
-                          </span>
-                        </div>
-                        {selectedSdkStrategy.confidence_reason ? (
-                          <p className="mt-3 text-sm leading-6 text-[#746d66]">
-                            {selectedSdkStrategy.confidence_reason}
-                          </p>
-                        ) : null}
-                        {selectedSdkStrategy.evidence.length ? (
-                          <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
-                            {selectedSdkStrategy.evidence.map((item) => (
-                              <li key={item}>`{item}`</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <CodePanel title="Environment variables" code={sdkEnvironmentSnippet || "# No env vars detected"} />
-                        <CodePanel title="Starter snippet" code={sdkCodeSnippet || "# No starter snippet available"} />
-                      </div>
-                      {selectedSdkStrategy.manual_steps.length ? (
-                        <div className="space-y-3">
-                          {selectedSdkStrategy.manual_steps.map((item, index) => (
-                            <div key={`${selectedSdkStrategy.id}-${item.title}`} className="border-l-2 border-[rgba(255,106,61,0.24)] pl-4">
-                              <p className="text-sm font-semibold text-[#171717]">
-                                {index + 1}. {item.title}
-                              </p>
-                              <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.content}</p>
+                      <div className="rounded-[22px] border border-[rgba(23,56,93,0.10)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(244,248,255,0.94))] px-5 py-5">
+                        <p className="text-sm font-semibold text-[#17385d]">Do these in order</p>
+                        <div className="mt-4 space-y-4">
+                          {sdkManualActionItems.map((item, index) => (
+                            <div key={item.title} className="space-y-3 border-l-2 border-[rgba(23,56,93,0.16)] pl-4">
+                              <div>
+                                <p className="text-sm font-semibold text-[#171717]">
+                                  {index + 1}. {item.title}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-[#5f6470]">{item.detail}</p>
+                              </div>
+                              <CodePanel title={item.title} code={item.code} />
                             </div>
                           ))}
+                        </div>
+                      </div>
+                      {sdkAutomaticFailureExplanation ? (
+                        <div className="rounded-[18px] border border-[rgba(45,127,249,0.14)] bg-[rgba(242,247,255,0.92)] px-4 py-4">
+                          <p className="text-sm font-semibold text-[#17385d]">What stopped automatic setup</p>
+                          <p className="mt-2 text-sm leading-6 text-[#315589]">{sdkAutomaticFailureExplanation}</p>
+                          {sdkAttemptHistorySummary ? (
+                            <p className="mt-2 text-sm leading-6 text-[#315589]">{sdkAttemptHistorySummary}</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {selectedSdkStrategy.manual_steps.length ? (
+                        <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.76)] px-4 py-4">
+                          <p className="text-sm font-semibold text-[#171717]">Framework-specific notes</p>
+                          <div className="mt-3 space-y-3">
+                            {selectedSdkStrategy.manual_steps.map((item, index) => (
+                              <div key={`${selectedSdkStrategy.id}-${item.title}`} className="border-l-2 border-[rgba(255,106,61,0.24)] pl-4">
+                                <p className="text-sm font-semibold text-[#171717]">
+                                  {index + 1}. {item.title}
+                                </p>
+                                <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {sdkManualBlockers.length ? (
+                        <div className="rounded-[18px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-4 py-4">
+                          <p className="text-sm font-semibold text-[#8f4b31]">Why automatic setup stopped</p>
+                          <ul className="mt-3 grid gap-2 text-sm leading-6 text-[#8f4b31]">
+                            {sdkManualBlockers.map((item) => (
+                              <li key={item}>• {item}</li>
+                            ))}
+                          </ul>
                         </div>
                       ) : null}
                     </>
@@ -3447,7 +3952,7 @@ export function ProjectOnboardingConsole() {
                   onClick={() => {
                     void loadTelemetryVerification();
                   }}
-                  disabled={loading || loadingTelemetryVerification || !(sdkServiceName.trim() || serviceName.trim())}
+                  disabled={loading || loadingTelemetryVerification || !effectiveSdkServiceName.trim()}
                   variant="secondary"
                 />
               </div>
@@ -3464,7 +3969,7 @@ export function ProjectOnboardingConsole() {
                   {telemetryVerificationStatusLabel}
                 </span>
                 <span className="text-xs text-[#8a8178]">
-                  {(sdkServiceName.trim() || serviceName || "web-app")} / {sdkEnvironment.trim() || "production"}
+                  {effectiveSdkServiceName} / {sdkEnvironment.trim() || "production"}
                 </span>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -4696,15 +5201,6 @@ function Banner({
       }`}
     >
       {message}
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[20px] border border-[rgba(29,26,24,0.06)] bg-[linear-gradient(180deg,#f6efe7,#f0e8de)] px-4 py-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-[#171717]">{value}</p>
     </div>
   );
 }
