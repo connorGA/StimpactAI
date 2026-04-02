@@ -1,6 +1,19 @@
 # Infrastructure Bootstrap
 
-This directory contains the production-scale AWS and Kubernetes bootstrap assets for sandbox execution.
+This directory contains the AWS and Kubernetes bootstrap assets for sandbox execution.
+
+## Cost Warning
+
+EKS incurs hourly charges even when nobody is using the product. A cluster that sits idle for days still
+accrues:
+
+- EKS control-plane cluster-hours
+- additional EKS support charges when the Kubernetes version falls into extended support
+- EC2 instance-hours for managed node groups
+- EBS, load balancer, NAT gateway, and CloudWatch log charges
+
+Treat this cluster as long-lived infrastructure, not as an ephemeral local-dev environment. If you create
+it for testing, make teardown part of the same work session.
 
 ## Step 1. Kubernetes Cluster Strategy
 
@@ -11,10 +24,16 @@ The EKS cluster is split into two namespaces:
 
 The cluster config also splits node groups by workload:
 
-- `control-plane-ng`: `t3.large`, autoscaling `1-3`
-- `sandbox-ng`: `m6i.large`, autoscaling `1-10`
+- `control-plane-ng`: `t3.medium`, autoscaling `1-2`
+- `sandbox-ng`: `t3.large`, autoscaling `0-4`
 
 Sandbox nodes are labeled and tainted so sandbox jobs stay isolated from platform services.
+The checked-in config is now intentionally safer for non-production use:
+
+- Kubernetes `1.35` to stay on standard support by default
+- one smaller always-on control-plane node
+- zero default sandbox nodes until jobs actually need capacity
+- reduced control-plane log types to lower CloudWatch ingestion cost
 
 ## Step 2. Artifact Storage
 
@@ -78,13 +97,24 @@ Cluster config:
 
 - `eks/cluster.yaml`
 
+Before creating the cluster:
+
+```sh
+aws eks describe-cluster-versions --region us-west-2 \
+  --query 'clusterVersions[].{version:clusterVersion,status:status,default:defaultVersion}' \
+  --output table
+```
+
+Choose a version that is still in `STANDARD_SUPPORT` for any long-lived environment.
+
 Create the cluster:
 
 ```sh
-eksctl create cluster -f infra/eks/cluster.yaml
-kubectl get nodes
-kubectl apply -f infra/kubernetes/namespaces.yaml
+STIMPACT_ACK_EKS_COSTS=1 ./infra/scripts/create_eks_cluster.sh
 ```
+
+The helper script now prints a cost warning and requires explicit acknowledgement so it is harder to
+accidentally spin up an always-on cluster.
 
 ## Step 5. Create The S3 Bucket
 
@@ -156,3 +186,68 @@ Production services now assume:
 - readiness should fail when persistence is unavailable
 - long-running API and worker services run with `AGENT_PLATFORM_RUN_MIGRATIONS=false`
 - database migrations run through the dedicated Kubernetes job rather than API startup
+
+## Step 9. Audit Live Cost Drivers
+
+Use these commands to confirm whether a cluster is still running and whether it has drifted into extended
+support:
+
+```sh
+aws eks list-clusters --region us-west-2
+aws eks describe-cluster --region us-west-2 --name stimpactai-cluster
+aws eks list-nodegroups --region us-west-2 --cluster-name stimpactai-cluster
+aws eks describe-nodegroup --region us-west-2 --cluster-name stimpactai-cluster --nodegroup-name control-plane-ng
+aws eks describe-nodegroup --region us-west-2 --cluster-name stimpactai-cluster --nodegroup-name sandbox-ng
+```
+
+Pay special attention to:
+
+- `cluster.version`
+- `cluster.upgradePolicy.supportType`
+- `nodegroup.scalingConfig`
+- any additional CloudWatch, ELB, EBS, or NAT resources that remain after testing
+
+If a dev/test cluster is still present and nobody needs it, deleting it is the fastest way to stop the
+majority of the spend.
+
+## Step 10. Tear Down Non-Production Clusters
+
+Delete the cluster:
+
+```sh
+STIMPACT_ACK_EKS_DELETE=1 ./infra/scripts/delete_eks_cluster.sh
+```
+
+After deletion, manually verify cleanup of any remaining AWS resources that may continue billing:
+
+```sh
+aws ec2 describe-volumes --region us-west-2 --filters Name=status,Values=available
+aws elbv2 describe-load-balancers --region us-west-2
+aws logs describe-log-groups --region us-west-2 --log-group-name-prefix /aws/eks/stimpactai-cluster
+```
+
+## Step 11. If The Cluster Must Stay Online
+
+If you cannot delete the cluster yet, reduce cost exposure immediately:
+
+1. Upgrade the cluster to a version that is still in `STANDARD_SUPPORT`.
+2. Reduce node-group desired/min capacity, especially for sandbox workers.
+
+Example commands:
+
+```sh
+eksctl upgrade cluster --name stimpactai-cluster --region us-west-2 --version 1.35
+aws eks update-nodegroup-config \
+  --region us-west-2 \
+  --cluster-name stimpactai-cluster \
+  --nodegroup-name sandbox-ng \
+  --scaling-config minSize=0,maxSize=4,desiredSize=0
+```
+
+## Recommended Operating Model
+
+- For local development, prefer Docker Compose or other non-EKS workflows whenever possible.
+- For short-lived staging or manual validation, create the cluster only for the test window and delete it
+  immediately after.
+- If a cluster must remain online, keep it on a `STANDARD_SUPPORT` Kubernetes version and scale sandbox
+  capacity to zero by default.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import socket
 import subprocess
@@ -25,7 +26,12 @@ from models.async_job import AsyncJobRecord, AsyncJobType
 from models.control_plane import ProjectServiceRecord, RepoProfileRecord, RepoProfileSecretBindingRecord
 from models.patch import PatchRunRecord
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
-from sandbox.kubernetes_runner import KubernetesJobMonitor, KubernetesSandboxRunner
+from sandbox.kubernetes_runner import (
+    DEFAULT_SANDBOX_REQUEST_CPU_CORES,
+    DEFAULT_SANDBOX_REQUEST_MEMORY_GIB,
+    KubernetesJobMonitor,
+    KubernetesSandboxRunner,
+)
 from sandbox.runner import LocalSandboxRunner, SandboxCommandSet, SecretBindingRef
 from services.artifact_storage import ArtifactStorage, S3ArtifactStorage
 from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter, SecretsReader
@@ -40,6 +46,16 @@ class ResolvedSandboxServiceContext:
     project_service: ProjectServiceRecord | None
     repo_profile: RepoProfileRecord
     dependency_services: list[ProjectServiceRecord]
+
+
+@dataclass(slots=True)
+class SandboxExecutionMetrics:
+    backend: str
+    queue_wait_seconds: float
+    total_elapsed_seconds: float
+    execution_window_seconds: float | None = None
+    estimated_requested_vcpu_seconds: float | None = None
+    estimated_requested_memory_gib_seconds: float | None = None
 
 
 class SandboxVerificationService:
@@ -145,6 +161,7 @@ class SandboxVerificationService:
             refresh_patch=refresh_patch,
             event_limit=event_limit,
         )
+        backend = self._resolve_executor_backend()
 
         job = await self._async_job_repository.create_job(
             job_type=AsyncJobType.SANDBOX_RUN,
@@ -162,6 +179,7 @@ class SandboxVerificationService:
                 "baseline_commit_sha": baseline_commit_sha or patch_run.based_on_commit_sha,
                 "repository_branch": repository_branch,
                 "repository_upstream_branch": repository_upstream_branch,
+                "executor_backend": backend,
             },
             dedupe_key=f"sandbox:{incident.id}:{patch_run.id}",
         )
@@ -175,14 +193,14 @@ class SandboxVerificationService:
             dependency_service_ids=[service.id for service in service_context.dependency_services],
             async_job_id=job.id,
             status=SandboxRunStatus.QUEUED,
-            executor_backend=get_sandbox_execution_backend(),
+            executor_backend=backend,
             install_command=service_context.repo_profile.install_command,
             reproduce_command=service_context.repo_profile.reproduce_command,
             verify_command=service_context.repo_profile.verify_command,
             reproduction_succeeded=False,
             patch_applied=False,
             verification_succeeded=False,
-            summary="Sandbox run queued for asynchronous execution.",
+            summary=f"Sandbox run queued for asynchronous execution on the {backend} backend.",
             execution_log="",
         )
         await self._sandbox_repository.create_sandbox_run_step(
@@ -190,7 +208,7 @@ class SandboxVerificationService:
             step_name="queue",
             status=SandboxRunStatus.QUEUED,
             command=None,
-            summary="Sandbox run was queued.",
+            summary=f"Sandbox run was queued for the {backend} backend.",
             artifact_id=None,
             exit_code=None,
             finished=True,
@@ -246,9 +264,9 @@ class SandboxVerificationService:
         await self._sandbox_repository.update_sandbox_run(
             sandbox_run.id,
             status=SandboxRunStatus.RUNNING,
-            summary="Sandbox run is starting execution.",
+            summary=f"Sandbox run is starting execution on the {sandbox_run.executor_backend} backend.",
         )
-        await self._sandbox_repository.create_sandbox_run_attempt(
+        run_attempt = await self._sandbox_repository.create_sandbox_run_attempt(
             sandbox_run_id=sandbox_run.id,
             async_job_id=job.id,
             attempt_number=job.attempts,
@@ -256,22 +274,30 @@ class SandboxVerificationService:
             error_message=None,
             finished=False,
         )
+        await self._record_queue_metrics_step(
+            sandbox_run=sandbox_run,
+            backend=sandbox_run.executor_backend,
+            started_at=run_attempt.started_at,
+        )
         await self._sandbox_repository.create_sandbox_run_step(
             sandbox_run_id=sandbox_run.id,
             step_name="resolve-profile",
             status=SandboxRunStatus.RUNNING,
             command=None,
             summary=(
-                f"Resolved service {project_service.slug} and its repo profile."
+                f"Resolved service {project_service.slug} and its repo profile for {sandbox_run.executor_backend} execution."
                 if project_service is not None
-                else "Resolved repo profile and execution backend."
+                else f"Resolved repo profile and confirmed the {sandbox_run.executor_backend} execution backend."
             ),
             artifact_id=None,
             exit_code=None,
             finished=True,
         )
 
-        backend = get_sandbox_execution_backend()
+        backend = self._resolve_executor_backend(
+            job_backend=str(job.payload.get("executor_backend") or ""),
+            run_backend=sandbox_run.executor_backend,
+        )
         if backend == "kubernetes":
             return await self._submit_kubernetes_run(
                 sandbox_run=sandbox_run,
@@ -295,6 +321,7 @@ class SandboxVerificationService:
             baseline_commit_sha=str(job.payload["baseline_commit_sha"])
             if job.payload.get("baseline_commit_sha") is not None
             else None,
+            attempt_started_at=run_attempt.started_at,
         )
 
     async def poll_kubernetes_runs(self, *, limit: int = 50) -> list[SandboxRunRecord]:
@@ -331,6 +358,15 @@ class SandboxVerificationService:
                 exit_code=0 if terminal_status is SandboxRunStatus.SUCCEEDED else 1,
                 finished=True,
             )
+            attempts = await self._sandbox_repository.list_sandbox_run_attempts(run.id)
+            latest_attempt = attempts[-1] if attempts else None
+            await self._record_execution_metrics_step(
+                sandbox_run=run,
+                backend=run.executor_backend,
+                finished_at=self._utcnow(),
+                attempt_started_at=latest_attempt.started_at if latest_attempt is not None else None,
+                status=terminal_status,
+            )
             updated_runs.append(
                 await self._sandbox_repository.update_sandbox_run(
                     run.id,
@@ -352,6 +388,7 @@ class SandboxVerificationService:
         repo_profile: RepoProfileRecord,
         repository_root: Path,
         baseline_commit_sha: str | None,
+        attempt_started_at: datetime,
     ) -> SandboxRunRecord:
         commands = SandboxCommandSet(
             install_command=repo_profile.install_command,
@@ -390,6 +427,7 @@ class SandboxVerificationService:
             if execution.reproduction_succeeded and execution.patch_applied and execution.verification_succeeded
             else SandboxRunStatus.FAILED
         )
+        finished_at = self._utcnow()
         await self._sandbox_repository.create_sandbox_run_step(
             sandbox_run_id=sandbox_run.id,
             step_name="execute-local",
@@ -399,6 +437,13 @@ class SandboxVerificationService:
             artifact_id=artifact_id,
             exit_code=0 if terminal_status is SandboxRunStatus.SUCCEEDED else 1,
             finished=True,
+        )
+        await self._record_execution_metrics_step(
+            sandbox_run=sandbox_run,
+            backend="local",
+            finished_at=finished_at,
+            attempt_started_at=attempt_started_at,
+            status=terminal_status,
         )
         return await self._sandbox_repository.update_sandbox_run(
             sandbox_run.id,
@@ -514,7 +559,10 @@ class SandboxVerificationService:
             step_name="submit-kubernetes-job",
             status=SandboxRunStatus.RUNNING,
             command="kubernetes job submission",
-            summary=f"Submitted Kubernetes job {submission.external_job_id}.",
+            summary=(
+                f"Submitted Kubernetes job {submission.external_job_id} "
+                "with a 500m CPU / 1Gi memory requested sandbox profile."
+            ),
             artifact_id=manifest_artifact_id,
             exit_code=0,
             finished=True,
@@ -523,8 +571,125 @@ class SandboxVerificationService:
             sandbox_run.id,
             status=SandboxRunStatus.RUNNING,
             external_job_id=submission.external_job_id,
-            summary="Sandbox run submitted to Kubernetes and is awaiting completion.",
+            summary="Sandbox run submitted to Kubernetes and is awaiting sandbox capacity.",
         )
+
+    def _resolve_executor_backend(
+        self,
+        *,
+        job_backend: str | None = None,
+        run_backend: str | None = None,
+    ) -> str:
+        for candidate in (job_backend, run_backend, get_sandbox_execution_backend()):
+            normalized = str(candidate or "").strip().lower()
+            if normalized:
+                if normalized in {"local", "kubernetes"}:
+                    return normalized
+                raise APIError(
+                    f"Unsupported sandbox execution backend {normalized}.",
+                    code="sandbox_backend_unsupported",
+                )
+        return "local"
+
+    async def _record_queue_metrics_step(
+        self,
+        *,
+        sandbox_run: SandboxRunRecord,
+        backend: str,
+        started_at: datetime,
+    ) -> None:
+        queue_wait_seconds = max(0.0, (started_at - sandbox_run.created_at).total_seconds())
+        await self._sandbox_repository.create_sandbox_run_step(
+            sandbox_run_id=sandbox_run.id,
+            step_name="queue-metrics",
+            status=SandboxRunStatus.RUNNING,
+            command=None,
+            summary=(
+                f"Execution started on {backend} after {self._format_duration(queue_wait_seconds)} in queue."
+            ),
+            artifact_id=None,
+            exit_code=None,
+            finished=True,
+        )
+
+    async def _record_execution_metrics_step(
+        self,
+        *,
+        sandbox_run: SandboxRunRecord,
+        backend: str,
+        finished_at: datetime,
+        attempt_started_at: datetime | None,
+        status: SandboxRunStatus,
+    ) -> None:
+        metrics = self._build_execution_metrics(
+            sandbox_run=sandbox_run,
+            backend=backend,
+            finished_at=finished_at,
+            attempt_started_at=attempt_started_at,
+        )
+        summary = (
+            f"Performance profile: queued {self._format_duration(metrics.queue_wait_seconds)}, "
+            f"total {self._format_duration(metrics.total_elapsed_seconds)}"
+        )
+        if metrics.execution_window_seconds is not None:
+            summary += f", active execution {self._format_duration(metrics.execution_window_seconds)}"
+        if (
+            metrics.estimated_requested_vcpu_seconds is not None
+            and metrics.estimated_requested_memory_gib_seconds is not None
+        ):
+            summary += (
+                f", requested compute footprint {metrics.estimated_requested_vcpu_seconds:.1f} vCPU-s "
+                f"and {metrics.estimated_requested_memory_gib_seconds:.1f} GiB-s"
+            )
+        summary += f" on {backend}."
+        await self._sandbox_repository.create_sandbox_run_step(
+            sandbox_run_id=sandbox_run.id,
+            step_name="execution-metrics",
+            status=status,
+            command=None,
+            summary=summary,
+            artifact_id=None,
+            exit_code=0 if status is SandboxRunStatus.SUCCEEDED else 1,
+            finished=True,
+        )
+
+    def _build_execution_metrics(
+        self,
+        *,
+        sandbox_run: SandboxRunRecord,
+        backend: str,
+        finished_at: datetime,
+        attempt_started_at: datetime | None,
+    ) -> SandboxExecutionMetrics:
+        queue_wait_seconds = 0.0
+        execution_window_seconds = None
+        if attempt_started_at is not None:
+            queue_wait_seconds = max(0.0, (attempt_started_at - sandbox_run.created_at).total_seconds())
+            execution_window_seconds = max(0.0, (finished_at - attempt_started_at).total_seconds())
+        total_elapsed_seconds = max(0.0, (finished_at - sandbox_run.created_at).total_seconds())
+        estimated_requested_vcpu_seconds = None
+        estimated_requested_memory_gib_seconds = None
+        if backend == "kubernetes" and execution_window_seconds is not None:
+            estimated_requested_vcpu_seconds = DEFAULT_SANDBOX_REQUEST_CPU_CORES * execution_window_seconds
+            estimated_requested_memory_gib_seconds = DEFAULT_SANDBOX_REQUEST_MEMORY_GIB * execution_window_seconds
+        return SandboxExecutionMetrics(
+            backend=backend,
+            queue_wait_seconds=queue_wait_seconds,
+            total_elapsed_seconds=total_elapsed_seconds,
+            execution_window_seconds=execution_window_seconds,
+            estimated_requested_vcpu_seconds=estimated_requested_vcpu_seconds,
+            estimated_requested_memory_gib_seconds=estimated_requested_memory_gib_seconds,
+        )
+
+    def _format_duration(self, seconds: float) -> str:
+        if seconds >= 60:
+            return f"{seconds / 60:.1f}m"
+        if seconds >= 10:
+            return f"{seconds:.1f}s"
+        return f"{seconds:.2f}s"
+
+    def _utcnow(self) -> datetime:
+        return datetime.now(timezone.utc)
 
     def _resolve_repository_branch(
         self,

@@ -4,7 +4,7 @@ kind: ClusterConfig
 metadata:
   name: stimpactai-cluster
   region: us-west-2
-  version: "1.29"
+  version: "1.35"
 
 autoModeConfig:
   enabled: false
@@ -17,16 +17,13 @@ cloudWatch:
     enableTypes:
       - api
       - audit
-      - authenticator
-      - controllerManager
-      - scheduler
 
 managedNodeGroups:
   - name: control-plane-ng
-    instanceType: t3.large
+    instanceType: t3.medium
     desiredCapacity: 1
     minSize: 1
-    maxSize: 3
+    maxSize: 2
     labels:
       stimpact.ai/workload: control-plane
     tags:
@@ -34,10 +31,10 @@ managedNodeGroups:
       managed-by: stimpact
 
   - name: sandbox-ng
-    instanceType: m6i.large
-    desiredCapacity: 2
-    minSize: 1
-    maxSize: 10
+    instanceType: t3.large
+    desiredCapacity: 0
+    minSize: 0
+    maxSize: 4
     labels:
       stimpact.ai/workload: sandbox
     taints:

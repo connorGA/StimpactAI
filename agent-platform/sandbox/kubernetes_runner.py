@@ -17,6 +17,13 @@ from api.core.errors import APIError
 from models.control_plane import RepoProfileRecord, RepoProfileSecretBindingRecord
 from services.repository_provider import RepositorySnapshot
 
+DEFAULT_SANDBOX_REQUEST_CPU_CORES = 0.5
+DEFAULT_SANDBOX_REQUEST_MEMORY_GIB = 1.0
+DEFAULT_SANDBOX_REQUEST_CPU = "500m"
+DEFAULT_SANDBOX_REQUEST_MEMORY = "1Gi"
+DEFAULT_SANDBOX_LIMIT_CPU = "2"
+DEFAULT_SANDBOX_LIMIT_MEMORY = "4Gi"
+
 
 @dataclass(slots=True)
 class KubernetesSandboxSubmission:
@@ -492,8 +499,14 @@ class KubernetesJobLauncher:
                                     },
                                 ],
                                 "resources": {
-                                    "requests": {"cpu": "500m", "memory": "1Gi"},
-                                    "limits": {"cpu": "2", "memory": "4Gi"},
+                                    "requests": {
+                                        "cpu": DEFAULT_SANDBOX_REQUEST_CPU,
+                                        "memory": DEFAULT_SANDBOX_REQUEST_MEMORY,
+                                    },
+                                    "limits": {
+                                        "cpu": DEFAULT_SANDBOX_LIMIT_CPU,
+                                        "memory": DEFAULT_SANDBOX_LIMIT_MEMORY,
+                                    },
                                 },
                                 "volumeMounts": volume_mounts,
                                 "securityContext": {

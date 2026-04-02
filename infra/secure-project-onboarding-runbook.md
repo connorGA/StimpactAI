@@ -67,3 +67,13 @@ This runbook validates the secure project onboarding flow in staging from projec
 - Runtime secrets are stored in AWS Secrets Manager and surfaced only as metadata in the control plane.
 - A repo profile can be created with a secret mount.
 - A sandbox run can consume the secret-backed configuration without leaking secrets into manifests, logs, or artifacts.
+
+## Cost Cleanup For Non-Production Validation
+
+If this runbook is being executed against a temporary staging or development EKS cluster, schedule cleanup
+as part of the same validation window:
+
+1. Confirm no additional validation runs are pending.
+2. Delete the cluster with `STIMPACT_ACK_EKS_DELETE=1 ./infra/scripts/delete_eks_cluster.sh`.
+3. Verify that no load balancers, unattached EBS volumes, or EKS CloudWatch log groups remain in `us-west-2`.
+4. Keep long-lived clusters on a Kubernetes version that is still in `STANDARD_SUPPORT` to avoid extended support charges.

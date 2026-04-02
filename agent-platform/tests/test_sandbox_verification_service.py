@@ -33,6 +33,8 @@ class StubIncidentRepository:
 class StubSandboxRepository:
     def __init__(self) -> None:
         self.runs: dict[str, SandboxRunRecord] = {}
+        self.steps: list[SimpleNamespace] = []
+        self.attempts: list[SimpleNamespace] = []
 
     async def create_sandbox_run(self, **kwargs) -> SandboxRunRecord:
         now = datetime.now(UTC)
@@ -60,10 +62,21 @@ class StubSandboxRepository:
         return run
 
     async def create_sandbox_run_step(self, **kwargs):
-        return SimpleNamespace(**kwargs)
+        step = SimpleNamespace(**kwargs)
+        self.steps.append(step)
+        return step
 
     async def create_sandbox_run_attempt(self, **kwargs):
-        return SimpleNamespace(**kwargs)
+        attempt = SimpleNamespace(
+            **kwargs,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC) if kwargs.get("finished") else None,
+        )
+        self.attempts.append(attempt)
+        return attempt
+
+    async def list_sandbox_run_attempts(self, sandbox_run_id: str):
+        return [attempt for attempt in self.attempts if attempt.sandbox_run_id == sandbox_run_id]
 
     async def list_sandbox_runs(self, incident_id: str, *, limit: int = 20) -> list[SandboxRunRecord]:
         _ = limit
@@ -431,6 +444,75 @@ async def test_process_async_job_uses_explicit_patch_run_from_job_payload(monkey
     assert patch_generation.calls == []
 
 
+async def test_process_async_job_uses_persisted_backend_choice(monkeypatch) -> None:
+    monkeypatch.setattr("services.sandbox_verification.get_sandbox_execution_backend", lambda: "local")
+
+    explicit_patch_run = _build_patch_run(
+        patch_run_id="patch-autonomous",
+        diff_text="diff --git a/app.py b/app.py\n+VALUE = 'autonomous'\n",
+    )
+    generated_patch_run = _build_patch_run(
+        patch_run_id="patch-generated",
+        diff_text="diff --git a/other.py b/other.py\n+VALUE = 'generated'\n",
+    )
+    local_runner = StubLocalRunner()
+    service, _async_jobs, _patch_generation, _sandbox_repository = _build_service(
+        explicit_patch_run=explicit_patch_run,
+        generated_patch_run=generated_patch_run,
+        local_runner=local_runner,
+    )
+
+    _sandbox_run, job = await service.queue_sandbox_run(
+        "incident-1",
+        event_limit=10,
+        refresh_patch=False,
+        patch_run_id=explicit_patch_run.id,
+    )
+
+    monkeypatch.setattr("services.sandbox_verification.get_sandbox_execution_backend", lambda: "kubernetes")
+    processed_run = await service.process_async_job(job)
+
+    assert processed_run.executor_backend == "local"
+    assert processed_run.status is SandboxRunStatus.SUCCEEDED
+    assert len(local_runner.calls) == 1
+
+
+async def test_process_async_job_records_metrics_steps(monkeypatch) -> None:
+    monkeypatch.setattr("services.sandbox_verification.get_sandbox_execution_backend", lambda: "local")
+
+    explicit_patch_run = _build_patch_run(
+        patch_run_id="patch-autonomous",
+        diff_text="diff --git a/app.py b/app.py\n+VALUE = 'autonomous'\n",
+    )
+    generated_patch_run = _build_patch_run(
+        patch_run_id="patch-generated",
+        diff_text="diff --git a/other.py b/other.py\n+VALUE = 'generated'\n",
+    )
+    local_runner = StubLocalRunner()
+    service, _async_jobs, _patch_generation, sandbox_repository = _build_service(
+        explicit_patch_run=explicit_patch_run,
+        generated_patch_run=generated_patch_run,
+        local_runner=local_runner,
+    )
+
+    _sandbox_run, job = await service.queue_sandbox_run(
+        "incident-1",
+        event_limit=10,
+        refresh_patch=False,
+        patch_run_id=explicit_patch_run.id,
+    )
+    await service.process_async_job(job)
+
+    queue_metrics = [step for step in sandbox_repository.steps if step.step_name == "queue-metrics"]
+    execution_metrics = [step for step in sandbox_repository.steps if step.step_name == "execution-metrics"]
+
+    assert len(queue_metrics) == 1
+    assert "Execution started on local after" in queue_metrics[0].summary
+    assert len(execution_metrics) == 1
+    assert "Performance profile: queued" in execution_metrics[0].summary
+    assert "on local." in execution_metrics[0].summary
+
+
 async def test_poll_kubernetes_runs_updates_terminal_result() -> None:
     explicit_patch_run = _build_patch_run(
         patch_run_id="patch-autonomous",
@@ -478,6 +560,14 @@ async def test_poll_kubernetes_runs_updates_terminal_result() -> None:
         summary="Waiting for Kubernetes completion.",
         execution_log="",
     )
+    await sandbox_repository.create_sandbox_run_attempt(
+        sandbox_run_id=run.id,
+        async_job_id="job-1",
+        attempt_number=1,
+        status=SandboxRunStatus.RUNNING,
+        error_message=None,
+        finished=False,
+    )
 
     updated_runs = await service.poll_kubernetes_runs(limit=10)
 
@@ -488,6 +578,9 @@ async def test_poll_kubernetes_runs_updates_terminal_result() -> None:
     assert updated_runs[0].reproduction_succeeded is True
     assert updated_runs[0].patch_applied is True
     assert updated_runs[0].verification_succeeded is True
+    execution_metrics = [step for step in sandbox_repository.steps if step.step_name == "execution-metrics"]
+    assert len(execution_metrics) == 1
+    assert "requested compute footprint" in execution_metrics[0].summary
 
 
 async def test_process_async_job_resolves_repo_profile_secrets_for_local_runner(monkeypatch) -> None:
