@@ -2,6 +2,8 @@ import type {
   BrowserAutoCaptureOptions,
   BrowserCaptureSubscription,
   CaptureErrorInput,
+  HeartbeatInput,
+  HeartbeatSubscription,
   StimpactClientOptions,
   StimpactEnvironment,
 } from "./types.js";
@@ -14,6 +16,14 @@ type TelemetryPayload = {
   stacktrace: string;
   request?: CaptureErrorInput["request"];
   response?: CaptureErrorInput["response"];
+  commit_sha?: string | null;
+  timestamp: string;
+};
+
+type HeartbeatPayload = {
+  project_id: string;
+  environment: StimpactEnvironment;
+  service: string;
   commit_sha?: string | null;
   timestamp: string;
 };
@@ -80,6 +90,35 @@ export class StimpactClient {
     };
 
     await this.sendTelemetry(payload);
+  }
+
+  async sendHeartbeat(input: HeartbeatInput = {}): Promise<void> {
+    const payload: HeartbeatPayload = {
+      project_id: this.options.projectId,
+      environment: input.environment ?? this.options.environment ?? "production",
+      service: input.service ?? this.options.service,
+      commit_sha: input.commitSha ?? null,
+      timestamp: normalizeTimestamp(input.timestamp),
+    };
+    await this.sendHeartbeatPayload(payload);
+  }
+
+  startHeartbeat(options: HeartbeatInput & { intervalMs?: number } = {}): HeartbeatSubscription {
+    const intervalMs = options.intervalMs ?? 300_000;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    void this.sendHeartbeat(options);
+    if (typeof setInterval !== "undefined") {
+      intervalId = setInterval(() => {
+        void this.sendHeartbeat(options);
+      }, intervalMs);
+    }
+    return {
+      dispose: () => {
+        if (intervalId !== null && typeof clearInterval !== "undefined") {
+          clearInterval(intervalId);
+        }
+      },
+    };
   }
 
   async wrapAsync<T>(
@@ -171,7 +210,32 @@ export class StimpactClient {
       : new StimpactRequestError("Telemetry delivery failed.");
   }
 
+  private async sendHeartbeatPayload(payload: HeartbeatPayload): Promise<void> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= this.options.retryAttempts; attempt += 1) {
+      try {
+        await this.sendJson(`${this.options.baseUrl}/telemetry/heartbeat`, payload);
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof StimpactRequestError) || !error.retryable || attempt === this.options.retryAttempts) {
+          throw error;
+        }
+        await delay(this.options.retryDelayMs * (attempt + 1));
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new StimpactRequestError("Telemetry heartbeat delivery failed.");
+  }
+
   private async sendTelemetryOnce(payload: TelemetryPayload): Promise<void> {
+    await this.sendJson(`${this.options.baseUrl}/telemetry/error`, payload);
+  }
+
+  private async sendJson(url: string, payload: TelemetryPayload | HeartbeatPayload): Promise<void> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller =
       typeof AbortController === "undefined" ? null : new AbortController();
@@ -180,7 +244,7 @@ export class StimpactClient {
       : null;
 
     try {
-      const response = await fetchImpl(`${this.options.baseUrl}/telemetry/error`, {
+      const response = await fetchImpl(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

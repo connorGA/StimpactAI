@@ -27,6 +27,13 @@ export type CaptureErrorInput = {
   timestamp?: string | Date;
 };
 
+export type HeartbeatInput = {
+  commitSha?: string | null;
+  environment?: StimpactEnvironment;
+  service?: string;
+  timestamp?: string | Date;
+};
+
 export type StimpactClientOptions = {
   baseUrl: string;
   projectId: string;
@@ -46,5 +53,9 @@ export type BrowserAutoCaptureOptions = {
 };
 
 export type BrowserCaptureSubscription = {
+  dispose: () => void;
+};
+
+export type HeartbeatSubscription = {
   dispose: () => void;
 };

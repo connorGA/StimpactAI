@@ -11,10 +11,13 @@ from models.control_plane import (
     ProjectServiceDependencyRecord,
     ProjectServiceRecord,
     ProjectServiceRoutingHints,
+    ProjectTelemetryHeartbeatRecord,
     ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
+    ProjectSdkSetupStatus,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -109,6 +112,268 @@ class ProjectApiKeyCreateResponse(BaseModel):
 
     api_key: ProjectApiKeyResponse
     plaintext_key: str
+
+
+class ProjectOnboardingStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    policy_reviewed: bool
+    sdk_setup_status: ProjectSdkSetupStatus
+    sdk_setup_provider_repository_id: str | None = None
+    sdk_setup_change_request_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ProjectOnboardingStateRecord) -> "ProjectOnboardingStateResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class ProjectOperationalReadinessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    has_provider_connection: bool
+    has_synced_repositories: bool
+    has_secrets: bool
+    has_repo_profiles: bool
+    has_services: bool
+    has_active_api_keys: bool
+    policy_reviewed: bool
+    sdk_setup_ready: bool
+    complete: bool
+
+
+class ProjectTelemetryHeartbeatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    service: str
+    environment: str
+    last_seen_at: datetime
+    commit_sha: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ProjectTelemetryHeartbeatRecord) -> "ProjectTelemetryHeartbeatResponse":
+        return cls(**record.model_dump(mode="json"))
+
+
+class ProjectTelemetryVerificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    environment: str
+    status: str
+    last_seen_at: datetime | None = None
+    commit_sha: str | None = None
+    stale_after_seconds: int
+    heartbeat: ProjectTelemetryHeartbeatResponse | None = None
+
+
+class UpdateProjectOnboardingStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_reviewed: bool | None = None
+    sdk_setup_status: ProjectSdkSetupStatus | None = None
+    sdk_setup_provider_repository_id: str | None = Field(default=None, max_length=256)
+    sdk_setup_change_request_url: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("sdk_setup_provider_repository_id", "sdk_setup_change_request_url")
+    @classmethod
+    def validate_optional_trimmed_string(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class CreateSdkBootstrapPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    provider_repository_id: str = Field(min_length=1, max_length=256)
+    service_name: str = Field(min_length=1, max_length=200)
+    environment: str = Field(default="production", min_length=1, max_length=64)
+    base_url: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("project_id", "provider_repository_id", "service_name", "environment", "base_url")
+    @classmethod
+    def validate_nonempty_string(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        if not (value.startswith("http://") or value.startswith("https://")):
+            raise ValueError("base_url must be an absolute http or https URL")
+        return value
+
+
+class SdkBootstrapEnvVarResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    example_value: str
+    description: str
+
+
+class SdkBootstrapPlannedFileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    action: str
+    reason: str
+
+
+class SdkBootstrapManualStepResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    content: str
+
+
+class SdkBootstrapStrategyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    language: str
+    framework: str
+    summary: str
+    confidence: str
+    pr_supported: bool
+    target_subpath: str
+    entrypoints: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    planned_files: list[SdkBootstrapPlannedFileResponse] = Field(default_factory=list)
+    env_vars: list[SdkBootstrapEnvVarResponse] = Field(default_factory=list)
+    install_command: str | None = None
+    package_name: str | None = None
+    manual_steps: list[SdkBootstrapManualStepResponse] = Field(default_factory=list)
+    preview_snippet: str | None = None
+    source: str = "deterministic"
+    evidence: list[str] = Field(default_factory=list)
+    confidence_reason: str | None = None
+
+
+class SdkBootstrapPlanPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    strategies: list[SdkBootstrapStrategyResponse] = Field(default_factory=list)
+    recommended_strategy_id: str | None = None
+    requires_confirmation: bool
+
+
+class CreateSdkBootstrapPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    provider_repository_id: str = Field(min_length=1, max_length=256)
+    service_name: str = Field(min_length=1, max_length=200)
+    environment: str = Field(default="production", min_length=1, max_length=64)
+    base_url: str = Field(min_length=1, max_length=1000)
+    strategy_id: str | None = Field(default=None, max_length=500)
+
+    @field_validator(
+        "project_id",
+        "provider_repository_id",
+        "service_name",
+        "environment",
+        "base_url",
+        "strategy_id",
+    )
+    @classmethod
+    def validate_nonempty_preview_string(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_preview_base_url(cls, value: str) -> str:
+        if not (value.startswith("http://") or value.startswith("https://")):
+            raise ValueError("base_url must be an absolute http or https URL")
+        return value
+
+
+class SdkBootstrapPullRequestPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    branch_name: str
+    title: str
+    description: str
+    commit_message: str
+
+
+class SdkBootstrapPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selected_strategy_id: str
+    strategy: SdkBootstrapStrategyResponse
+    pull_request: SdkBootstrapPullRequestPreviewResponse
+    patch_diff: str
+
+
+class CreateSdkBootstrapChangeRequestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    provider_repository_id: str = Field(min_length=1, max_length=256)
+    api_key_name: str = Field(min_length=1, max_length=200)
+    service_name: str = Field(min_length=1, max_length=200)
+    environment: str = Field(default="production", min_length=1, max_length=64)
+    base_url: str = Field(min_length=1, max_length=1000)
+    strategy_id: str | None = Field(default=None, max_length=500)
+    branch_name: str | None = Field(default=None, max_length=255)
+
+    @field_validator(
+        "project_id",
+        "provider_repository_id",
+        "api_key_name",
+        "service_name",
+        "environment",
+        "base_url",
+        "strategy_id",
+        "branch_name",
+    )
+    @classmethod
+    def validate_nonempty_string(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        if not (value.startswith("http://") or value.startswith("https://")):
+            raise ValueError("base_url must be an absolute http or https URL")
+        return value
+
+
+class SdkBootstrapChangeRequestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: ProjectApiKeyResponse
+    plaintext_key: str
+    branch_name: str
+    commit_sha: str
+    change_request_url: str
+    reference_id: str | None = None
+    mergeable: bool | None = None
+    onboarding_state: ProjectOnboardingStateResponse
 
 
 class ProjectPolicyResponse(BaseModel):
@@ -330,6 +595,19 @@ class ProviderRepositoryResponse(BaseModel):
         return cls(**record.model_dump(mode="json"))
 
 
+class RepoProfileInferenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_kind: RuntimeKind
+    base_image: str | None = None
+    install_command: str | None = None
+    reproduce_command: str | None = None
+    verify_command: str | None = None
+    detected_from: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    monorepo: bool = False
+
+
 class CreateRepoProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -519,8 +797,10 @@ class ProjectServiceResponse(BaseModel):
         *,
         dependencies: list[ProjectServiceDependencyRecord] | None = None,
     ) -> "ProjectServiceResponse":
+        payload = record.model_dump(mode="json")
+        payload.pop("routing_hints", None)
         return cls(
-            **record.model_dump(mode="json"),
+            **payload,
             routing_hints=ProjectServiceRoutingHintsPayload(**record.routing_hints.model_dump(mode="json")),
             dependencies=[
                 ProjectServiceDependencyResponse.from_record(item).model_dump(mode="json")
@@ -616,10 +896,14 @@ class ProjectOnboardingResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: str
+    platform_base_url: str | None = None
     policy: ProjectPolicyResponse
+    onboarding_state: ProjectOnboardingStateResponse
+    operational_readiness: ProjectOperationalReadinessResponse
     secret_refs: list[SecretRefResponse] = Field(default_factory=list)
     api_keys: list[ProjectApiKeyResponse] = Field(default_factory=list)
     integrations: list[ProviderIntegrationOnboardingResponse] = Field(default_factory=list)
     repo_profiles: list[RepoProfileResponse] = Field(default_factory=list)
     project_services: list[ProjectServiceResponse] = Field(default_factory=list)
+    telemetry_heartbeats: list[ProjectTelemetryHeartbeatResponse] = Field(default_factory=list)
     suggested_next_steps: list[str] = Field(default_factory=list)

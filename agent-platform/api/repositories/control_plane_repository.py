@@ -12,10 +12,13 @@ from models.control_plane import (
     ProjectServiceDependencyRecord,
     ProjectServiceRecord,
     ProjectServiceRoutingHints,
+    ProjectTelemetryHeartbeatRecord,
     ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
+    ProjectSdkSetupStatus,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -191,12 +194,80 @@ WHERE id = $1
 RETURNING *;
 """
 
+UPSERT_PROJECT_TELEMETRY_HEARTBEAT_SQL = """
+INSERT INTO project_telemetry_heartbeats (
+    project_id,
+    service,
+    environment,
+    last_seen_at,
+    commit_sha
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+ON CONFLICT (project_id, service, environment) DO UPDATE
+SET last_seen_at = EXCLUDED.last_seen_at,
+    commit_sha = EXCLUDED.commit_sha,
+    updated_at = NOW()
+RETURNING *;
+"""
+
+GET_PROJECT_TELEMETRY_HEARTBEAT_SQL = """
+SELECT *
+FROM project_telemetry_heartbeats
+WHERE project_id = $1
+  AND service = $2
+  AND environment = $3
+LIMIT 1;
+"""
+
+LIST_PROJECT_TELEMETRY_HEARTBEATS_SQL = """
+SELECT *
+FROM project_telemetry_heartbeats
+WHERE project_id = $1
+ORDER BY last_seen_at DESC;
+"""
+
 REVOKE_PROJECT_API_KEY_SQL = """
 UPDATE project_api_keys
 SET status = $2,
     revoked_at = NOW(),
     updated_at = NOW()
 WHERE id = $1
+RETURNING *;
+"""
+
+ENSURE_PROJECT_ONBOARDING_STATE_SQL = """
+INSERT INTO project_onboarding_states (
+    project_id
+) VALUES (
+    $1
+)
+ON CONFLICT (project_id) DO NOTHING;
+"""
+
+GET_PROJECT_ONBOARDING_STATE_SQL = """
+SELECT *
+FROM project_onboarding_states
+WHERE project_id = $1
+LIMIT 1;
+"""
+
+UPSERT_PROJECT_ONBOARDING_STATE_SQL = """
+INSERT INTO project_onboarding_states (
+    project_id,
+    policy_reviewed,
+    sdk_setup_status,
+    sdk_setup_provider_repository_id,
+    sdk_setup_change_request_url
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+ON CONFLICT (project_id) DO UPDATE
+SET policy_reviewed = EXCLUDED.policy_reviewed,
+    sdk_setup_status = EXCLUDED.sdk_setup_status,
+    sdk_setup_provider_repository_id = EXCLUDED.sdk_setup_provider_repository_id,
+    sdk_setup_change_request_url = EXCLUDED.sdk_setup_change_request_url,
+    updated_at = NOW()
 RETURNING *;
 """
 
@@ -650,6 +721,71 @@ class ControlPlaneRepository:
             ProjectApiKeyStatus.REVOKED.value,
         )
         return ProjectApiKeyRecord.from_db_row(row)
+
+    async def upsert_project_telemetry_heartbeat(
+        self,
+        *,
+        project_id: str,
+        service: str,
+        environment: str,
+        last_seen_at,
+        commit_sha: str | None,
+    ) -> ProjectTelemetryHeartbeatRecord:
+        row = await self._fetchrow(
+            UPSERT_PROJECT_TELEMETRY_HEARTBEAT_SQL,
+            project_id,
+            service,
+            environment,
+            last_seen_at,
+            commit_sha,
+        )
+        return ProjectTelemetryHeartbeatRecord.from_db_row(row)
+
+    async def get_project_telemetry_heartbeat(
+        self,
+        *,
+        project_id: str,
+        service: str,
+        environment: str,
+    ) -> ProjectTelemetryHeartbeatRecord | None:
+        row = await self._fetchrow(
+            GET_PROJECT_TELEMETRY_HEARTBEAT_SQL,
+            project_id,
+            service,
+            environment,
+            allow_missing=True,
+        )
+        if row is None:
+            return None
+        return ProjectTelemetryHeartbeatRecord.from_db_row(row)
+
+    async def list_project_telemetry_heartbeats(self, project_id: str) -> list[ProjectTelemetryHeartbeatRecord]:
+        rows = await self._fetch(LIST_PROJECT_TELEMETRY_HEARTBEATS_SQL, project_id)
+        return [ProjectTelemetryHeartbeatRecord.from_db_row(row) for row in rows]
+
+    async def get_or_create_project_onboarding_state(self, project_id: str) -> ProjectOnboardingStateRecord:
+        await self._execute(ENSURE_PROJECT_ONBOARDING_STATE_SQL, project_id)
+        row = await self._fetchrow(GET_PROJECT_ONBOARDING_STATE_SQL, project_id)
+        return ProjectOnboardingStateRecord.from_db_row(row)
+
+    async def update_project_onboarding_state(
+        self,
+        *,
+        project_id: str,
+        policy_reviewed: bool,
+        sdk_setup_status: ProjectSdkSetupStatus,
+        sdk_setup_provider_repository_id: str | None,
+        sdk_setup_change_request_url: str | None,
+    ) -> ProjectOnboardingStateRecord:
+        row = await self._fetchrow(
+            UPSERT_PROJECT_ONBOARDING_STATE_SQL,
+            project_id,
+            policy_reviewed,
+            sdk_setup_status.value,
+            sdk_setup_provider_repository_id,
+            sdk_setup_change_request_url,
+        )
+        return ProjectOnboardingStateRecord.from_db_row(row)
 
     async def get_or_create_project_policy(self, project_id: str) -> ProjectPolicyRecord:
         await self._execute(ENSURE_PROJECT_POLICY_SQL, project_id)

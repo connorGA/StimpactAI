@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///Users/connor/Desktop/StimpactAi/client-ui/src/app/loading.tsx"],"sourcesContent":["\"use client\";\n\nexport default function AppLoading() {\n  return (\n    <div className=\"flex min-h-[calc(100vh-7rem)] items-center justify-center px-6 lg:min-h-[calc(100vh-9.5rem)]\">\n      <div className=\"flex flex-col items-center gap-3 text-center\">\n        <span className=\"inline-flex h-9 w-9 animate-spin rounded-full border-2 border-[rgba(23,56,93,0.18)] border-t-[rgba(255,106,61,0.88)]\" />\n        <p className=\"text-sm font-medium text-[#746d66]\">Loading..</p>\n      </div>\n    </div>\n  );\n}\n"],"names":[],"mappings":";;;;;AAAA;;AAEe,SAAS;IACtB,qBACE,6LAAC;QAAI,WAAU;kBACb,cAAA,6LAAC;YAAI,WAAU;;8BACb,6LAAC;oBAAK,WAAU;;;;;;8BAChB,6LAAC;oBAAE,WAAU;8BAAqC;;;;;;;;;;;;;;;;;AAI1D;KATwB"}}]
+}

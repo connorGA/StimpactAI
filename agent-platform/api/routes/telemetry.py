@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
 
-from api.core.security import enforce_telemetry_rate_limit, require_telemetry_ingest_access
+from api.core.security import (
+    authorize_telemetry_ingest_payload,
+    enforce_telemetry_payload_rate_limit,
+    enforce_telemetry_rate_limit,
+    require_telemetry_ingest_access,
+)
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.events.publisher import IncidentEventPublisher, get_incident_event_publisher
 from api.events.outbox_signaler import OutboxSignaler
+from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.telemetry_repository import PostgresTelemetryRepository
-from api.schemas.telemetry import TelemetryAcceptedResponse, TelemetryErrorRequest
+from api.schemas.telemetry import (
+    TelemetryAcceptedResponse,
+    TelemetryErrorRequest,
+    TelemetryHeartbeatAcceptedResponse,
+    TelemetryHeartbeatRequest,
+)
 from models.normalized_telemetry import NormalizedTelemetry
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
@@ -17,6 +28,12 @@ def get_telemetry_repository(
     manager: PostgresConnectionManager = Depends(get_postgres_manager),
 ) -> PostgresTelemetryRepository:
     return PostgresTelemetryRepository(manager.pool)
+
+
+def get_control_plane_repository(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> ControlPlaneRepository:
+    return ControlPlaneRepository(manager.pool)
 
 
 def get_outbox_signaler(request: Request) -> OutboxSignaler:
@@ -54,4 +71,27 @@ async def ingest_error(
     return TelemetryAcceptedResponse(
         telemetry_id=telemetry.id,
         fingerprint=telemetry.fingerprint,
+    )
+
+
+@router.post("/heartbeat", response_model=TelemetryHeartbeatAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
+async def ingest_heartbeat(
+    request: Request,
+    payload: TelemetryHeartbeatRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> TelemetryHeartbeatAcceptedResponse:
+    await authorize_telemetry_ingest_payload(request, payload, repository)
+    await enforce_telemetry_payload_rate_limit(request, payload)
+    heartbeat = await repository.upsert_project_telemetry_heartbeat(
+        project_id=payload.project_id,
+        service=payload.service,
+        environment=payload.environment.value,
+        last_seen_at=payload.timestamp,
+        commit_sha=payload.commit_sha,
+    )
+    return TelemetryHeartbeatAcceptedResponse(
+        project_id=heartbeat.project_id,
+        service=heartbeat.service,
+        environment=heartbeat.environment.value,
+        last_seen_at=heartbeat.last_seen_at,
     )

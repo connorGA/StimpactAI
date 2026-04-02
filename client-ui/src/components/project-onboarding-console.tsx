@@ -5,13 +5,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 
+import { useAppShellSession } from "@/components/app-shell";
 import type {
-  AuthSession,
   GitHubAppInstallStartResponse,
   GitLabOAuthStartResponse,
+  ProjectApiKeyCreateResponse,
   ProjectOnboarding,
+  ProjectPolicy,
   ProjectSummary,
   ProviderRepository,
+  RepoProfileInference,
+  RepoProfile,
+  SdkBootstrapChangeRequestResponse,
+  SdkBootstrapPlanPreview,
+  SdkBootstrapPreview,
+  ProjectTelemetryVerification,
 } from "@/lib/types";
 
 type ApiErrorPayload = {
@@ -20,7 +28,8 @@ type ApiErrorPayload = {
   };
 };
 
-const STEP_ORDER = ["1", "2", "3", "4", "5"] as const;
+const STEP_ORDER = ["1", "2", "3", "4", "5", "6", "7"] as const;
+const inFlightOnboardingRequests = new Map<string, Promise<ProjectOnboarding>>();
 
 type SecretDraft = {
   id: string;
@@ -28,11 +37,80 @@ type SecretDraft = {
   value: string;
 };
 
+type RepoSecretMountDraft = {
+  id: string;
+  secretRefId: string;
+  mountAs: string;
+};
+
+type StepEditKey = "2" | "3" | "4" | "5" | "6" | "7";
+
+type OnboardingEditorSnapshot = {
+  selectedProvider: "github" | "gitlab";
+  gitlabName: string;
+  gitlabBaseUrl: string;
+  lastGitLabAuthUrl: string | null;
+  selectedRepositoryId: string;
+  secretDrafts: SecretDraft[];
+  runtimeKind: "python" | "node" | "generic" | "container";
+  baseImage: string;
+  installCommand: string;
+  reproduceCommand: string;
+  verifyCommand: string;
+  networkAllowlist: string;
+  repoSecretMounts: RepoSecretMountDraft[];
+  serviceName: string;
+  serviceType:
+    | "frontend"
+    | "backend"
+    | "api"
+    | "worker"
+    | "cron"
+    | "gateway"
+    | "database"
+    | "cache"
+    | "other";
+  selectedServiceRepoProfileId: string;
+  serviceOwner: string;
+  serviceDeployTarget: string;
+  serviceRoutingNames: string;
+  servicePathPrefixes: string;
+  serviceDomains: string;
+  serviceTags: string;
+  serviceHealthcheckCommand: string;
+  serviceHealthcheckUrl: string;
+  selectedDependencyIds: string[];
+  stepFivePreviewMode: "single" | "multi" | null;
+  showStepFiveAdvanced: boolean;
+  repoProfileInference: RepoProfileInference | null;
+  telemetryKeyName: string;
+  telemetryKeyPlaintext: string | null;
+  sdkServiceName: string;
+  sdkEnvironment: string;
+  sdkSetupMode: "automatic" | "manual";
+  sdkBootstrapPlan: SdkBootstrapPlanPreview | null;
+  sdkBootstrapPreview: SdkBootstrapPreview | null;
+  selectedSdkStrategyId: string;
+  dismissedSdkPreviewStrategyId: string | null;
+  sdkAutomaticRequested: boolean;
+  sdkAutomationStage: "idle" | "planning" | "previewing" | "ready" | "manual_only";
+  showSdkManualFallbackDialog: boolean;
+  policyDraft: ProjectPolicy | null;
+};
+
 function createSecretDraft(): SecretDraft {
   return {
     id: `secret-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     label: "",
     value: "",
+  };
+}
+
+function createRepoSecretMountDraft(secretRefId = "", mountAs = ""): RepoSecretMountDraft {
+  return {
+    id: `repo-secret-mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    secretRefId,
+    mountAs,
   };
 }
 
@@ -68,6 +146,21 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+async function requestOnboardingState(projectId: string): Promise<ProjectOnboarding> {
+  const requestKey = projectId.trim();
+  if (!inFlightOnboardingRequests.has(requestKey)) {
+    inFlightOnboardingRequests.set(
+      requestKey,
+      requestJson<ProjectOnboarding>(`projects/${encodeURIComponent(requestKey)}/onboarding`, {
+        method: "GET",
+      }).finally(() => {
+        inFlightOnboardingRequests.delete(requestKey);
+      }),
+    );
+  }
+  return inFlightOnboardingRequests.get(requestKey)!;
+}
+
 function toProjectSlug(value: string): string {
   return value
     .trim()
@@ -76,10 +169,63 @@ function toProjectSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function humanizeRepositoryName(value: string): string {
+  return value
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function inferServiceTypeFromRepositoryName(
+  value: string,
+): "frontend" | "backend" | "fullstack" | "api" | "worker" | "cron" | "gateway" | "database" | "cache" | "other" {
+  const normalized = value.toLowerCase();
+  const hasFrontendSignal =
+    normalized.includes("web") ||
+    normalized.includes("frontend") ||
+    normalized.includes("site") ||
+    normalized.includes("client") ||
+    normalized.includes("ui");
+  const hasBackendSignal =
+    normalized.includes("backend") || normalized.includes("server") || normalized.includes("fullstack");
+  if (hasFrontendSignal && hasBackendSignal) {
+    return "fullstack";
+  }
+  if (
+    hasFrontendSignal
+  ) {
+    return "frontend";
+  }
+  if (normalized.includes("gateway") || normalized.includes("proxy")) {
+    return "gateway";
+  }
+  if (normalized.includes("worker") || normalized.includes("queue")) {
+    return "worker";
+  }
+  if (normalized.includes("cron") || normalized.includes("scheduler")) {
+    return "cron";
+  }
+  if (normalized.includes("db") || normalized.includes("database") || normalized.includes("postgres")) {
+    return "database";
+  }
+  if (normalized.includes("cache") || normalized.includes("redis")) {
+    return "cache";
+  }
+  if (normalized.includes("api")) {
+    return "api";
+  }
+  if (normalized.includes("backend") || normalized.includes("server")) {
+    return "backend";
+  }
+  return "other";
+}
+
 export function ProjectOnboardingConsole() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [session, setSession] = useState<AuthSession | null>(null);
+  const shellSession = useAppShellSession();
+  const session = shellSession?.session ?? null;
   const [projectId, setProjectId] = useState("");
   const [state, setState] = useState<ProjectOnboarding | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -101,11 +247,10 @@ export function ProjectOnboardingConsole() {
   const [verifyCommand, setVerifyCommand] = useState("");
   const [networkAllowlist, setNetworkAllowlist] = useState("");
   const [selectedRepositoryId, setSelectedRepositoryId] = useState("");
-  const [selectedSecretRefId, setSelectedSecretRefId] = useState("");
-  const [secretMountAs, setSecretMountAs] = useState("");
+  const [repoSecretMounts, setRepoSecretMounts] = useState<RepoSecretMountDraft[]>([]);
   const [serviceName, setServiceName] = useState("");
   const [serviceType, setServiceType] = useState<
-    "frontend" | "backend" | "api" | "worker" | "cron" | "gateway" | "database" | "cache" | "other"
+    "frontend" | "backend" | "fullstack" | "api" | "worker" | "cron" | "gateway" | "database" | "cache" | "other"
   >("frontend");
   const [selectedServiceRepoProfileId, setSelectedServiceRepoProfileId] = useState("");
   const [serviceOwner, setServiceOwner] = useState("");
@@ -117,14 +262,79 @@ export function ProjectOnboardingConsole() {
   const [serviceHealthcheckCommand, setServiceHealthcheckCommand] = useState("");
   const [serviceHealthcheckUrl, setServiceHealthcheckUrl] = useState("");
   const [selectedDependencyIds, setSelectedDependencyIds] = useState<string[]>([]);
+  const [stepFivePreviewMode, setStepFivePreviewMode] = useState<"single" | "multi" | null>(null);
+  const [showStepFiveAdvanced, setShowStepFiveAdvanced] = useState(false);
+  const [repoProfileInference, setRepoProfileInference] = useState<RepoProfileInference | null>(null);
+  const [telemetryKeyName, setTelemetryKeyName] = useState("");
+  const [telemetryKeyPlaintext, setTelemetryKeyPlaintext] = useState<string | null>(null);
+  const [copiedTelemetryKey, setCopiedTelemetryKey] = useState(false);
+  const [sdkServiceName, setSdkServiceName] = useState("");
+  const [sdkEnvironment, setSdkEnvironment] = useState("production");
+  const [sdkSetupMode, setSdkSetupMode] = useState<"automatic" | "manual">("automatic");
+  const [sdkBootstrapPlan, setSdkBootstrapPlan] = useState<SdkBootstrapPlanPreview | null>(null);
+  const [sdkBootstrapPreview, setSdkBootstrapPreview] = useState<SdkBootstrapPreview | null>(null);
+  const [telemetryVerification, setTelemetryVerification] = useState<ProjectTelemetryVerification | null>(null);
+  const [selectedSdkStrategyId, setSelectedSdkStrategyId] = useState("");
+  const [dismissedSdkPreviewStrategyId, setDismissedSdkPreviewStrategyId] = useState<string | null>(null);
+  const [sdkAutomaticRequested, setSdkAutomaticRequested] = useState(false);
+  const [sdkAutomationStage, setSdkAutomationStage] = useState<
+    "idle" | "planning" | "previewing" | "ready" | "manual_only"
+  >("idle");
+  const [showSdkManualFallbackDialog, setShowSdkManualFallbackDialog] = useState(false);
+  const [policyDraft, setPolicyDraft] = useState<ProjectPolicy | null>(null);
+  const [loadingRepoProfileInference, setLoadingRepoProfileInference] = useState(false);
+  const [loadingSdkBootstrapPlan, setLoadingSdkBootstrapPlan] = useState(false);
+  const [loadingSdkBootstrapPreview, setLoadingSdkBootstrapPreview] = useState(false);
+  const [loadingTelemetryVerification, setLoadingTelemetryVerification] = useState(false);
+  const [editingStepKey, setEditingStepKey] = useState<StepEditKey | null>(null);
   const [activeStep, setActiveStep] = useState<(typeof STEP_ORDER)[number]>("1");
   const stepRefs = useRef<Record<string, HTMLElement | null>>({});
+  const editorSnapshotRef = useRef<OnboardingEditorSnapshot | null>(null);
+  const repoProfileInferenceKeyRef = useRef("");
+  const sdkBootstrapPlanKeyRef = useRef("");
+  const sdkBootstrapPreviewKeyRef = useRef("");
+  const telemetryVerificationKeyRef = useRef("");
+  const sdkManualFallbackDialogKeyRef = useRef("");
+  const singleRepoSecretMountSeedKeyRef = useRef("");
 
   const repositories = useMemo<ProviderRepository[]>(() => {
     if (!state) {
       return [];
     }
     return state.integrations.flatMap((integration) => integration.repositories);
+  }, [state]);
+  const dedupedIntegrations = useMemo(() => {
+    if (!state) {
+      return [];
+    }
+    const byKey = new Map<string, (typeof state.integrations)[number]>();
+    for (const integration of state.integrations) {
+      const accountKey = readIntegrationAccount(integration);
+      const dedupeKey = [
+        integration.integration.provider,
+        accountKey.toLowerCase(),
+        integration.integration.name.toLowerCase(),
+      ].join(":");
+      const existing = byKey.get(dedupeKey);
+      if (!existing) {
+        byKey.set(dedupeKey, integration);
+        continue;
+      }
+      const currentRepoCount = integration.repositories.length;
+      const existingRepoCount = existing.repositories.length;
+      if (currentRepoCount > existingRepoCount) {
+        byKey.set(dedupeKey, integration);
+        continue;
+      }
+      if (
+        currentRepoCount === existingRepoCount &&
+        new Date(integration.integration.updated_at).getTime() >
+          new Date(existing.integration.updated_at).getTime()
+      ) {
+        byKey.set(dedupeKey, integration);
+      }
+    }
+    return Array.from(byKey.values());
   }, [state]);
   const githubIntegration = useMemo(
     () => state?.integrations.find((integration) => integration.integration.provider === "github") ?? null,
@@ -139,16 +349,65 @@ export function ProjectOnboardingConsole() {
   const newProjectSlug = useMemo(() => toProjectSlug(newProjectName), [newProjectName]);
   const serviceSlug = useMemo(() => toProjectSlug(serviceName), [serviceName]);
   const createRequested = searchParams.get("create") === "1";
+  const sessionReady = createRequested ? true : Boolean(shellSession && !shellSession.sessionLoading);
   const [createMode, setCreateMode] = useState(createRequested);
   const [bootstrappingPage, setBootstrappingPage] = useState(!createRequested);
+  const [initialContentReady, setInitialContentReady] = useState(createRequested);
   const currentProject = useMemo(
     () => session?.projects.find((project) => project.id === projectId) ?? session?.projects[0] ?? null,
     [projectId, session],
   );
+  const onboardingState = state?.onboarding_state ?? null;
+  const platformBaseUrl = state?.platform_base_url ?? "";
+  const configuredRepositoryCount = useMemo(
+    () => new Set((state?.repo_profiles ?? []).map((profile) => profile.provider_repository_id)).size,
+    [state?.repo_profiles],
+  );
+  const detectedStepFiveMode = configuredRepositoryCount > 1 ? "multi" : "single";
+  const effectiveStepFiveMode = stepFivePreviewMode ?? detectedStepFiveMode;
+  const inferredSingleRepoProfile =
+    effectiveStepFiveMode === "single" && (state?.repo_profiles.length ?? 0) === 1
+      ? state?.repo_profiles[0] ?? null
+      : null;
+  const effectiveServiceRepoProfileId = selectedServiceRepoProfileId || inferredSingleRepoProfile?.id || "";
+  const effectiveServiceRepoProfile =
+    state?.repo_profiles.find((profile) => profile.id === effectiveServiceRepoProfileId) ?? null;
+  const effectiveProjectService = useMemo(() => {
+    if (!state?.project_services.length) {
+      return null;
+    }
+    if (effectiveServiceRepoProfileId) {
+      return (
+        state.project_services.find((service) => service.repo_profile_id === effectiveServiceRepoProfileId) ?? null
+      );
+    }
+    if (effectiveStepFiveMode === "single" && state.project_services.length === 1) {
+      return state.project_services[0];
+    }
+    return null;
+  }, [effectiveServiceRepoProfileId, effectiveStepFiveMode, state?.project_services]);
+  const effectiveServiceRepository =
+    repositories.find((repository) => repository.id === effectiveServiceRepoProfile?.provider_repository_id) ?? null;
+  const suggestedRepositoryId = effectiveServiceRepoProfile?.provider_repository_id ?? selectedRepositoryId;
+  const sdkTargetRepositoryId = effectiveServiceRepository?.id ?? suggestedRepositoryId;
+  const shouldLoadStepFiveData = activeStep === "5" || editingStepKey === "5";
+  const shouldLoadStepSixData = activeStep === "6" || editingStepKey === "6";
+  const shouldRunAutomaticSdkWorkflow =
+    shouldLoadStepSixData &&
+    sdkSetupMode === "automatic" &&
+    (sdkAutomaticRequested || onboardingState?.sdk_setup_status === "change_request");
+  const hasIncompleteRepoSecretMount =
+    repoSecretMounts.some(
+      (draft) =>
+        (draft.secretRefId.trim().length > 0 || draft.mountAs.trim().length > 0) &&
+        !(draft.secretRefId.trim().length > 0 && draft.mountAs.trim().length > 0),
+    );
+  const canAttachSecretToSingleFlow = !hasIncompleteRepoSecretMount;
 
   useEffect(() => {
     setCreateMode(createRequested);
     setBootstrappingPage(!createRequested);
+    setInitialContentReady(createRequested);
   }, [createRequested]);
 
   const loadOnboardingState = useCallback(async (bootstrap = false, overrideProjectId?: string) => {
@@ -156,24 +415,25 @@ export function ProjectOnboardingConsole() {
     if (!resolvedProjectId) {
       return;
     }
-    const encodedProjectId = encodeURIComponent(resolvedProjectId);
-    const payload = await requestJson<ProjectOnboarding>(
-      `projects/${encodedProjectId}/${bootstrap ? "bootstrap" : "onboarding"}`,
-      {
-        method: bootstrap ? "POST" : "GET",
-      },
-    );
+    const payload = bootstrap
+      ? await requestJson<ProjectOnboarding>(
+          `projects/${encodeURIComponent(resolvedProjectId)}/bootstrap`,
+          {
+            method: "POST",
+          },
+        )
+      : await requestOnboardingState(resolvedProjectId);
     setState(payload);
-    if (!selectedRepositoryId && payload.integrations[0]?.repositories[0]?.id) {
-      setSelectedRepositoryId(payload.integrations[0].repositories[0].id);
-    }
-    const selectedSecretStillExists = payload.secret_refs.some((secretRef) => secretRef.id === selectedSecretRefId);
-    if (!selectedSecretStillExists) {
-      const fallbackSecretRef = payload.secret_refs[0];
-      setSelectedSecretRefId(fallbackSecretRef?.id ?? "");
-      setSecretMountAs(fallbackSecretRef?.label ?? "");
-    }
-  }, [projectId, selectedRepositoryId, selectedSecretRefId]);
+    setSelectedRepositoryId((current) => {
+      const repositoryIds = payload.integrations.flatMap((integration) =>
+        integration.repositories.map((repository) => repository.id),
+      );
+      if (current && repositoryIds.includes(current)) {
+        return current;
+      }
+      return payload.integrations[0]?.repositories[0]?.id ?? "";
+    });
+  }, [projectId]);
 
   useEffect(() => {
     if (
@@ -210,46 +470,501 @@ export function ProjectOnboardingConsole() {
   }, [loadOnboardingState, router, searchParams]);
 
   useEffect(() => {
-    async function loadSession() {
-      try {
-        setBootstrappingPage(!createMode);
-        const response = await fetch("/api/auth/session", {
-          method: "GET",
-        });
-        if (!response.ok) {
-          throw new Error("Unable to load session.");
-        }
-        const payload = (await response.json()) as Omit<AuthSession, "access_token">;
-        const normalized = { ...payload, access_token: "" } as AuthSession;
-        setSession(normalized);
-        const selectedProjectId = readCookieValue("stimpact_current_project");
-        const preferredProject =
-          payload.projects.find((project) => project.id === selectedProjectId) ?? payload.projects[0] ?? null;
-        if (!createMode && preferredProject?.id) {
-          setProjectId(preferredProject.id);
-          return;
-        }
-        setBootstrappingPage(false);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to load session.");
-        setBootstrappingPage(false);
-      }
+    if (createMode) {
+      setInitialContentReady(true);
+      setBootstrappingPage(false);
+      return;
     }
-    void loadSession();
-  }, [createMode]);
+    if (!shellSession || shellSession.sessionLoading) {
+      setBootstrappingPage(true);
+      return;
+    }
+    const preferredProject =
+      shellSession.currentProject ??
+      session?.projects.find((project) => project.id === shellSession.selectedProjectId) ??
+      session?.projects[0] ??
+      null;
+    if (!projectId.trim() && preferredProject?.id) {
+      setProjectId(preferredProject.id);
+      return;
+    }
+    if (!projectId.trim()) {
+      setInitialContentReady(true);
+      setBootstrappingPage(false);
+    }
+  }, [createMode, projectId, session?.projects, shellSession]);
 
   useEffect(() => {
+    if (!sessionReady) {
+      return;
+    }
     if (!projectId.trim()) {
+      const awaitingPreferredProject =
+        !createMode &&
+        Boolean(
+          shellSession?.currentProject ??
+            session?.projects.find((project) => project.id === shellSession?.selectedProjectId) ??
+            session?.projects[0],
+        );
+      if (awaitingPreferredProject) {
+        setInitialContentReady(false);
+        setBootstrappingPage(true);
+        return;
+      }
+      setInitialContentReady(true);
       setBootstrappingPage(false);
       return;
     }
     setBootstrappingPage(true);
-    void loadOnboardingState(false).catch((error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to load onboarding.");
-    }).finally(() => {
-      setBootstrappingPage(false);
+    setInitialContentReady(false);
+    void loadOnboardingState(false)
+      .catch((error) => {
+        setErrorMessage(error instanceof Error ? error.message : "Unable to load onboarding.");
+      })
+      .finally(() => {
+        setInitialContentReady(true);
+        setBootstrappingPage(false);
+      });
+  }, [createMode, loadOnboardingState, projectId, sessionReady, session?.projects, shellSession]);
+
+  useEffect(() => {
+    if (effectiveStepFiveMode === "single" && inferredSingleRepoProfile && !selectedServiceRepoProfileId) {
+      setSelectedServiceRepoProfileId(inferredSingleRepoProfile.id);
+    }
+  }, [effectiveStepFiveMode, inferredSingleRepoProfile, selectedServiceRepoProfileId]);
+
+  useEffect(() => {
+    if (!effectiveServiceRepository) {
+      return;
+    }
+    if (!serviceName.trim()) {
+      setServiceName(humanizeRepositoryName(effectiveServiceRepository.name));
+    }
+    if (serviceType === "frontend") {
+      setServiceType(inferServiceTypeFromRepositoryName(effectiveServiceRepository.name));
+    }
+  }, [effectiveServiceRepository, serviceName, serviceType]);
+
+  useEffect(() => {
+    if (!effectiveServiceRepoProfile) {
+      return;
+    }
+    setRuntimeKind(effectiveServiceRepoProfile.runtime_kind);
+    setBaseImage(effectiveServiceRepoProfile.base_image ?? "");
+    setInstallCommand(effectiveServiceRepoProfile.install_command ?? "");
+    setReproduceCommand(effectiveServiceRepoProfile.reproduce_command ?? "");
+    setVerifyCommand(effectiveServiceRepoProfile.verify_command ?? "");
+    setRepoSecretMounts(
+      effectiveServiceRepoProfile.secret_mounts.map((mount) =>
+        createRepoSecretMountDraft(mount.secret_ref.id, mount.mount_as),
+      ),
+    );
+  }, [effectiveServiceRepoProfile]);
+
+  useEffect(() => {
+    if (!effectiveProjectService) {
+      return;
+    }
+    setServiceName(effectiveProjectService.name);
+    setServiceType(effectiveProjectService.service_type);
+    setServiceOwner(effectiveProjectService.owner ?? "");
+    setServiceDeployTarget(effectiveProjectService.deploy_target ?? "");
+    setServiceRoutingNames(effectiveProjectService.routing_hints.service_names.join(", "));
+    setServicePathPrefixes(effectiveProjectService.routing_hints.path_prefixes.join(", "));
+    setServiceDomains(effectiveProjectService.routing_hints.domains.join(", "));
+    setServiceTags(effectiveProjectService.routing_hints.tags.join(", "));
+    setServiceHealthcheckCommand(effectiveProjectService.sandbox_healthcheck_command ?? "");
+    setServiceHealthcheckUrl(effectiveProjectService.sandbox_healthcheck_url ?? "");
+    setSelectedDependencyIds(
+      effectiveProjectService.dependencies.map((dependency) => dependency.depends_on_service_id),
+    );
+  }, [effectiveProjectService]);
+
+  useEffect(() => {
+    if (!state) {
+      return;
+    }
+    setPolicyDraft({
+      ...state.policy,
+      approved_services: [...state.policy.approved_services],
     });
-  }, [loadOnboardingState, projectId]);
+  }, [state]);
+
+  useEffect(() => {
+    if (!telemetryKeyName.trim()) {
+      setTelemetryKeyName(
+        currentProject ? `${currentProject.name} telemetry key` : "Project telemetry key",
+      );
+    }
+  }, [currentProject, telemetryKeyName]);
+
+  useEffect(() => {
+    if (!sdkServiceName.trim()) {
+      setSdkServiceName(effectiveProjectService?.name || serviceName || "web-app");
+    }
+  }, [effectiveProjectService?.name, sdkServiceName, serviceName]);
+
+  useEffect(() => {
+    setCopiedTelemetryKey(false);
+  }, [telemetryKeyPlaintext]);
+
+  useEffect(() => {
+    const strategy =
+      sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
+      sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
+      sdkBootstrapPlan?.strategies[0] ??
+      null;
+    setSdkSetupMode((current) => {
+      if (onboardingState?.sdk_setup_status === "manual" || onboardingState?.sdk_setup_status === "deferred") {
+        return "manual";
+      }
+      if (onboardingState?.sdk_setup_status === "change_request") {
+        return "automatic";
+      }
+      return current;
+    });
+    if (onboardingState?.sdk_setup_status === "change_request") {
+      setSdkAutomaticRequested(true);
+    }
+  }, [onboardingState?.sdk_setup_status, sdkBootstrapPlan, selectedSdkStrategyId]);
+
+  useEffect(() => {
+    if (!projectId.trim() || !sdkTargetRepositoryId || !platformBaseUrl || !sdkServiceName.trim()) {
+      setSdkBootstrapPlan(null);
+      setSdkBootstrapPreview(null);
+      setSelectedSdkStrategyId("");
+      setDismissedSdkPreviewStrategyId(null);
+      setLoadingSdkBootstrapPlan(false);
+      sdkBootstrapPlanKeyRef.current = "";
+      sdkBootstrapPreviewKeyRef.current = "";
+      return;
+    }
+    if (!shouldRunAutomaticSdkWorkflow) {
+      setLoadingSdkBootstrapPlan(false);
+      return;
+    }
+
+    const requestKey = [
+      projectId.trim(),
+      sdkTargetRepositoryId,
+      platformBaseUrl,
+      sdkServiceName.trim(),
+      sdkEnvironment.trim() || "production",
+    ].join("|");
+    if (sdkBootstrapPlanKeyRef.current === requestKey && sdkBootstrapPlan) {
+      setLoadingSdkBootstrapPlan(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setLoadingSdkBootstrapPlan(true);
+    setSdkAutomationStage("planning");
+    void requestJson<SdkBootstrapPlanPreview>(
+      `projects/${encodeURIComponent(projectId.trim())}/sdk-bootstrap/plan`,
+      {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({
+          project_id: projectId.trim(),
+          provider_repository_id: sdkTargetRepositoryId,
+          service_name: sdkServiceName.trim(),
+          environment: sdkEnvironment.trim() || "production",
+          base_url: platformBaseUrl,
+        }),
+      },
+    )
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        sdkBootstrapPlanKeyRef.current = requestKey;
+        sdkBootstrapPreviewKeyRef.current = "";
+        setSdkBootstrapPlan(payload);
+        setSdkBootstrapPreview(null);
+        if (!payload.strategies.some((item) => item.pr_supported)) {
+          setSdkAutomationStage("manual_only");
+          if (sdkManualFallbackDialogKeyRef.current !== requestKey) {
+            sdkManualFallbackDialogKeyRef.current = requestKey;
+            setShowSdkManualFallbackDialog(true);
+          }
+        }
+        setSelectedSdkStrategyId((current) => {
+          const preferredStrategyId =
+            payload.strategies.find((item) => item.id === current)?.id ??
+            payload.recommended_strategy_id ??
+            payload.strategies[0]?.id ??
+            "";
+          return preferredStrategyId;
+        });
+        setDismissedSdkPreviewStrategyId((current) =>
+          current && !payload.strategies.some((item) => item.id === current) ? null : current,
+        );
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setSdkBootstrapPlan(null);
+        setSdkBootstrapPreview(null);
+        setSelectedSdkStrategyId("");
+        setDismissedSdkPreviewStrategyId(null);
+        setSdkAutomationStage("idle");
+        setErrorMessage(error instanceof Error ? error.message : "Unable to inspect SDK bootstrap plan.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingSdkBootstrapPlan(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    platformBaseUrl,
+    projectId,
+    shouldRunAutomaticSdkWorkflow,
+    sdkBootstrapPlan,
+    sdkEnvironment,
+    sdkServiceName,
+    sdkTargetRepositoryId,
+  ]);
+
+  useEffect(() => {
+    const strategy =
+      sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
+      sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
+      sdkBootstrapPlan?.strategies[0] ??
+      null;
+    if (
+      !projectId.trim() ||
+      !sdkTargetRepositoryId ||
+      !platformBaseUrl ||
+      !shouldRunAutomaticSdkWorkflow ||
+      sdkSetupMode !== "automatic" ||
+      !strategy ||
+      !strategy.pr_supported ||
+      dismissedSdkPreviewStrategyId === strategy.id
+    ) {
+      setSdkBootstrapPreview(null);
+      setLoadingSdkBootstrapPreview(false);
+      return;
+    }
+
+    const requestKey = [
+      projectId.trim(),
+      sdkTargetRepositoryId,
+      platformBaseUrl,
+      sdkServiceName.trim() || serviceName || "web-app",
+      sdkEnvironment.trim() || "production",
+      strategy.id,
+    ].join("|");
+    if (sdkBootstrapPreviewKeyRef.current === requestKey && sdkBootstrapPreview?.selected_strategy_id === strategy.id) {
+      setLoadingSdkBootstrapPreview(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setLoadingSdkBootstrapPreview(true);
+    setSdkAutomationStage("previewing");
+    void requestJson<SdkBootstrapPreview>(
+      `projects/${encodeURIComponent(projectId.trim())}/sdk-bootstrap/preview`,
+      {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({
+          project_id: projectId.trim(),
+          provider_repository_id: sdkTargetRepositoryId,
+          service_name: sdkServiceName.trim() || serviceName || "web-app",
+          environment: sdkEnvironment.trim() || "production",
+          base_url: platformBaseUrl,
+          strategy_id: strategy.id,
+        }),
+      },
+    )
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        sdkBootstrapPreviewKeyRef.current = requestKey;
+        setSdkBootstrapPreview(payload);
+        setSdkAutomationStage("ready");
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        setSdkBootstrapPreview(null);
+        setSdkAutomationStage("idle");
+        setErrorMessage(error instanceof Error ? error.message : "Unable to build SDK bootstrap preview.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingSdkBootstrapPreview(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    dismissedSdkPreviewStrategyId,
+    platformBaseUrl,
+    projectId,
+    sdkBootstrapPlan,
+    sdkBootstrapPreview?.selected_strategy_id,
+    sdkEnvironment,
+    sdkServiceName,
+    sdkSetupMode,
+    sdkTargetRepositoryId,
+    selectedSdkStrategyId,
+    serviceName,
+    shouldRunAutomaticSdkWorkflow,
+  ]);
+
+  const loadTelemetryVerification = useCallback(async () => {
+    if (!projectId.trim() || !(sdkServiceName.trim() || serviceName.trim())) {
+      setTelemetryVerification(null);
+      setLoadingTelemetryVerification(false);
+      telemetryVerificationKeyRef.current = "";
+      return;
+    }
+    if (!shouldLoadStepSixData) {
+      setLoadingTelemetryVerification(false);
+      return;
+    }
+    const requestKey = [
+      projectId.trim(),
+      sdkServiceName.trim() || serviceName.trim(),
+      sdkEnvironment.trim() || "production",
+    ].join("|");
+    if (telemetryVerificationKeyRef.current === requestKey && telemetryVerification) {
+      setLoadingTelemetryVerification(false);
+      return;
+    }
+    setLoadingTelemetryVerification(true);
+    try {
+      const params = new URLSearchParams({
+        service: sdkServiceName.trim() || serviceName.trim(),
+        environment: sdkEnvironment.trim() || "production",
+      });
+      const payload = await requestJson<ProjectTelemetryVerification>(
+        `projects/${encodeURIComponent(projectId.trim())}/telemetry-verification?${params.toString()}`,
+        { method: "GET" },
+      );
+      telemetryVerificationKeyRef.current = requestKey;
+      setTelemetryVerification(payload);
+    } catch (error) {
+      setTelemetryVerification(null);
+      setErrorMessage(error instanceof Error ? error.message : "Unable to load telemetry verification.");
+    } finally {
+      setLoadingTelemetryVerification(false);
+    }
+  }, [projectId, sdkEnvironment, sdkServiceName, serviceName, shouldLoadStepSixData, telemetryVerification]);
+
+  useEffect(() => {
+    void loadTelemetryVerification();
+  }, [loadTelemetryVerification, state?.telemetry_heartbeats]);
+
+  useEffect(() => {
+    if (!state) {
+      return;
+    }
+    const availableSecretIds = new Set(state.secret_refs.map((secretRef) => secretRef.id));
+    setRepoSecretMounts((current) =>
+      current.filter((draft) => !draft.secretRefId || availableSecretIds.has(draft.secretRefId)),
+    );
+  }, [state]);
+
+  useEffect(() => {
+    if (effectiveStepFiveMode !== "single" || effectiveServiceRepoProfile || !state?.secret_refs.length) {
+      return;
+    }
+    const seedKey = state.secret_refs.map((secretRef) => secretRef.id).join("|");
+    if (!seedKey || singleRepoSecretMountSeedKeyRef.current === seedKey) {
+      return;
+    }
+    setRepoSecretMounts((current) => {
+      if (current.length) {
+        return current;
+      }
+      singleRepoSecretMountSeedKeyRef.current = seedKey;
+      return state.secret_refs.map((secretRef) =>
+        createRepoSecretMountDraft(secretRef.id, secretRef.label),
+      );
+    });
+  }, [effectiveServiceRepoProfile, effectiveStepFiveMode, state?.secret_refs]);
+
+  useEffect(() => {
+    if (!projectId.trim() || !suggestedRepositoryId || effectiveServiceRepoProfile) {
+      setLoadingRepoProfileInference(false);
+      setRepoProfileInference(null);
+      repoProfileInferenceKeyRef.current = "";
+      return;
+    }
+    if (!shouldLoadStepFiveData) {
+      setLoadingRepoProfileInference(false);
+      return;
+    }
+
+    const requestKey = [projectId.trim(), suggestedRepositoryId].join("|");
+    if (repoProfileInferenceKeyRef.current === requestKey && repoProfileInference) {
+      setLoadingRepoProfileInference(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRepoProfileInference(true);
+    void requestJson<RepoProfileInference>(
+      `projects/${encodeURIComponent(projectId.trim())}/provider-repositories/${encodeURIComponent(
+        suggestedRepositoryId,
+      )}/repo-profile-defaults`,
+      { method: "GET" },
+    )
+      .then((inference) => {
+        if (cancelled) {
+          return;
+        }
+        repoProfileInferenceKeyRef.current = requestKey;
+        setRepoProfileInference(inference);
+        setRuntimeKind(inference.runtime_kind);
+        setBaseImage(inference.base_image ?? "");
+        setInstallCommand(inference.install_command ?? "");
+        setReproduceCommand(inference.reproduce_command ?? inference.verify_command ?? "");
+        setVerifyCommand(inference.verify_command ?? "");
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setRepoProfileInference(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingRepoProfileInference(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    effectiveServiceRepoProfile,
+    projectId,
+    repoProfileInference,
+    shouldLoadStepFiveData,
+    suggestedRepositoryId,
+  ]);
 
   useEffect(() => {
     function updateActiveStep() {
@@ -277,6 +992,194 @@ export function ProjectOnboardingConsole() {
       window.removeEventListener("resize", updateActiveStep);
     };
   }, []);
+
+  function captureEditorSnapshot(): OnboardingEditorSnapshot {
+    return {
+      selectedProvider,
+      gitlabName,
+      gitlabBaseUrl,
+      lastGitLabAuthUrl,
+      selectedRepositoryId,
+      secretDrafts: secretDrafts.map((draft) => ({ ...draft })),
+      runtimeKind,
+      baseImage,
+      installCommand,
+      reproduceCommand,
+      verifyCommand,
+      networkAllowlist,
+      repoSecretMounts: repoSecretMounts.map((mount) => ({ ...mount })),
+      serviceName,
+      serviceType,
+      selectedServiceRepoProfileId,
+      serviceOwner,
+      serviceDeployTarget,
+      serviceRoutingNames,
+      servicePathPrefixes,
+      serviceDomains,
+      serviceTags,
+      serviceHealthcheckCommand,
+      serviceHealthcheckUrl,
+      selectedDependencyIds: [...selectedDependencyIds],
+      stepFivePreviewMode,
+      showStepFiveAdvanced,
+      telemetryKeyName,
+      telemetryKeyPlaintext,
+      sdkServiceName,
+      sdkEnvironment,
+      sdkSetupMode,
+      sdkBootstrapPlan: sdkBootstrapPlan
+        ? {
+            ...sdkBootstrapPlan,
+            warnings: [...sdkBootstrapPlan.warnings],
+            strategies: sdkBootstrapPlan.strategies.map((strategy) => ({
+              ...strategy,
+              entrypoints: [...strategy.entrypoints],
+              assumptions: [...strategy.assumptions],
+              blockers: [...strategy.blockers],
+              planned_files: strategy.planned_files.map((file) => ({ ...file })),
+              env_vars: strategy.env_vars.map((envVar) => ({ ...envVar })),
+              manual_steps: strategy.manual_steps.map((step) => ({ ...step })),
+            })),
+          }
+        : null,
+      sdkBootstrapPreview: sdkBootstrapPreview
+        ? {
+            ...sdkBootstrapPreview,
+            strategy: {
+              ...sdkBootstrapPreview.strategy,
+              entrypoints: [...sdkBootstrapPreview.strategy.entrypoints],
+              assumptions: [...sdkBootstrapPreview.strategy.assumptions],
+              blockers: [...sdkBootstrapPreview.strategy.blockers],
+              planned_files: sdkBootstrapPreview.strategy.planned_files.map((file) => ({ ...file })),
+              env_vars: sdkBootstrapPreview.strategy.env_vars.map((envVar) => ({ ...envVar })),
+              manual_steps: sdkBootstrapPreview.strategy.manual_steps.map((step) => ({ ...step })),
+            },
+            pull_request: { ...sdkBootstrapPreview.pull_request },
+          }
+        : null,
+      selectedSdkStrategyId,
+      dismissedSdkPreviewStrategyId,
+      sdkAutomaticRequested,
+      sdkAutomationStage,
+      showSdkManualFallbackDialog,
+      policyDraft: policyDraft ? { ...policyDraft, approved_services: [...policyDraft.approved_services] } : null,
+      repoProfileInference: repoProfileInference
+        ? {
+            ...repoProfileInference,
+            detected_from: [...repoProfileInference.detected_from],
+            warnings: [...repoProfileInference.warnings],
+          }
+        : null,
+    };
+  }
+
+  function restoreEditorSnapshot(snapshot: OnboardingEditorSnapshot) {
+    setSelectedProvider(snapshot.selectedProvider);
+    setGitlabName(snapshot.gitlabName);
+    setGitlabBaseUrl(snapshot.gitlabBaseUrl);
+    setLastGitLabAuthUrl(snapshot.lastGitLabAuthUrl);
+    setSelectedRepositoryId(snapshot.selectedRepositoryId);
+    setSecretDrafts(snapshot.secretDrafts.map((draft) => ({ ...draft })));
+    setRuntimeKind(snapshot.runtimeKind);
+    setBaseImage(snapshot.baseImage);
+    setInstallCommand(snapshot.installCommand);
+    setReproduceCommand(snapshot.reproduceCommand);
+    setVerifyCommand(snapshot.verifyCommand);
+    setNetworkAllowlist(snapshot.networkAllowlist);
+    setRepoSecretMounts(snapshot.repoSecretMounts.map((mount) => ({ ...mount })));
+    setServiceName(snapshot.serviceName);
+    setServiceType(snapshot.serviceType);
+    setSelectedServiceRepoProfileId(snapshot.selectedServiceRepoProfileId);
+    setServiceOwner(snapshot.serviceOwner);
+    setServiceDeployTarget(snapshot.serviceDeployTarget);
+    setServiceRoutingNames(snapshot.serviceRoutingNames);
+    setServicePathPrefixes(snapshot.servicePathPrefixes);
+    setServiceDomains(snapshot.serviceDomains);
+    setServiceTags(snapshot.serviceTags);
+    setServiceHealthcheckCommand(snapshot.serviceHealthcheckCommand);
+    setServiceHealthcheckUrl(snapshot.serviceHealthcheckUrl);
+    setSelectedDependencyIds([...snapshot.selectedDependencyIds]);
+    setStepFivePreviewMode(snapshot.stepFivePreviewMode);
+    setShowStepFiveAdvanced(snapshot.showStepFiveAdvanced);
+    setTelemetryKeyName(snapshot.telemetryKeyName);
+    setTelemetryKeyPlaintext(snapshot.telemetryKeyPlaintext);
+    setSdkServiceName(snapshot.sdkServiceName);
+    setSdkEnvironment(snapshot.sdkEnvironment);
+    setSdkSetupMode(snapshot.sdkSetupMode);
+    setSdkBootstrapPlan(
+      snapshot.sdkBootstrapPlan
+        ? {
+            ...snapshot.sdkBootstrapPlan,
+            warnings: [...snapshot.sdkBootstrapPlan.warnings],
+            strategies: snapshot.sdkBootstrapPlan.strategies.map((strategy) => ({
+              ...strategy,
+              entrypoints: [...strategy.entrypoints],
+              assumptions: [...strategy.assumptions],
+              blockers: [...strategy.blockers],
+              planned_files: strategy.planned_files.map((file) => ({ ...file })),
+              env_vars: strategy.env_vars.map((envVar) => ({ ...envVar })),
+              manual_steps: strategy.manual_steps.map((step) => ({ ...step })),
+            })),
+          }
+        : null,
+    );
+    setSdkBootstrapPreview(
+      snapshot.sdkBootstrapPreview
+        ? {
+            ...snapshot.sdkBootstrapPreview,
+            strategy: {
+              ...snapshot.sdkBootstrapPreview.strategy,
+              entrypoints: [...snapshot.sdkBootstrapPreview.strategy.entrypoints],
+              assumptions: [...snapshot.sdkBootstrapPreview.strategy.assumptions],
+              blockers: [...snapshot.sdkBootstrapPreview.strategy.blockers],
+              planned_files: snapshot.sdkBootstrapPreview.strategy.planned_files.map((file) => ({ ...file })),
+              env_vars: snapshot.sdkBootstrapPreview.strategy.env_vars.map((envVar) => ({ ...envVar })),
+              manual_steps: snapshot.sdkBootstrapPreview.strategy.manual_steps.map((step) => ({ ...step })),
+            },
+            pull_request: { ...snapshot.sdkBootstrapPreview.pull_request },
+          }
+        : null,
+    );
+    setSelectedSdkStrategyId(snapshot.selectedSdkStrategyId);
+    setDismissedSdkPreviewStrategyId(snapshot.dismissedSdkPreviewStrategyId);
+    setSdkAutomaticRequested(snapshot.sdkAutomaticRequested);
+    setSdkAutomationStage(snapshot.sdkAutomationStage);
+    setShowSdkManualFallbackDialog(snapshot.showSdkManualFallbackDialog);
+    setPolicyDraft(
+      snapshot.policyDraft
+        ? { ...snapshot.policyDraft, approved_services: [...snapshot.policyDraft.approved_services] }
+        : null,
+    );
+    setRepoProfileInference(
+      snapshot.repoProfileInference
+        ? {
+            ...snapshot.repoProfileInference,
+            detected_from: [...snapshot.repoProfileInference.detected_from],
+            warnings: [...snapshot.repoProfileInference.warnings],
+          }
+        : null,
+    );
+  }
+
+  function beginStepEditing(stepKey: StepEditKey) {
+    editorSnapshotRef.current = captureEditorSnapshot();
+    setEditingStepKey(stepKey);
+    setErrorMessage(null);
+  }
+
+  function cancelStepEditing() {
+    if (editorSnapshotRef.current) {
+      restoreEditorSnapshot(editorSnapshotRef.current);
+    }
+    editorSnapshotRef.current = null;
+    setEditingStepKey(null);
+    setErrorMessage(null);
+  }
+
+  function finishStepEditing() {
+    editorSnapshotRef.current = null;
+    setEditingStepKey(null);
+  }
 
   async function withFeedback(
     action: () => Promise<void>,
@@ -341,6 +1244,7 @@ export function ProjectOnboardingConsole() {
       );
       setLastGitLabAuthUrl(response.authorization_url);
       await loadOnboardingState(false);
+      finishStepEditing();
     }, "GitLab OAuth session created.");
   }
 
@@ -353,11 +1257,12 @@ export function ProjectOnboardingConsole() {
         },
       );
       await loadOnboardingState(false);
+      finishStepEditing();
     }, "Provider repositories synced.");
   }
 
   function addSecretDraft() {
-    setSecretDrafts((current) => [...current, createSecretDraft()]);
+    setSecretDrafts((current) => [createSecretDraft(), ...current]);
     setOpenSecretMenuId(null);
   }
 
@@ -388,27 +1293,103 @@ export function ProjectOnboardingConsole() {
     });
   }
 
-  async function addSecret(draftId: string) {
-    const draft = secretDrafts.find((item) => item.id === draftId);
-    if (!draft) {
+  function normalizePendingSecretDrafts() {
+    return secretDrafts
+      .map((draft) => ({
+        ...draft,
+        label: draft.label.trim(),
+        value: draft.value.trim(),
+      }))
+      .filter((draft) => draft.label || draft.value);
+  }
+
+  function attachRepoSecretMount(secretRefId: string) {
+    const selectedSecret = state?.secret_refs.find((secretRef) => secretRef.id === secretRefId);
+    if (!selectedSecret) {
+      return;
+    }
+    setRepoSecretMounts((current) => {
+      if (current.some((draft) => draft.secretRefId === secretRefId)) {
+        return current;
+      }
+      return [...current, createRepoSecretMountDraft(secretRefId, selectedSecret.label)];
+    });
+  }
+
+  function updateRepoSecretMount(
+    draftId: string,
+    field: "secretRefId" | "mountAs",
+    nextValue: string,
+  ) {
+    setRepoSecretMounts((current) =>
+      current.map((draft) => {
+        if (draft.id !== draftId) {
+          return draft;
+        }
+        if (field === "secretRefId") {
+          const selectedSecret = state?.secret_refs.find((secretRef) => secretRef.id === nextValue);
+          return {
+            ...draft,
+            secretRefId: nextValue,
+            mountAs: draft.mountAs.trim() ? draft.mountAs : selectedSecret?.label ?? "",
+          };
+        }
+        return { ...draft, mountAs: nextValue };
+      }),
+    );
+  }
+
+  function removeRepoSecretMount(draftId: string) {
+    setRepoSecretMounts((current) => current.filter((draft) => draft.id !== draftId));
+  }
+
+  function buildRepoSecretMountPayload() {
+    return repoSecretMounts
+      .map((draft) => ({
+        secret_ref_id: draft.secretRefId.trim(),
+        mount_as: draft.mountAs.trim(),
+      }))
+      .filter((draft) => draft.secret_ref_id && draft.mount_as);
+  }
+
+  async function addSecrets() {
+    const draftsToSave = normalizePendingSecretDrafts();
+    if (!draftsToSave.length) {
       return;
     }
     await withFeedback(async () => {
-      await requestJson(
-        `projects/${encodeURIComponent(projectId.trim())}/secret-refs`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            project_id: projectId.trim(),
-            label: draft.label,
-            value: draft.value,
-          }),
-        },
+      const createdSecrets = await Promise.all(
+        draftsToSave.map((draft) =>
+          requestJson<ProjectOnboarding["secret_refs"][number]>(
+            `projects/${encodeURIComponent(projectId.trim())}/secret-refs`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                project_id: projectId.trim(),
+                label: draft.label,
+                value: draft.value,
+              }),
+            },
+          ),
+        ),
       );
-      setSecretDrafts((current) => current.filter((item) => item.id !== draftId));
+
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              secret_refs: [...current.secret_refs, ...createdSecrets],
+              operational_readiness: {
+                ...current.operational_readiness,
+                has_secrets: true,
+              },
+            }
+          : current,
+      );
+      setSecretDrafts([]);
       setOpenSecretMenuId(null);
-      await loadOnboardingState(false);
-    }, "Secret stored in AWS Secrets Manager.");
+      finishStepEditing();
+    }, draftsToSave.length === 1 ? "Secret stored in AWS Secrets Manager." : "Secrets stored in AWS Secrets Manager.");
   }
 
   async function deleteSecret(secretRefId: string, secretProjectId: string) {
@@ -424,6 +1405,7 @@ export function ProjectOnboardingConsole() {
         setProjectId(secretProjectId);
       }
       await loadOnboardingState(false, secretProjectId);
+      finishStepEditing();
     }, "Secret deleted from AWS Secrets Manager.");
   }
 
@@ -440,26 +1422,19 @@ export function ProjectOnboardingConsole() {
             base_image: baseImage || null,
             install_command: installCommand || null,
             startup_commands: [],
-            reproduce_command: reproduceCommand,
+            reproduce_command: reproduceCommand || verifyCommand,
             verify_command: verifyCommand,
             success_criteria: "Sandbox verification exits successfully after the generated patch is applied.",
             network_allowlist: networkAllowlist
               .split(",")
               .map((item) => item.trim())
               .filter(Boolean),
-            secret_mounts:
-              selectedSecretRefId && secretMountAs
-                ? [
-                    {
-                      secret_ref_id: selectedSecretRefId,
-                      mount_as: secretMountAs,
-                    },
-                  ]
-                : [],
+            secret_mounts: buildRepoSecretMountPayload(),
           }),
         },
       );
       await loadOnboardingState(false);
+      finishStepEditing();
     }, "Repo profile created.");
   }
 
@@ -474,7 +1449,7 @@ export function ProjectOnboardingConsole() {
             name: serviceName,
             slug: serviceSlug,
             service_type: serviceType,
-            repo_profile_id: selectedServiceRepoProfileId || null,
+            repo_profile_id: effectiveServiceRepoProfileId || null,
             owner: serviceOwner || null,
             deploy_target: serviceDeployTarget || null,
             routing_hints: {
@@ -504,21 +1479,275 @@ export function ProjectOnboardingConsole() {
           }),
         },
       );
-      setServiceName("");
-      setSelectedDependencyIds([]);
-      setServiceOwner("");
-      setServiceDeployTarget("");
-      setServiceRoutingNames("");
-      setServicePathPrefixes("");
-      setServiceDomains("");
-      setServiceTags("");
-      setServiceHealthcheckCommand("");
-      setServiceHealthcheckUrl("");
+      resetServiceBuilder();
       if (!selectedServiceRepoProfileId && state?.repo_profiles[0]?.id) {
         setSelectedServiceRepoProfileId(state.repo_profiles[0].id);
       }
       await loadOnboardingState(false);
+      finishStepEditing();
     }, "Project service configured.");
+  }
+
+  function resetServiceBuilder() {
+    setServiceName("");
+    setSelectedDependencyIds([]);
+    setRepoSecretMounts([]);
+    setServiceOwner("");
+    setServiceDeployTarget("");
+    setServiceRoutingNames("");
+    setServicePathPrefixes("");
+    setServiceDomains("");
+    setServiceTags("");
+    setServiceHealthcheckCommand("");
+    setServiceHealthcheckUrl("");
+    setShowStepFiveAdvanced(false);
+  }
+
+  async function completeSingleRepoSetup() {
+    await withFeedback(async () => {
+      let repoProfileId = effectiveServiceRepoProfileId;
+      if (!repoProfileId) {
+        const createdProfile = await requestJson<RepoProfile>(
+          `projects/${encodeURIComponent(projectId.trim())}/repo-profiles`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              project_id: projectId.trim(),
+              provider_repository_id: selectedRepositoryId,
+              runtime_kind: runtimeKind,
+              base_image: baseImage || null,
+              install_command: installCommand || null,
+              startup_commands: [],
+              reproduce_command: reproduceCommand || verifyCommand,
+              verify_command: verifyCommand,
+              success_criteria: "Sandbox verification exits successfully after the generated patch is applied.",
+              network_allowlist: networkAllowlist
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+              secret_mounts: buildRepoSecretMountPayload(),
+            }),
+          },
+        );
+        repoProfileId = createdProfile.id;
+      }
+
+      await requestJson(
+        `projects/${encodeURIComponent(projectId.trim())}/services`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            project_id: projectId.trim(),
+            name: serviceName,
+            slug: serviceSlug,
+            service_type: serviceType,
+            repo_profile_id: repoProfileId,
+            owner: serviceOwner || null,
+            deploy_target: serviceDeployTarget || null,
+            routing_hints: {
+              service_names: serviceRoutingNames
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+              path_prefixes: servicePathPrefixes
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+              domains: serviceDomains
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+              tags: serviceTags
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+            },
+            sandbox_healthcheck_command: serviceHealthcheckCommand || null,
+            sandbox_healthcheck_url: serviceHealthcheckUrl || null,
+            dependencies: [],
+          }),
+        },
+      );
+
+      resetServiceBuilder();
+      await loadOnboardingState(false);
+      finishStepEditing();
+    }, "Single-repo setup completed.");
+  }
+
+  async function createTelemetryApiKey() {
+    await withFeedback(async () => {
+      const created = await requestJson<ProjectApiKeyCreateResponse>(
+        `projects/${encodeURIComponent(projectId.trim())}/api-keys`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: telemetryKeyName.trim() || "Project telemetry key",
+          }),
+        },
+      );
+      setTelemetryKeyPlaintext(created.plaintext_key);
+      await loadOnboardingState(false);
+    }, "Telemetry API key created.");
+  }
+
+  async function copyTelemetryKeyToClipboard() {
+    if (!telemetryKeyPlaintext) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(telemetryKeyPlaintext);
+      setCopiedTelemetryKey(true);
+      window.setTimeout(() => {
+        setCopiedTelemetryKey(false);
+      }, 1800);
+    } catch {
+      setErrorMessage("Unable to copy the API key to your clipboard.");
+    }
+  }
+
+  async function saveSdkSetupStatus(
+    status: "manual" | "deferred" | "change_request",
+    options?: { changeRequestUrl?: string | null },
+  ) {
+    await withFeedback(async () => {
+      await requestJson(
+        `projects/${encodeURIComponent(projectId.trim())}/onboarding-state`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            sdk_setup_status: status,
+            sdk_setup_provider_repository_id: sdkTargetRepositoryId || null,
+            sdk_setup_change_request_url: options?.changeRequestUrl ?? null,
+          }),
+        },
+      );
+      await loadOnboardingState(false);
+      finishStepEditing();
+    }, "SDK onboarding preference saved.");
+  }
+
+  async function createSdkBootstrapChangeRequest() {
+    if (!sdkTargetRepositoryId) {
+      setErrorMessage("Choose and configure a repository before generating an SDK bootstrap PR.");
+      return;
+    }
+    if (!selectedSdkStrategy) {
+      setErrorMessage("Preview the detected SDK bootstrap plan before generating a PR.");
+      return;
+    }
+    if (!selectedSdkStrategy.pr_supported) {
+      setErrorMessage("The selected SDK strategy requires manual setup instead of an automated PR.");
+      return;
+    }
+    if (!sdkBootstrapPreview) {
+      setErrorMessage("Wait for the SDK bootstrap preview to finish before approving PR creation.");
+      return;
+    }
+    if (!platformBaseUrl) {
+      setErrorMessage("A public Stimpact platform URL is required before generating an SDK bootstrap PR.");
+      return;
+    }
+    await withFeedback(async () => {
+      const response = await requestJson<SdkBootstrapChangeRequestResponse>(
+        `projects/${encodeURIComponent(projectId.trim())}/sdk-bootstrap/change-request`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            project_id: projectId.trim(),
+            provider_repository_id: sdkTargetRepositoryId,
+            api_key_name: telemetryKeyName.trim() || "Project telemetry key",
+            service_name: sdkServiceName.trim() || serviceName || "web-app",
+            environment: sdkEnvironment.trim() || "production",
+            base_url: platformBaseUrl,
+            strategy_id: selectedSdkStrategy.id,
+            branch_name: sdkBootstrapPreview.pull_request.branch_name,
+          }),
+        },
+      );
+      setTelemetryKeyPlaintext(response.plaintext_key);
+      setSdkBootstrapPreview(null);
+      await loadOnboardingState(false);
+      finishStepEditing();
+    }, "SDK bootstrap PR opened.");
+  }
+
+  function dismissSdkBootstrapPreview() {
+    sdkManualFallbackDialogKeyRef.current = "";
+    setSdkSetupMode("manual");
+    setSdkAutomaticRequested(false);
+    setSdkAutomationStage("idle");
+    setDismissedSdkPreviewStrategyId(selectedSdkStrategy?.id ?? null);
+    setSdkBootstrapPreview(null);
+    setShowSdkManualFallbackDialog(false);
+  }
+
+  function startAutomaticSdkWorkflow() {
+    sdkManualFallbackDialogKeyRef.current = "";
+    setSdkSetupMode("automatic");
+    if (!sdkTargetRepositoryId || !platformBaseUrl || !projectId.trim() || !sdkServiceName.trim()) {
+      setSdkAutomaticRequested(false);
+      setSdkAutomationStage("idle");
+      setShowSdkManualFallbackDialog(false);
+      setErrorMessage(null);
+      return;
+    }
+    setSdkAutomaticRequested(true);
+    setDismissedSdkPreviewStrategyId(null);
+    setSdkBootstrapPreview(null);
+    setSdkAutomationStage("planning");
+    setShowSdkManualFallbackDialog(false);
+    setErrorMessage(null);
+  }
+
+  function chooseAutomaticSdkMode() {
+    setSdkSetupMode("automatic");
+    setSdkAutomaticRequested(false);
+    setSdkAutomationStage("idle");
+    setSdkBootstrapPreview(null);
+    setShowSdkManualFallbackDialog(false);
+    setErrorMessage(null);
+  }
+
+  function openManualSdkMode() {
+    sdkManualFallbackDialogKeyRef.current = "";
+    setSdkSetupMode("manual");
+    setSdkAutomaticRequested(false);
+    setSdkAutomationStage("idle");
+    setSdkBootstrapPreview(null);
+    setShowSdkManualFallbackDialog(false);
+    setErrorMessage(null);
+  }
+
+  async function saveAutomationControls() {
+    if (!policyDraft) {
+      return;
+    }
+    await withFeedback(async () => {
+      await requestJson(
+        `projects/${encodeURIComponent(projectId.trim())}/policy`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            autonomy_mode: policyDraft.autonomy_mode,
+            require_human_approval: policyDraft.require_human_approval,
+            allow_production_writes: policyDraft.allow_production_writes,
+            allow_low_risk_autonomy: policyDraft.allow_low_risk_autonomy,
+            block_during_active_deploys: policyDraft.block_during_active_deploys,
+            restrict_to_approved_services: policyDraft.restrict_to_approved_services,
+            require_rollback_plan: policyDraft.require_rollback_plan,
+            require_post_action_verification: policyDraft.require_post_action_verification,
+            approved_services: policyDraft.approved_services,
+            failure_classifier_enabled: policyDraft.failure_classifier_enabled,
+            root_cause_enabled: policyDraft.root_cause_enabled,
+            patch_planner_enabled: policyDraft.patch_planner_enabled,
+            runbook_executor_enabled: policyDraft.runbook_executor_enabled,
+          }),
+        },
+      );
+      await loadOnboardingState(false);
+      finishStepEditing();
+    }, "Automation controls saved.");
   }
 
   async function createFirstProject() {
@@ -543,11 +1772,6 @@ export function ProjectOnboardingConsole() {
           "error" in payload ? payload.error?.message ?? "Project creation failed." : "Project creation failed.",
         );
       }
-      const sessionResponse = await fetch("/api/auth/session", { method: "GET" });
-      if (sessionResponse.ok) {
-        const sessionPayload = (await sessionResponse.json()) as Omit<AuthSession, "access_token">;
-        setSession({ ...sessionPayload, access_token: "" } as AuthSession);
-      }
       await fetch("/api/projects/current", {
         method: "POST",
         headers: {
@@ -555,6 +1779,7 @@ export function ProjectOnboardingConsole() {
         },
         body: JSON.stringify({ project_id: payload.id }),
       });
+      await shellSession?.refreshSession();
       setProjectId(payload.id);
       setCreateMode(false);
     } catch (error) {
@@ -570,10 +1795,126 @@ export function ProjectOnboardingConsole() {
   const hasSecrets = (state?.secret_refs.length ?? 0) > 0;
   const hasRepoProfiles = (state?.repo_profiles.length ?? 0) > 0;
   const hasProjectServices = (state?.project_services.length ?? 0) > 0;
+  const hasActiveApiKeys = state?.operational_readiness.has_active_api_keys ?? false;
+  const hasReviewedPolicy = state?.operational_readiness.policy_reviewed ?? false;
+  const hasSdkSetup = state?.operational_readiness.sdk_setup_ready ?? false;
+  const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
+  const sdkStatusLabel =
+    onboardingState?.sdk_setup_status === "change_request"
+      ? "Bootstrap PR opened"
+      : onboardingState?.sdk_setup_status === "manual"
+        ? "Manual setup confirmed"
+        : onboardingState?.sdk_setup_status === "deferred"
+          ? "Deferred"
+          : "Pending";
+  const telemetryVerificationStatusLabel =
+    telemetryVerification?.status === "healthy"
+      ? "Live heartbeat detected"
+      : telemetryVerification?.status === "stale"
+        ? "Heartbeat stale"
+        : loadingTelemetryVerification
+          ? "Checking heartbeat"
+          : "Waiting for first heartbeat";
+  const selectedSdkStrategy =
+    sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
+    sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
+    sdkBootstrapPlan?.strategies[0] ??
+    null;
+  const automaticSdkAvailable = Boolean(selectedSdkStrategy?.pr_supported);
+  const automaticModePrimaryMessage =
+    sdkAutomationStage === "planning"
+      ? "Stimpact is inspecting the repository, checking deterministic entrypoints first, and only using the guarded model fallback if no safe hardcoded match is found."
+      : sdkAutomationStage === "previewing"
+        ? "Stimpact found a candidate runtime surface and is now drafting the exact patch preview and PR metadata for your review."
+        : sdkAutomationStage === "ready"
+          ? selectedSdkStrategy?.source === "llm"
+            ? "This preview came from the model-assisted fallback. The model suggested the runtime surface, then Stimpact applied guardrails before showing you the patch."
+            : "This preview came from the deterministic planner. Stimpact matched a supported runtime surface without needing the model fallback."
+          : sdkAutomationStage === "manual_only"
+            ? "Stimpact inspected the repository but did not find a safe automatic patch path, so it kept you on the manual route."
+            : "Choose automatic mode to let Stimpact inspect the repo, attempt a safe SDK integration, and prepare a reviewable PR preview.";
+  const automaticWorkflowItems = [
+    {
+      id: "inspect",
+      label: "Inspect repository",
+      detail: "Read manifests, entrypoints, and runtime structure.",
+      state:
+        sdkAutomationStage === "planning" ||
+        sdkAutomationStage === "previewing" ||
+        sdkAutomationStage === "ready" ||
+        sdkAutomationStage === "manual_only"
+          ? "complete"
+          : sdkSetupMode === "automatic" && sdkAutomaticRequested
+            ? "active"
+            : "pending",
+    },
+    {
+      id: "decide",
+      label: "Choose integration path",
+      detail: "Prefer deterministic matching, then try the guarded LLM fallback only if needed.",
+      state:
+        sdkAutomationStage === "previewing" ||
+        sdkAutomationStage === "ready" ||
+        sdkAutomationStage === "manual_only"
+          ? "complete"
+          : sdkAutomationStage === "planning"
+            ? "active"
+            : "pending",
+    },
+    {
+      id: "preview",
+      label: "Draft patch preview",
+      detail: "Generate the exact diff and PR metadata before you approve anything.",
+      state:
+        sdkAutomationStage === "ready"
+          ? "complete"
+          : sdkAutomationStage === "previewing"
+            ? "active"
+            : sdkAutomationStage === "manual_only"
+              ? "blocked"
+              : "pending",
+    },
+  ] as const;
+  const selectedManualFallbackStrategy =
+    sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
+    sdkBootstrapPlan?.strategies[0] ??
+    null;
+  const sdkEnvironmentSnippet = selectedSdkStrategy
+    ? selectedSdkStrategy.env_vars
+        .map((item) => {
+          const exampleValue =
+            item.name.includes("BASE_URL")
+              ? platformBaseUrl || item.example_value
+              : item.name.includes("PROJECT_ID")
+                ? projectId || item.example_value
+                : item.name.includes("API_KEY")
+                  ? "stimp_live_replace_me"
+                  : item.name.includes("SERVICE")
+                    ? sdkServiceName || serviceName || "web-app"
+                    : item.name.includes("ENVIRONMENT")
+                      ? sdkEnvironment || "production"
+                      : item.example_value;
+          return `${item.name}=${exampleValue}`;
+        })
+        .join("\n")
+    : "";
+  const sdkCodeSnippet = (selectedSdkStrategy?.preview_snippet ?? "")
+    .replaceAll("<public-stimpact-url>", platformBaseUrl || "<public-stimpact-url>")
+    .replaceAll("<project-id>", projectId || "<project-id>");
+  const canCompleteSingleRepoSetup =
+    Boolean(serviceName.trim()) &&
+    Boolean(serviceSlug.trim()) &&
+    Boolean(verifyCommand.trim()) &&
+    Boolean(effectiveServiceRepoProfileId || selectedRepositoryId) &&
+    canAttachSecretToSingleFlow;
+  const pendingSecretDrafts = normalizePendingSecretDrafts();
+  const canSaveSecretDrafts =
+    pendingSecretDrafts.length > 0 &&
+    pendingSecretDrafts.every((draft) => Boolean(draft.label) && Boolean(draft.value));
 
-  if (bootstrappingPage && !createMode) {
+  if (!createMode && (!sessionReady || !initialContentReady || bootstrappingPage)) {
     return (
-      <div className="flex min-h-[70vh] items-center justify-center px-6">
+      <div className="flex min-h-[calc(100vh-7rem)] items-center justify-center px-6 lg:min-h-[calc(100vh-9.5rem)]">
         <div className="flex flex-col items-center gap-3 text-center">
           <span className="inline-flex h-9 w-9 animate-spin rounded-full border-2 border-[rgba(23,56,93,0.18)] border-t-[rgba(255,106,61,0.88)]" />
           <p className="text-sm font-medium text-[#746d66]">Loading..</p>
@@ -595,8 +1936,9 @@ export function ProjectOnboardingConsole() {
           </h1>
           <p className="mx-auto mt-5 max-w-3xl text-[15px] font-medium leading-8 text-[#64584f]">
             Move straight down the page to create the project, connect the repository
-            provider, add secrets, define repo profiles, and map the deployable
-            services that power sandbox verification.
+            provider, add secrets, define repo profiles, map the deployable
+            services that power sandbox verification, enable telemetry, and
+            confirm the automation controls that govern production autonomy.
           </p>
 
           <OnboardingTimeline
@@ -639,6 +1981,18 @@ export function ProjectOnboardingConsole() {
                 detail: "Map infrastructure",
                 complete: hasRepoProfiles && hasProjectServices,
               },
+              {
+                step: "6",
+                label: "Telemetry",
+                detail: "Create API key and SDK path",
+                complete: hasActiveApiKeys && hasSdkSetup,
+              },
+              {
+                step: "7",
+                label: "Controls",
+                detail: "Review automation policy",
+                complete: hasReviewedPolicy,
+              },
             ]}
           />
 
@@ -653,6 +2007,8 @@ export function ProjectOnboardingConsole() {
           title="Create the first project"
           description={`Start here for ${session?.organization.name ?? "your workspace"}. Everything else below becomes active after the first project exists.`}
           complete={hasProject}
+          editable={false}
+          isEditing={false}
           sectionRef={(node) => {
             stepRefs.current["1"] = node;
           }}
@@ -702,6 +2058,11 @@ export function ProjectOnboardingConsole() {
           title="Connect a git provider"
           description="Choose the provider you want to connect first, then sync repositories from that integration."
           complete={hasIntegrations}
+          editable={hasIntegrations}
+          isEditing={editingStepKey === "2"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "2"}
+          onEdit={() => beginStepEditing("2")}
+          onCancelEdit={cancelStepEditing}
           sectionRef={(node) => {
             stepRefs.current["2"] = node;
           }}
@@ -847,13 +2208,18 @@ export function ProjectOnboardingConsole() {
           title="Sync and choose repository"
           description="Once a provider is connected, sync repositories and select the repo that should power sandbox runs."
           complete={hasRepositories && Boolean(selectedRepositoryId)}
+          editable={hasRepositories}
+          isEditing={editingStepKey === "3"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "3"}
+          onEdit={() => beginStepEditing("3")}
+          onCancelEdit={cancelStepEditing}
           sectionRef={(node) => {
             stepRefs.current["3"] = node;
           }}
         >
           <div className="space-y-4">
-            {state?.integrations.length ? (
-              state.integrations.map((integration) => (
+            {dedupedIntegrations.length ? (
+              dedupedIntegrations.map((integration) => (
                 <div key={integration.integration.id} className="space-y-4">
                   <div className="flex flex-col gap-4 border-b border-[rgba(29,26,24,0.08)] pb-4 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex items-center gap-3">
@@ -867,12 +2233,14 @@ export function ProjectOnboardingConsole() {
                         </p>
                       </div>
                     </div>
-                    <ActionButton
-                      label="Refresh repos"
-                      onClick={() => syncRepositories(integration.integration.id)}
-                      disabled={loading}
-                      variant="secondary"
-                    />
+                    {editingStepKey === "3" ? (
+                      <ActionButton
+                        label="Sync latest repos"
+                        onClick={() => syncRepositories(integration.integration.id)}
+                        disabled={loading}
+                        variant="secondary"
+                      />
+                    ) : null}
                   </div>
                   {integration.repositories.length ? (
                     <ul className="grid gap-3 text-sm text-[#35547d]">
@@ -934,6 +2302,16 @@ export function ProjectOnboardingConsole() {
                 Connect a provider first, then sync repositories here.
               </p>
             )}
+            {editingStepKey === "3" ? (
+              <div className="flex flex-wrap gap-3">
+                <ActionButton
+                  label="Save repository selection"
+                  onClick={finishStepEditing}
+                  disabled={loading || !selectedRepositoryId}
+                  variant="success"
+                />
+              </div>
+            ) : null}
           </div>
         </StepPanel>
 
@@ -943,6 +2321,11 @@ export function ProjectOnboardingConsole() {
           title="Add runtime secrets"
           description="Store runtime secrets in AWS Secrets Manager and keep only metadata in the platform database."
           complete={hasSecrets}
+          editable={hasSecrets}
+          isEditing={editingStepKey === "4"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "4"}
+          onEdit={() => beginStepEditing("4")}
+          onCancelEdit={cancelStepEditing}
           sectionRef={(node) => {
             stepRefs.current["4"] = node;
           }}
@@ -1002,7 +2385,7 @@ export function ProjectOnboardingConsole() {
                           label="Secret value"
                           value={draft.value}
                           onChange={(value) => updateSecretDraft(draft.id, "value", value)}
-                          type="password"
+                          type="text"
                           placeholder="Paste the secret value"
                           name={`secret-value-${draft.id}`}
                           suppressPasswordManagers
@@ -1010,15 +2393,7 @@ export function ProjectOnboardingConsole() {
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-3">
                         <ActionButton
-                          label="Store secret"
-                          onClick={() => {
-                            void addSecret(draft.id);
-                          }}
-                          disabled={loading || !draft.label.trim() || !draft.value.trim()}
-                          variant="success"
-                        />
-                        <ActionButton
-                          label="Cancel"
+                          label={secretDrafts.length > 1 || state?.secret_refs.length ? "Remove row" : "Clear row"}
                           onClick={() => removeSecretDraft(draft.id)}
                           variant="secondary"
                         />
@@ -1051,6 +2426,30 @@ export function ProjectOnboardingConsole() {
                 No project secrets have been added yet. Add one here to continue configuring repo profiles.
               </p>
             )}
+            {secretDrafts.length ? (
+              <div className="flex flex-wrap gap-3">
+                <ActionButton
+                  label={pendingSecretDrafts.length > 1 ? "Save secrets" : "Save secret"}
+                  onClick={() => {
+                    void addSecrets();
+                  }}
+                  disabled={loading || !canSaveSecretDrafts}
+                  variant="success"
+                />
+                <ActionButton
+                  label="Cancel edits"
+                  onClick={() => {
+                    if (editingStepKey === "4") {
+                      cancelStepEditing();
+                      return;
+                    }
+                    setSecretDrafts(state?.secret_refs.length ? [] : [createSecretDraft()]);
+                  }}
+                  disabled={loading}
+                  variant="secondary"
+                />
+              </div>
+            ) : null}
           </div>
         </StepPanel>
 
@@ -1060,343 +2459,1163 @@ export function ProjectOnboardingConsole() {
           title="Create repo profiles and map services"
           description="Define sandbox commands, then turn those repo profiles into named project services with routing hints and dependencies."
           complete={hasRepoProfiles && hasProjectServices}
+          editable={hasRepoProfiles || hasProjectServices}
+          isEditing={editingStepKey === "5"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "5"}
+          onEdit={() => beginStepEditing("5")}
+          onCancelEdit={cancelStepEditing}
           sectionRef={(node) => {
             stepRefs.current["5"] = node;
           }}
         >
-          <div className="grid gap-4 md:grid-cols-2">
-            <SelectField
-              label="Runtime kind"
-              value={runtimeKind}
-              onChange={(value) =>
-                setRuntimeKind(
-                  value as "python" | "node" | "generic" | "container",
-                )
-              }
-              options={[
-                { value: "python", label: "Python" },
-                { value: "node", label: "Node" },
-                { value: "generic", label: "Generic" },
-                { value: "container", label: "Container" },
-              ]}
-            />
-            <Field
-              label="Base image"
-              value={baseImage}
-              onChange={setBaseImage}
-              placeholder="public.ecr.aws/docker/library/python:3.12"
-            />
-            <Field
-              label="Install command"
-              value={installCommand}
-              onChange={setInstallCommand}
-              placeholder="pip install -r requirements.txt"
-              className="md:col-span-2"
-            />
-            <Field
-              label="Reproduce command"
-              value={reproduceCommand}
-              onChange={setReproduceCommand}
-              placeholder="pytest"
-              className="md:col-span-2"
-            />
-            <Field
-              label="Verify command"
-              value={verifyCommand}
-              onChange={setVerifyCommand}
-              placeholder="pytest"
-              className="md:col-span-2"
-            />
-            <Field
-              label="Network allowlist"
-              value={networkAllowlist}
-              onChange={setNetworkAllowlist}
-              placeholder="pypi.org, files.pythonhosted.org"
-              className="md:col-span-2"
-            />
-            <SelectField
-              label="Secret ref"
-              value={selectedSecretRefId}
-              onChange={setSelectedSecretRefId}
-              options={[
-                { value: "", label: "No secret mount" },
-                ...(state?.secret_refs.map((secretRef) => ({
-                  value: secretRef.id,
-                  label: secretRef.label,
-                })) ?? []),
-              ]}
-            />
-            <Field
-              label="Mount as"
-              value={secretMountAs}
-              onChange={setSecretMountAs}
-              placeholder="OPENAI_API_KEY or /var/run/..."
-            />
-          </div>
-          <div className="mt-4">
-            <ActionButton
-              label="Create repo profile"
-              onClick={createRepoProfile}
-              disabled={loading || !selectedRepositoryId || !reproduceCommand.trim() || !verifyCommand.trim()}
-            />
-          </div>
-          {state?.repo_profiles.length ? (
-            <ul className="mt-4 grid gap-2 text-sm text-[#35547d]">
-              {state.repo_profiles.map((profile) => (
-                <li
-                  key={profile.id}
-                  className="rounded-[16px] border border-[rgba(17,24,39,0.06)] bg-white px-4 py-3"
-                >
-                  {profile.runtime_kind} · verify <code>{profile.verify_command}</code>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-4 text-sm text-[#746d66]">No repo profile has been created yet.</p>
-          )}
-
-          <div className="mt-6 rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.82)] p-5">
-            <div className="flex flex-col gap-2">
-              <p className="text-sm font-semibold text-[#171717]">Map deployable services</p>
-              <p className="text-sm leading-6 text-[#746d66]">
-                Give each connected application surface a clear service identity, attach it to a
-                repo profile, and define which services must be available together.
-              </p>
-            </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <Field
-                label="Service name"
-                value={serviceName}
-                onChange={setServiceName}
-                placeholder="Web client"
-                helperText={serviceSlug ? `Slug auto-generated as ${serviceSlug}` : "Slug auto-generated from the service name"}
-              />
-              <SelectField
-                label="Service type"
-                value={serviceType}
-                onChange={(value) =>
-                  setServiceType(
-                    value as
-                      | "frontend"
-                      | "backend"
-                      | "api"
-                      | "worker"
-                      | "cron"
-                      | "gateway"
-                      | "database"
-                      | "cache"
-                      | "other",
-                  )
-                }
-                options={[
-                  { value: "frontend", label: "Frontend" },
-                  { value: "backend", label: "Backend" },
-                  { value: "api", label: "API" },
-                  { value: "worker", label: "Worker" },
-                  { value: "cron", label: "Cron" },
-                  { value: "gateway", label: "Gateway" },
-                  { value: "database", label: "Database" },
-                  { value: "cache", label: "Cache" },
-                  { value: "other", label: "Other" },
-                ]}
-              />
-              <SelectField
-                label="Repo profile"
-                value={selectedServiceRepoProfileId}
-                onChange={setSelectedServiceRepoProfileId}
-                options={[
-                  { value: "", label: "Choose a repo profile" },
-                  ...(state?.repo_profiles.map((profile) => ({
-                    value: profile.id,
-                    label: `${profile.runtime_kind} · ${profile.verify_command}`,
-                  })) ?? []),
-                ]}
-              />
-              <Field
-                label="Owner"
-                value={serviceOwner}
-                onChange={setServiceOwner}
-                placeholder="Platform team"
-              />
-              <Field
-                label="Deploy target"
-                value={serviceDeployTarget}
-                onChange={setServiceDeployTarget}
-                placeholder="Production web"
-              />
-              <Field
-                label="Telemetry service names"
-                value={serviceRoutingNames}
-                onChange={setServiceRoutingNames}
-                placeholder="web, app-frontend"
-              />
-              <Field
-                label="Path prefixes"
-                value={servicePathPrefixes}
-                onChange={setServicePathPrefixes}
-                placeholder="src/app, web/"
-              />
-              <Field
-                label="Domains"
-                value={serviceDomains}
-                onChange={setServiceDomains}
-                placeholder="app.example.com"
-              />
-              <Field
-                label="Tags"
-                value={serviceTags}
-                onChange={setServiceTags}
-                placeholder="react, customer-facing"
-              />
-              <Field
-                label="Healthcheck command"
-                value={serviceHealthcheckCommand}
-                onChange={setServiceHealthcheckCommand}
-                placeholder="curl -f http://localhost:3000/health"
-                className="md:col-span-2"
-              />
-              <Field
-                label="Healthcheck URL"
-                value={serviceHealthcheckUrl}
-                onChange={setServiceHealthcheckUrl}
-                placeholder="http://localhost:3000/health"
-                className="md:col-span-2"
-              />
-            </div>
-
-            {state?.project_services.length ? (
-              <div className="mt-5 rounded-[20px] border border-[rgba(17,24,39,0.06)] bg-[#f8fbff] p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
-                  Dependencies
+          <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.72)] p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8178]">
+                  Step 5 mode
                 </p>
-                <div className="mt-3 grid gap-2">
-                  {state.project_services.map((service) => (
-                    <label
-                      key={service.id}
-                      className="flex items-center gap-3 rounded-[16px] border border-[rgba(17,24,39,0.06)] bg-white px-4 py-3 text-sm text-[#35547d]"
+                <p className="text-sm leading-6 text-[#64584f]">
+                  Auto-detected as{" "}
+                  <span className="font-semibold text-[#171717]">
+                    {detectedStepFiveMode === "single" ? "single repo" : "multi repo"}
+                  </span>{" "}
+                  based on the repo profiles already configured for this project.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: null, label: "Auto" },
+                  { value: "single" as const, label: "Single repo" },
+                  { value: "multi" as const, label: "Multi repo" },
+                ].map((option) => {
+                  const active =
+                    stepFivePreviewMode === option.value ||
+                    (option.value === null && stepFivePreviewMode === null);
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      onClick={() => setStepFivePreviewMode(option.value)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold tracking-[0.08em] transition ${
+                        active
+                          ? "border-[rgba(23,23,23,0.14)] bg-[rgba(23,23,23,0.92)] text-white"
+                          : "border-[rgba(17,24,39,0.08)] bg-white text-[#6f655d] hover:border-[rgba(255,106,61,0.26)] hover:text-[#171717]"
+                      }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={selectedDependencyIds.includes(service.id)}
-                        onChange={() =>
-                          setSelectedDependencyIds((current) =>
-                            current.includes(service.id)
-                              ? current.filter((item) => item !== service.id)
-                              : [...current, service.id],
-                          )
-                        }
-                      />
-                      <span>
-                        {service.name} · {service.service_type}
-                      </span>
-                    </label>
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {loadingRepoProfileInference ? (
+            <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+              Inspecting the connected repo for install and verify commands...
+            </div>
+          ) : repoProfileInference ? (
+            <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-4">
+              <p className="text-sm font-semibold text-[#171717]">Detected from the connected repo</p>
+              <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                Suggested from {repoProfileInference.detected_from.join(", ") || "the repository structure"}.
+              </p>
+              {repoProfileInference.warnings.length ? (
+                <div className="mt-3 space-y-2">
+                  {repoProfileInference.warnings.map((warning) => (
+                    <p
+                      key={warning}
+                      className="rounded-[14px] bg-[rgba(255,106,61,0.08)] px-3 py-2 text-sm text-[#8f4b31]"
+                    >
+                      {warning}
+                    </p>
                   ))}
                 </div>
-              </div>
-            ) : null}
-
-            <div className="mt-4">
-              <ActionButton
-                label="Add project service"
-                onClick={createProjectService}
-                disabled={loading || !serviceName.trim() || !serviceSlug.trim() || !selectedServiceRepoProfileId}
-              />
+              ) : null}
             </div>
+          ) : null}
 
-            {state?.project_services.length ? (
-              <div className="mt-4 grid gap-3">
-                {state.project_services.map((service) => (
-                  <div
-                    key={service.id}
-                    className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-[#171717]">{service.name}</p>
-                      <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#d45a2b]">
-                        {service.service_type}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-[#746d66]">
-                      Repo profile:{" "}
-                      {state.repo_profiles.find((profile) => profile.id === service.repo_profile_id)?.verify_command ??
-                        "Unmapped"}
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-[#746d66]">
-                      Routing hints:{" "}
-                      {[
-                        ...service.routing_hints.service_names,
-                        ...service.routing_hints.path_prefixes,
-                        ...service.routing_hints.domains,
-                      ].join(", ") || "No routing hints yet"}
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-[#746d66]">
-                      Dependencies:{" "}
-                      {service.dependencies.length
-                        ? service.dependencies
-                            .map((dependency) => {
-                              const target = state.project_services.find(
-                                (candidate) => candidate.id === dependency.depends_on_service_id,
-                              );
-                              return target?.name ?? dependency.depends_on_service_id;
-                            })
-                            .join(", ")
-                        : "None"}
-                    </p>
-                  </div>
-                ))}
+          {effectiveStepFiveMode === "single" ? (
+            <div className="mt-4 rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-semibold text-[#171717]">Single repo setup</p>
+                <p className="text-sm leading-6 text-[#746d66]">
+                  For single repo projects, just confirm how the sandbox should verify the repo and
+                  give the deployable surface a clean service name. Routing and execution defaults are
+                  inferred automatically and can be refined later if needed.
+                </p>
               </div>
-            ) : (
-              <p className="mt-4 text-sm text-[#746d66]">
-                No project services have been mapped yet.
-              </p>
-            )}
-          </div>
-        </StepPanel>
 
-        <section className="rounded-[28px] border border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,rgba(242,236,228,0.98),rgba(235,229,221,0.98))] p-6 shadow-[0_12px_32px_rgba(15,23,42,0.05)]">
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8178]">
-                Current onboarding state
-              </p>
-              {state ? (
-                <ul className="mt-4 space-y-2 text-sm leading-6 text-[#5f6470]">
-                  {state.suggested_next_steps.map((item) => (
-                    <li key={item}>• {item}</li>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <ReadOnlyField
+                  label="Repository"
+                  value={
+                    (effectiveServiceRepository
+                      ? `${effectiveServiceRepository.owner}/${effectiveServiceRepository.name}`
+                      : null) ??
+                    (() => {
+                      const selectedRepository = repositories.find(
+                        (repository) => repository.id === selectedRepositoryId,
+                      );
+                      return selectedRepository
+                        ? `${selectedRepository.owner}/${selectedRepository.name}`
+                        : null;
+                    })() ??
+                    "Select a repo in step 3"
+                  }
+                />
+                <ReadOnlyField
+                  label="Repo profile"
+                  value={inferredSingleRepoProfile ? "Already configured" : "Will be created now"}
+                />
+                <ReadOnlyField label="Mode" value="Single repo" />
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <Field
+                  label="Service name"
+                  value={serviceName}
+                  onChange={setServiceName}
+                  placeholder="Web app"
+                  helperText={
+                    serviceSlug
+                      ? `Slug auto-generated as ${serviceSlug}`
+                      : "Slug auto-generated from the service name"
+                  }
+                />
+                <SelectField
+                  label="Service type"
+                  value={serviceType}
+                  onChange={(value) =>
+                    setServiceType(
+                      value as
+                        | "frontend"
+                        | "backend"
+                        | "fullstack"
+                        | "api"
+                        | "worker"
+                        | "cron"
+                        | "gateway"
+                        | "database"
+                        | "cache"
+                        | "other",
+                    )
+                  }
+                  options={[
+                    { value: "frontend", label: "Frontend" },
+                    { value: "backend", label: "Backend" },
+                    { value: "fullstack", label: "Fullstack" },
+                    { value: "api", label: "API" },
+                    { value: "worker", label: "Worker" },
+                    { value: "cron", label: "Cron" },
+                    { value: "gateway", label: "Gateway" },
+                    { value: "database", label: "Database" },
+                    { value: "cache", label: "Cache" },
+                    { value: "other", label: "Other" },
+                  ]}
+                  helperText="Use Fullstack for a true monorepo app deployed together. If frontend and backend deploy separately, create one service per surface instead."
+                />
+                <Field
+                  label="Verify command"
+                  value={verifyCommand}
+                  onChange={setVerifyCommand}
+                  placeholder="npm test or pytest"
+                  className="md:col-span-2"
+                  helperText={
+                    repoProfileInference?.verify_command
+                      ? "Detected automatically. Review it if this repo has more than one deployable surface."
+                      : "This is the main command the sandbox should use to confirm the fix worked."
+                  }
+                />
+                <Field
+                  label="Install command"
+                  value={installCommand}
+                  onChange={setInstallCommand}
+                  placeholder="npm install or pip install -r requirements.txt"
+                  className="md:col-span-2"
+                  helperText={
+                    repoProfileInference?.install_command
+                      ? "Detected automatically from the connected repo."
+                      : undefined
+                  }
+                />
+              </div>
+
+              {hasSecrets ? (
+                <RepoSecretMountEditor
+                  mode="single"
+                  secretRefs={state?.secret_refs ?? []}
+                  mounts={repoSecretMounts}
+                  onAttachSecret={attachRepoSecretMount}
+                  onUpdateMount={updateRepoSecretMount}
+                  onRemoveMount={removeRepoSecretMount}
+                />
+              ) : null}
+
+              <div className="mt-5">
+                <ActionButton
+                  label={inferredSingleRepoProfile ? "Create project service" : "Create repo profile and service"}
+                  onClick={completeSingleRepoSetup}
+                  disabled={loading || !canCompleteSingleRepoSetup}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-4">
+              <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm font-semibold text-[#171717]">Repo profiles</p>
+                  <p className="text-sm leading-6 text-[#746d66]">
+                    Multi repo projects need a profile for each repo that might run in the sandbox.
+                    Create those first, then map them into named services below. Base images, network
+                    rules, and other low-level execution settings are inferred automatically unless you
+                    need to revisit them later.
+                  </p>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Field
+                    label="Install command"
+                    value={installCommand}
+                    onChange={setInstallCommand}
+                    placeholder="pip install -r requirements.txt"
+                    className="md:col-span-2"
+                    helperText={
+                      repoProfileInference?.install_command
+                        ? "Detected automatically from the connected repo."
+                        : undefined
+                    }
+                  />
+                  <Field
+                    label="Verify command"
+                    value={verifyCommand}
+                    onChange={setVerifyCommand}
+                    placeholder="pytest"
+                    className="md:col-span-2"
+                    helperText={
+                      repoProfileInference?.verify_command
+                        ? "Detected automatically from the connected repo. Adjust it if this repo contains multiple services."
+                        : undefined
+                    }
+                  />
+                </div>
+                <RepoSecretMountEditor
+                  mode="multi"
+                  secretRefs={state?.secret_refs ?? []}
+                  mounts={repoSecretMounts}
+                  onAttachSecret={attachRepoSecretMount}
+                  onUpdateMount={updateRepoSecretMount}
+                  onRemoveMount={removeRepoSecretMount}
+                />
+                <div className="mt-4">
+                  <ActionButton
+                    label="Create repo profile"
+                    onClick={createRepoProfile}
+                    disabled={loading || !selectedRepositoryId || !verifyCommand.trim()}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.82)] p-5">
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm font-semibold text-[#171717]">Map deployable services</p>
+                  <p className="text-sm leading-6 text-[#746d66]">
+                    Attach each app surface to a repo profile, then define the routing hints and
+                    dependencies the sandbox needs to understand the full stack.
+                  </p>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Field
+                    label="Service name"
+                    value={serviceName}
+                    onChange={setServiceName}
+                    placeholder="Web client"
+                    helperText={
+                      serviceSlug
+                        ? `Slug auto-generated as ${serviceSlug}`
+                        : "Slug auto-generated from the service name"
+                    }
+                  />
+                  <SelectField
+                    label="Service type"
+                    value={serviceType}
+                    onChange={(value) =>
+                      setServiceType(
+                        value as
+                          | "frontend"
+                          | "backend"
+                          | "fullstack"
+                          | "api"
+                          | "worker"
+                          | "cron"
+                          | "gateway"
+                          | "database"
+                          | "cache"
+                          | "other",
+                      )
+                    }
+                    options={[
+                      { value: "frontend", label: "Frontend" },
+                      { value: "backend", label: "Backend" },
+                      { value: "fullstack", label: "Fullstack" },
+                      { value: "api", label: "API" },
+                      { value: "worker", label: "Worker" },
+                      { value: "cron", label: "Cron" },
+                      { value: "gateway", label: "Gateway" },
+                      { value: "database", label: "Database" },
+                      { value: "cache", label: "Cache" },
+                      { value: "other", label: "Other" },
+                    ]}
+                    helperText="If one repo powers multiple deployable surfaces, map each one as its own service instead of choosing a single combined type."
+                  />
+                  <SelectField
+                    label="Repo profile"
+                    value={selectedServiceRepoProfileId}
+                    onChange={setSelectedServiceRepoProfileId}
+                    options={[
+                      { value: "", label: "Choose a repo profile" },
+                      ...(state?.repo_profiles.map((profile) => ({
+                        value: profile.id,
+                        label: `${profile.runtime_kind} · ${profile.verify_command}`,
+                      })) ?? []),
+                    ]}
+                  />
+                </div>
+
+                <div className="mt-4">
+                  <ActionButton
+                    label="Add project service"
+                    onClick={createProjectService}
+                    disabled={loading || !serviceName.trim() || !serviceSlug.trim() || !effectiveServiceRepoProfileId}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-5">
+              <p className="text-sm font-semibold text-[#171717]">Configured repo profiles</p>
+              {state?.repo_profiles.length ? (
+                <ul className="mt-4 grid gap-2 text-sm text-[#35547d]">
+                  {state.repo_profiles.map((profile) => (
+                    <li
+                      key={profile.id}
+                      className="rounded-[16px] border border-[rgba(17,24,39,0.06)] bg-white px-4 py-3"
+                    >
+                      {profile.runtime_kind} · verify <code>{profile.verify_command}</code>
+                    </li>
                   ))}
                 </ul>
               ) : (
+                <p className="mt-4 text-sm text-[#746d66]">No repo profile has been created yet.</p>
+              )}
+            </div>
+
+            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-5">
+              <p className="text-sm font-semibold text-[#171717]">Mapped project services</p>
+              {state?.project_services.length ? (
+                <div className="mt-4 grid gap-3">
+                  {state.project_services.map((service) => (
+                    <div
+                      key={service.id}
+                      className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-[#171717]">{service.name}</p>
+                        <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#d45a2b]">
+                          {service.service_type}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-[#746d66]">
+                        Repo profile:{" "}
+                        {state.repo_profiles.find((profile) => profile.id === service.repo_profile_id)?.verify_command ??
+                          "Unmapped"}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                        Routing hints:{" "}
+                        {[
+                          ...service.routing_hints.service_names,
+                          ...service.routing_hints.path_prefixes,
+                          ...service.routing_hints.domains,
+                        ].join(", ") || "No routing hints yet"}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                        Dependencies:{" "}
+                        {service.dependencies.length
+                          ? service.dependencies
+                              .map((dependency) => {
+                                const target = state.project_services.find(
+                                  (candidate) => candidate.id === dependency.depends_on_service_id,
+                                );
+                                return target?.name ?? dependency.depends_on_service_id;
+                              })
+                              .join(", ")
+                          : "None"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
                 <p className="mt-4 text-sm text-[#746d66]">
-                  Bootstrap a project to begin the secure onboarding flow.
+                  No project services have been mapped yet.
                 </p>
               )}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-              <MiniStat label="Integrations" value={String(state?.integrations.length ?? 0)} />
-              <MiniStat label="Repositories" value={String(repositories.length)} />
-              <MiniStat label="Secrets" value={String(state?.secret_refs.length ?? 0)} />
-              <MiniStat label="Repo profiles" value={String(state?.repo_profiles.length ?? 0)} />
-              <MiniStat label="Services" value={String(state?.project_services.length ?? 0)} />
+          </div>
+        </StepPanel>
+
+        <StepPanel
+          step="06"
+          stepKey="6"
+          title="Enable telemetry and SDK bootstrap"
+          description="Create the project API key used for telemetry ingest, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
+          complete={hasActiveApiKeys && hasSdkSetup}
+          editable={hasActiveApiKeys || hasSdkSetup || Boolean(telemetryKeyPlaintext)}
+          isEditing={editingStepKey === "6"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "6"}
+          onEdit={() => beginStepEditing("6")}
+          onCancelEdit={cancelStepEditing}
+          sectionRef={(node) => {
+            stepRefs.current["6"] = node;
+          }}
+        >
+          <div className="rounded-[28px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] overflow-hidden">
+            <div className="px-6 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#171717]">Telemetry key</p>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
+                    Create the project-scoped API key first. Your app will use it for both telemetry
+                    delivery and heartbeat verification after the SDK is deployed.
+                  </p>
+                </div>
+                <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f655d]">
+                  {sdkStatusLabel}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <Field
+                  label="API key name"
+                  value={telemetryKeyName}
+                  onChange={setTelemetryKeyName}
+                  placeholder="Production telemetry key"
+                />
+                <ActionButton
+                  label={activeApiKeys.length ? "Generate another key" : "Create telemetry key"}
+                  onClick={createTelemetryApiKey}
+                  disabled={loading || !telemetryKeyName.trim()}
+                  variant={activeApiKeys.length ? "secondary" : "primary"}
+                />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <ReadOnlyField label="Active keys" value={String(activeApiKeys.length)} />
+                <ReadOnlyField
+                  label="Target service"
+                  value={sdkServiceName.trim() || serviceName || "web-app"}
+                />
+                <ReadOnlyField
+                  label="Environment"
+                  value={sdkEnvironment.trim() || "production"}
+                />
+              </div>
+              {telemetryKeyPlaintext ? (
+                <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-[rgba(240,253,244,0.92)] px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <p className="text-sm font-semibold text-[#166534]">New plaintext API key</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyTelemetryKeyToClipboard();
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full border border-[rgba(22,101,52,0.16)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#166534] transition hover:border-[rgba(22,101,52,0.24)] hover:bg-white"
+                    >
+                      <CopyMiniGlyph />
+                      {copiedTelemetryKey ? "Copied" : "Copy key"}
+                    </button>
+                  </div>
+                  <p className="mt-1 break-all font-mono text-xs leading-6 text-[#166534]">
+                    {telemetryKeyPlaintext}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-[#4d7c0f]">
+                    This plaintext value is only shown here right after creation. Save it in your
+                    deployment environment before leaving the page.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#171717]">Choose setup mode</p>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
+                    Pick the path you want. Automatic mode attempts the SDK integration for you and
+                    prepares a reviewed PR preview. Manual mode shows the exact code and config to add
+                    yourself. You can switch between them at any time.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={chooseAutomaticSdkMode}
+                  className={`group rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
+                    sdkSetupMode === "automatic"
+                      ? "border-[rgba(255,106,61,0.28)] bg-white shadow-[0_16px_32px_rgba(255,106,61,0.08)]"
+                      : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.22)] hover:bg-white hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-[#171717]">Automatic SDK installation PR</p>
+                    </div>
+                    <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178] transition group-hover:text-[#9b4c2f]">
+                      Click to choose
+                      <span className="transition group-hover:translate-x-0.5">→</span>
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[#746d66]">
+                    First choose this path, then explicitly start the automatic attempt below when you
+                    are ready.
+                  </p>
+                  <div className="mt-3 rounded-[16px] bg-[rgba(255,106,61,0.06)] px-3 py-2 text-xs font-medium text-[#8f4b31]">
+                    Best when you want Stimpact to inspect the repo and draft a reviewable PR preview.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={openManualSdkMode}
+                  className={`group rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
+                    sdkSetupMode === "manual"
+                      ? "border-[rgba(23,56,93,0.18)] bg-white shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
+                      : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:-translate-y-0.5 hover:border-[rgba(23,56,93,0.18)] hover:bg-white hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-[#171717]">Manual installation mode</p>
+                    <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178] transition group-hover:text-[#17385d]">
+                      Click to choose
+                      <span className="transition group-hover:translate-x-0.5">→</span>
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[#746d66]">
+                    Use the generated framework guidance, environment variables, and starter code to
+                    add the SDK yourself in the correct runtime entrypoint.
+                  </p>
+                  <div className="mt-3 rounded-[16px] bg-[rgba(23,56,93,0.06)] px-3 py-2 text-xs font-medium text-[#35547d]">
+                    Best when you want full control over where and how the SDK is added.
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+              {sdkSetupMode === "automatic" ? (
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm font-semibold text-[#171717]">Automatic bootstrap PR</p>
+                    <p className="text-sm leading-6 text-[#746d66]">
+                      Review the exact repository surface Stimpact found, then approve the generated
+                      bootstrap PR only if it looks correct.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field
+                      label="Service name"
+                      value={sdkServiceName}
+                      onChange={setSdkServiceName}
+                      placeholder="web-app"
+                    />
+                    <Field
+                      label="Environment"
+                      value={sdkEnvironment}
+                      onChange={setSdkEnvironment}
+                      placeholder="production"
+                    />
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <ReadOnlyField
+                      label="Target repository"
+                      value={
+                        sdkTargetRepositoryId
+                          ? (() => {
+                              const repository = repositories.find((candidate) => candidate.id === sdkTargetRepositoryId);
+                              return repository ? `${repository.owner}/${repository.name}` : sdkTargetRepositoryId;
+                            })()
+                          : "Choose and configure a repository first"
+                      }
+                    />
+                    <ReadOnlyField
+                      label="Planner runtime"
+                      value={sdkBootstrapPlan?.runtime ?? "Waiting for repository signal"}
+                    />
+                  </div>
+                  <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#fffdfb,#fff7f1)] px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-full border ${
+                            sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                              ? "border-[rgba(255,106,61,0.18)] bg-[rgba(255,106,61,0.12)]"
+                              : sdkAutomationStage === "ready"
+                                ? "border-[rgba(34,197,94,0.18)] bg-[rgba(34,197,94,0.12)]"
+                                : sdkAutomationStage === "manual_only"
+                                  ? "border-[rgba(29,26,24,0.08)] bg-[rgba(29,26,24,0.06)]"
+                                  : "border-[rgba(17,24,39,0.08)] bg-white/80"
+                          }`}
+                        >
+                          <span
+                            className={`inline-flex h-4 w-4 rounded-full ${
+                              sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                ? "animate-spin border-2 border-[rgba(255,106,61,0.25)] border-t-[rgba(255,90,42,0.96)]"
+                                : sdkAutomationStage === "ready"
+                                  ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)]"
+                                  : sdkAutomationStage === "manual_only"
+                                    ? "bg-[rgba(29,26,24,0.22)]"
+                                    : "bg-[rgba(23,23,23,0.14)]"
+                            }`}
+                          />
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-[#171717]">Automatic setup activity</p>
+                          <p className="text-xs uppercase tracking-[0.16em] text-[#8a8178]">
+                            {sdkAutomationStage === "planning"
+                              ? "Thinking"
+                              : sdkAutomationStage === "previewing"
+                                ? "Drafting preview"
+                                : sdkAutomationStage === "ready"
+                                  ? "Ready for review"
+                                  : sdkAutomationStage === "manual_only"
+                                    ? "Manual only"
+                                    : "Idle"}
+                          </p>
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                          sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                            ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                            : sdkAutomationStage === "ready"
+                              ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                              : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
+                        }`}
+                      >
+                        {selectedSdkStrategy?.source === "llm"
+                          ? "LLM fallback in play"
+                          : "Deterministic first"}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-[#746d66]">{automaticModePrimaryMessage}</p>
+                    <div className="mt-4 overflow-hidden rounded-full bg-[rgba(17,24,39,0.06)]">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-500 ${
+                          sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                            ? "w-2/3 animate-pulse bg-[linear-gradient(90deg,#ff754b_0%,#ff5a2a_55%,#ffd1c1_100%)]"
+                            : sdkAutomationStage === "ready"
+                              ? "w-full bg-[linear-gradient(90deg,#22c55e,#16a34a)]"
+                              : sdkAutomationStage === "manual_only"
+                                ? "w-full bg-[rgba(29,26,24,0.16)]"
+                                : "w-0 bg-transparent"
+                        }`}
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-3">
+                      {automaticWorkflowItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className={`flex items-start gap-3 rounded-[16px] border px-4 py-3 ${
+                            item.state === "active"
+                              ? "border-[rgba(255,106,61,0.18)] bg-[rgba(255,255,255,0.96)] shadow-[0_12px_26px_rgba(255,106,61,0.08)]"
+                              : "border-[rgba(17,24,39,0.06)] bg-white/80"
+                          }`}
+                        >
+                          <span
+                            className={`mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                              item.state === "complete"
+                                ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                : item.state === "active"
+                                  ? "bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white animate-pulse"
+                                  : item.state === "blocked"
+                                    ? "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
+                                    : "bg-[rgba(23,23,23,0.06)] text-[#8a8178]"
+                            }`}
+                          >
+                            {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
+                          </span>
+                          <div>
+                            <p className="text-sm font-semibold text-[#171717]">{item.label}</p>
+                            <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.detail}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {sdkSetupMode === "automatic" && !sdkAutomaticRequested ? (
+                      <div className="mt-4">
+                        <ActionButton
+                          label="Start automatic attempt"
+                          onClick={startAutomaticSdkWorkflow}
+                          disabled={loading || !sdkTargetRepositoryId || !platformBaseUrl}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  {!platformBaseUrl ? (
+                    <p className="rounded-[16px] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-[#8f4b31]">
+                      Set `AGENT_PLATFORM_PUBLIC_BASE_URL` before automatic setup so the generated
+                      SDK config points at the correct public Stimpact URL.
+                    </p>
+                  ) : null}
+                  {loadingSdkBootstrapPlan ? (
+                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                      Inspecting the selected repository for supported SDK bootstrap surfaces...
+                    </p>
+                  ) : sdkBootstrapPlan?.warnings.length ? (
+                    <div className="space-y-2">
+                      {sdkBootstrapPlan.warnings.map((warning) => (
+                        <p
+                          key={warning}
+                          className="rounded-[16px] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-[#8f4b31]"
+                        >
+                          {warning}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {sdkBootstrapPlan?.strategies.length ? (
+                    <div className="grid gap-3">
+                      {sdkBootstrapPlan.strategies.map((strategy) => {
+                        const selected = selectedSdkStrategy?.id === strategy.id;
+                        return (
+                          <button
+                            key={strategy.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSdkStrategyId(strategy.id);
+                              setDismissedSdkPreviewStrategyId(null);
+                            }}
+                            className={`rounded-[20px] border px-4 py-4 text-left transition ${
+                              selected
+                                ? "border-[rgba(23,23,23,0.18)] bg-white shadow-[0_14px_28px_rgba(15,23,42,0.06)]"
+                                : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:border-[rgba(255,106,61,0.18)] hover:bg-white"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-semibold text-[#171717]">{strategy.framework}</p>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  strategy.source === "llm"
+                                    ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                    : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
+                                }`}
+                              >
+                                {strategy.source === "llm" ? "Model-assisted" : "Deterministic"}
+                              </span>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  strategy.pr_supported
+                                    ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                    : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
+                                }`}
+                              >
+                                {strategy.pr_supported ? `${strategy.confidence} confidence` : "Manual only"}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-[#746d66]">{strategy.summary}</p>
+                            {strategy.entrypoints.length ? (
+                              <p className="mt-2 text-xs leading-5 text-[#8a8178]">
+                                Entrypoint: {strategy.entrypoints.join(", ")}
+                              </p>
+                            ) : null}
+                            {strategy.confidence_reason ? (
+                              <p className="mt-2 text-xs leading-5 text-[#8a8178]">
+                                Why this surface: {strategy.confidence_reason}
+                              </p>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                      No supported automatic JavaScript or Python bootstrap surface was detected for
+                      this repository.
+                    </p>
+                  )}
+                  {loadingSdkBootstrapPreview ? (
+                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                      Building the exact bootstrap PR preview for the selected strategy...
+                    </p>
+                  ) : sdkBootstrapPreview ? (
+                    <>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <ReadOnlyField
+                          label="Planned branch"
+                          value={sdkBootstrapPreview.pull_request.branch_name}
+                        />
+                        <ReadOnlyField
+                          label="Draft PR title"
+                          value={sdkBootstrapPreview.pull_request.title}
+                        />
+                      </div>
+                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-[#171717]">Planner details</p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              sdkBootstrapPreview.strategy.source === "llm"
+                                ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
+                            }`}
+                          >
+                            {sdkBootstrapPreview.strategy.source === "llm"
+                              ? "Model-assisted strategy"
+                              : "Deterministic strategy"}
+                          </span>
+                        </div>
+                        {sdkBootstrapPreview.strategy.confidence_reason ? (
+                          <p className="mt-3 text-sm leading-6 text-[#746d66]">
+                            {sdkBootstrapPreview.strategy.confidence_reason}
+                          </p>
+                        ) : null}
+                        {sdkBootstrapPreview.strategy.evidence.length ? (
+                          <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
+                            {sdkBootstrapPreview.strategy.evidence.map((item) => (
+                              <li key={item}>`{item}`</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
+                        <p className="text-sm font-semibold text-[#171717]">Files Stimpact will change</p>
+                        <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
+                          {sdkBootstrapPreview.strategy.planned_files.map((item) => (
+                            <li key={`${item.path}-${item.action}`}>
+                              <span className="font-semibold text-[#171717]">{item.action.toUpperCase()}</span> `{item.path}` {item.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
+                        <CodePanel title="Patch preview" code={sdkBootstrapPreview.patch_diff} />
+                      </div>
+                    </>
+                  ) : automaticSdkAvailable ? (
+                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                      Choose a supported strategy and Stimpact will prepare the PR preview here.
+                    </p>
+                  ) : (
+                    <p className="rounded-[16px] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-[#8f4b31]">
+                      Automatic setup is not available for the selected surface yet. Switch to manual
+                      mode for the exact install instructions instead.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-3">
+                    <ActionButton
+                      label="Approve and create PR"
+                      onClick={createSdkBootstrapChangeRequest}
+                      disabled={
+                        loading ||
+                        !sdkTargetRepositoryId ||
+                        !platformBaseUrl ||
+                        !selectedSdkStrategy ||
+                        !selectedSdkStrategy.pr_supported ||
+                        !sdkBootstrapPreview ||
+                        loadingSdkBootstrapPreview
+                      }
+                    />
+                    <ActionButton
+                      label="Switch to manual mode"
+                      onClick={dismissSdkBootstrapPreview}
+                      disabled={loading || loadingSdkBootstrapPreview}
+                      variant="secondary"
+                    />
+                    {onboardingState?.sdk_setup_change_request_url ? (
+                      <a
+                        href={onboardingState.sdk_setup_change_request_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-4 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3]"
+                      >
+                        Open current PR
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm font-semibold text-[#171717]">Manual installation</p>
+                    <p className="text-sm leading-6 text-[#746d66]">
+                      Follow these instructions to install the SDK yourself and place it in the
+                      correct runtime entrypoint for this service.
+                    </p>
+                  </div>
+                  {selectedSdkStrategy ? (
+                    <>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <ReadOnlyField label="Framework" value={selectedSdkStrategy.framework} />
+                        <ReadOnlyField
+                          label="Install command"
+                          value={selectedSdkStrategy.install_command ?? "Install manually"}
+                        />
+                      </div>
+                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-[#171717]">Planner details</p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                              selectedSdkStrategy.source === "llm"
+                                ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
+                            }`}
+                          >
+                            {selectedSdkStrategy.source === "llm"
+                              ? "Model-assisted strategy"
+                              : "Deterministic strategy"}
+                          </span>
+                        </div>
+                        {selectedSdkStrategy.confidence_reason ? (
+                          <p className="mt-3 text-sm leading-6 text-[#746d66]">
+                            {selectedSdkStrategy.confidence_reason}
+                          </p>
+                        ) : null}
+                        {selectedSdkStrategy.evidence.length ? (
+                          <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
+                            {selectedSdkStrategy.evidence.map((item) => (
+                              <li key={item}>`{item}`</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <CodePanel title="Environment variables" code={sdkEnvironmentSnippet || "# No env vars detected"} />
+                        <CodePanel title="Starter snippet" code={sdkCodeSnippet || "# No starter snippet available"} />
+                      </div>
+                      {selectedSdkStrategy.manual_steps.length ? (
+                        <div className="space-y-3">
+                          {selectedSdkStrategy.manual_steps.map((item, index) => (
+                            <div key={`${selectedSdkStrategy.id}-${item.title}`} className="border-l-2 border-[rgba(255,106,61,0.24)] pl-4">
+                              <p className="text-sm font-semibold text-[#171717]">
+                                {index + 1}. {item.title}
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-sm text-[#746d66]">
+                      Choose a repository and let the planner inspect it to generate setup guidance.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-3">
+                    <ActionButton
+                      label="Mark manual setup complete"
+                      onClick={() => {
+                        setSdkSetupMode("manual");
+                        void saveSdkSetupStatus("manual");
+                      }}
+                      disabled={loading || (!activeApiKeys.length && !telemetryKeyPlaintext)}
+                      variant="success"
+                    />
+                    {automaticSdkAvailable ? (
+                      <ActionButton
+                        label="Use automatic PR instead"
+                        onClick={startAutomaticSdkWorkflow}
+                        disabled={loading}
+                        variant="secondary"
+                      />
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-[#171717]">Heartbeat verification</p>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
+                    This is the final check after setup and redeploy. Stimpact waits for a heartbeat
+                    from the deployed SDK to confirm the service is live and ready to send telemetry.
+                  </p>
+                </div>
+                <ActionButton
+                  label="Refresh verification"
+                  onClick={() => {
+                    void loadTelemetryVerification();
+                  }}
+                  disabled={loading || loadingTelemetryVerification || !(sdkServiceName.trim() || serviceName.trim())}
+                  variant="secondary"
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                    telemetryVerification?.status === "healthy"
+                      ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                      : telemetryVerification?.status === "stale"
+                        ? "bg-[rgba(245,158,11,0.14)] text-[#9a5b14]"
+                        : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
+                  }`}
+                >
+                  {telemetryVerificationStatusLabel}
+                </span>
+                <span className="text-xs text-[#8a8178]">
+                  {(sdkServiceName.trim() || serviceName || "web-app")} / {sdkEnvironment.trim() || "production"}
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <StatusValueCard
+                  label="Last heartbeat"
+                  value={
+                    telemetryVerification?.last_seen_at
+                      ? formatHeartbeatTimestamp(telemetryVerification.last_seen_at)
+                      : "Not seen yet"
+                  }
+                />
+                <StatusValueCard
+                  label="Last heartbeat commit"
+                  value={telemetryVerification?.commit_sha ?? "Unavailable"}
+                />
+              </div>
+              <p className="mt-4 text-sm leading-6 text-[#746d66]">
+                {telemetryVerification?.status === "healthy"
+                  ? "The deployed SDK is actively reaching Stimpact, so this service is live and ready to send telemetry when a real error occurs."
+                  : telemetryVerification?.status === "stale"
+                    ? "A heartbeat was seen before, but not recently. Redeploy the SDK-enabled service or refresh once the runtime is active again."
+                    : "No heartbeat has been seen yet. Finish setup, redeploy the service, then refresh verification here."}
+              </p>
             </div>
           </div>
-        </section>
+        </StepPanel>
+
+        <StepPanel
+          step="07"
+          stepKey="7"
+          title="Review automation controls"
+          description="Before the workspace is fully operational, confirm the autonomy mode and the core production safety guardrails for this project."
+          complete={hasReviewedPolicy}
+          editable={hasReviewedPolicy}
+          isEditing={editingStepKey === "7"}
+          editDisabled={Boolean(editingStepKey) && editingStepKey !== "7"}
+          onEdit={() => beginStepEditing("7")}
+          onCancelEdit={cancelStepEditing}
+          sectionRef={(node) => {
+            stepRefs.current["7"] = node;
+          }}
+        >
+          {policyDraft ? (
+            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <SelectField
+                  label="Autonomy mode"
+                  value={policyDraft.autonomy_mode}
+                  onChange={(value) =>
+                    setPolicyDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            autonomy_mode: value as ProjectPolicy["autonomy_mode"],
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "observe", label: "Observe" },
+                    { value: "recommend", label: "Recommend" },
+                    { value: "supervised_execute", label: "Supervised execute" },
+                    { value: "autonomous", label: "Autonomous" },
+                  ]}
+                />
+                <Field
+                  label="Approved services"
+                  value={policyDraft.approved_services.join(", ")}
+                  onChange={(value) =>
+                    setPolicyDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            approved_services: value
+                              .split(",")
+                              .map((item) => item.trim())
+                              .filter(Boolean),
+                          }
+                        : current,
+                    )
+                  }
+                  placeholder="web-app, billing-api"
+                  helperText="Only needed if you want autonomy restricted to a known subset of services."
+                />
+              </div>
+              <div className="mt-5 grid gap-3">
+                <PolicyToggleRow
+                  label="Require human approval"
+                  description="Keep an operator in the loop before Stimpact executes changes."
+                  checked={policyDraft.require_human_approval}
+                  onChange={(checked) =>
+                    setPolicyDraft((current) =>
+                      current ? { ...current, require_human_approval: checked } : current,
+                    )
+                  }
+                />
+                <PolicyToggleRow
+                  label="Allow production writes"
+                  description="Permit the platform to write back changes intended for production paths."
+                  checked={policyDraft.allow_production_writes}
+                  onChange={(checked) =>
+                    setPolicyDraft((current) =>
+                      current ? { ...current, allow_production_writes: checked } : current,
+                    )
+                  }
+                />
+                <PolicyToggleRow
+                  label="Allow low-risk autonomy"
+                  description="Let the platform handle lower-risk actions without escalating every time."
+                  checked={policyDraft.allow_low_risk_autonomy}
+                  onChange={(checked) =>
+                    setPolicyDraft((current) =>
+                      current ? { ...current, allow_low_risk_autonomy: checked } : current,
+                    )
+                  }
+                />
+                <PolicyToggleRow
+                  label="Restrict to approved services"
+                  description="Limit autonomy to the services listed above."
+                  checked={policyDraft.restrict_to_approved_services}
+                  onChange={(checked) =>
+                    setPolicyDraft((current) =>
+                      current ? { ...current, restrict_to_approved_services: checked } : current,
+                    )
+                  }
+                />
+              </div>
+              <div className="mt-5">
+                <ActionButton
+                  label="Confirm automation controls"
+                  onClick={saveAutomationControls}
+                  disabled={loading}
+                  variant="success"
+                />
+              </div>
+            </div>
+          ) : null}
+        </StepPanel>
+
+        <ManualFallbackDialog
+          open={showSdkManualFallbackDialog}
+          warnings={sdkBootstrapPlan?.warnings ?? []}
+          strategy={selectedManualFallbackStrategy}
+          onClose={() => setShowSdkManualFallbackDialog(false)}
+          onConfirm={() => {
+            openManualSdkMode();
+          }}
+        />
       </div>
     </div>
   );
-}
-
-function readCookieValue(name: string): string | null {
-  if (typeof document === "undefined") {
-    return null;
-  }
-  const match = document.cookie
-    .split("; ")
-    .find((value) => value.startsWith(`${name}=`));
-  if (!match) {
-    return null;
-  }
-  const [, cookieValue] = match.split("=", 2);
-  return cookieValue ? decodeURIComponent(cookieValue) : null;
 }
 
 function readIntegrationAccount(integration: ProjectOnboarding["integrations"][number]): string {
@@ -1415,6 +3634,11 @@ function StepPanel({
   title,
   description,
   complete,
+  editable = false,
+  isEditing = false,
+  editDisabled = false,
+  onEdit,
+  onCancelEdit,
   sectionRef,
   children,
 }: {
@@ -1423,13 +3647,47 @@ function StepPanel({
   title: string;
   description: string;
   complete?: boolean;
+  editable?: boolean;
+  isEditing?: boolean;
+  editDisabled?: boolean;
+  onEdit?: () => void;
+  onCancelEdit?: () => void;
   sectionRef?: (node: HTMLElement | null) => void;
   children: ReactNode;
 }) {
+  const sectionNodeRef = useRef<HTMLElement | null>(null);
+  const locked = complete && editable && !isEditing;
+
+  function handleSectionRef(node: HTMLElement | null) {
+    sectionNodeRef.current = node;
+    sectionRef?.(node);
+  }
+
+  function handleEdit() {
+    onEdit?.();
+    window.setTimeout(() => {
+      focusEditableControl();
+    }, 40);
+  }
+
+  function focusEditableControl() {
+    const section = sectionNodeRef.current;
+    if (!section) {
+      return;
+    }
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+    const target = section.querySelector<HTMLElement>(
+      "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), a[href]",
+    );
+    window.setTimeout(() => {
+      target?.focus();
+    }, 180);
+  }
+
   return (
     <section
       id={`onboarding-step-${stepKey}`}
-      ref={sectionRef}
+      ref={handleSectionRef}
       className="relative scroll-mt-24 overflow-hidden rounded-[28px] border border-[rgba(29,26,24,0.1)] bg-[linear-gradient(180deg,rgba(255,251,247,0.98),rgba(249,242,234,0.98))] px-6 py-6 shadow-[0_18px_40px_rgba(15,23,42,0.06)] lg:scroll-mt-28"
     >
       <div
@@ -1447,12 +3705,38 @@ function StepPanel({
                 Step {step}
               </span>
               <StepStatus complete={complete} />
+              {complete && editable && isEditing ? (
+                <span className="inline-flex rounded-full bg-[rgba(255,106,61,0.12)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#9b4c2f]">
+                  Editing
+                </span>
+              ) : null}
             </div>
             <h2 className="mt-3 text-2xl font-semibold text-[#171717]">{title}</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5f6470]">{description}</p>
           </div>
+          {complete && editable ? (
+            isEditing ? (
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="inline-flex items-center gap-2 self-start rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-3 py-2 text-sm font-semibold text-[#5f6470] transition hover:border-[rgba(29,26,24,0.14)] hover:bg-[#faf7f4] hover:text-[#171717]"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleEdit}
+                disabled={editDisabled}
+                aria-label={`Edit step ${step}`}
+                className="inline-flex h-11 w-11 cursor-pointer items-center justify-center self-start rounded-full border border-[rgba(23,56,93,0.14)] bg-white text-[#35547d] shadow-[0_10px_22px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.24)] hover:bg-[#fff8f3] hover:text-[#171717] hover:shadow-[0_16px_30px_rgba(15,23,42,0.12)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <EditMiniGlyph />
+              </button>
+            )
+          ) : null}
         </div>
-        <div className="mt-6">{children}</div>
+        <div className={`mt-6 ${locked ? "pointer-events-none opacity-60 saturate-[0.92]" : ""}`}>{children}</div>
       </div>
     </section>
   );
@@ -1600,12 +3884,12 @@ function OnboardingTimeline({
   onStepSelect: (step: (typeof STEP_ORDER)[number]) => void;
 }) {
   return (
-    <div className="mx-auto mt-8 max-w-[980px]">
+    <div className="mx-auto mt-8 max-w-[1320px]">
       <div className="relative hidden overflow-visible pb-2 pt-2 lg:block">
         <div
           className="absolute left-[10%] right-[10%] top-[3.75rem] h-[2px] bg-[linear-gradient(90deg,rgba(255,190,153,0.32),rgba(255,106,61,0.68),rgba(255,190,153,0.32))]"
         />
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-7 gap-2">
           {steps.map((item) => (
             <TimelineNode
               key={item.step}
@@ -1870,10 +4154,36 @@ function formatSecretTimestamp(value: string): string {
   }).format(new Date(timestamp));
 }
 
+function formatHeartbeatTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return "Awaiting signal";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
+}
+
 function PlusMiniGlyph() {
   return (
     <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current stroke-[1.8]">
       <path d="M8 3.25v9.5M3.25 8h9.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CopyMiniGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current stroke-[1.6]">
+      <rect x="6" y="4.5" width="6.5" height="8" rx="1.4" />
+      <path
+        d="M4.5 10.5H4A1.5 1.5 0 0 1 2.5 9V4A1.5 1.5 0 0 1 4 2.5h4A1.5 1.5 0 0 1 9.5 4v.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -1885,6 +4195,142 @@ function OverflowMenuGlyph() {
       <circle cx="8" cy="8" r="1.2" />
       <circle cx="13" cy="8" r="1.2" />
     </svg>
+  );
+}
+
+function EditMiniGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current stroke-[1.6]">
+      <path
+        d="M10.95 2.55a1.55 1.55 0 0 1 2.19 0l.31.31a1.55 1.55 0 0 1 0 2.19l-7.2 7.2-2.8.62.62-2.8 6.88-6.88Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M9.9 3.6 12.4 6.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function RepoSecretMountEditor({
+  mode,
+  secretRefs,
+  mounts,
+  onAttachSecret,
+  onUpdateMount,
+  onRemoveMount,
+}: {
+  mode: "single" | "multi";
+  secretRefs: ProjectOnboarding["secret_refs"];
+  mounts: RepoSecretMountDraft[];
+  onAttachSecret: (secretRefId: string) => void;
+  onUpdateMount: (draftId: string, field: "secretRefId" | "mountAs", nextValue: string) => void;
+  onRemoveMount: (draftId: string) => void;
+}) {
+  const attachedSecretIds = new Set(mounts.map((mount) => mount.secretRefId).filter(Boolean));
+  const availableSecretRefs = secretRefs.filter((secretRef) => !attachedSecretIds.has(secretRef.id));
+  const allProjectSecretsAttached = secretRefs.length > 0 && availableSecretRefs.length === 0;
+
+  return (
+    <div className="mt-4 border-t border-[rgba(17,24,39,0.08)] pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[#171717]">Secret mounts</p>
+          <p className="mt-1 text-sm leading-6 text-[#746d66]">
+            {mode === "single"
+              ? "For single repo setups, project secrets are auto-attached here so you can review and trim them instead of reselecting everything."
+              : "Attach only the project secrets this repo actually needs, with one click from the list below."}
+          </p>
+        </div>
+      </div>
+
+      {secretRefs.length ? (
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
+              {mode === "single" ? "Project secrets" : "Available project secrets"}
+            </p>
+            {mode === "single" && allProjectSecretsAttached ? (
+              <p className="text-xs font-medium text-[#746d66]">
+                All project secrets are attached. Remove any this repo does not need.
+              </p>
+            ) : null}
+          </div>
+          {availableSecretRefs.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {availableSecretRefs.map((secretRef) => (
+                <button
+                  key={secretRef.id}
+                  type="button"
+                  onClick={() => onAttachSecret(secretRef.id)}
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-white px-3 py-2 text-sm font-semibold text-[#17385d] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3] hover:text-[#171717]"
+                >
+                  <PlusMiniGlyph />
+                  {secretRef.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-[#746d66]">
+              {mode === "single"
+                ? "Everything from step 4 is already attached here for review."
+                : "All available project secrets are already attached to this repo profile."}
+            </p>
+          )}
+        </div>
+      ) : null}
+
+      {mounts.length ? (
+        <div className="mt-4 overflow-hidden rounded-[18px] border border-[rgba(17,24,39,0.06)] bg-[rgba(255,255,255,0.82)]">
+          <div className="border-b border-[rgba(17,24,39,0.06)] px-4 py-3">
+            <p className="text-xs font-medium text-[#746d66]">
+              Set the variable name or file path each attached secret should use inside the sandbox.
+            </p>
+          </div>
+          {mounts.map((mount, index) => (
+            <div
+              key={mount.id}
+              className={`px-4 py-4 ${index < mounts.length - 1 ? "border-b border-[rgba(17,24,39,0.06)]" : ""}`}
+            >
+              {(() => {
+                const selectedSecret =
+                  secretRefs.find((secretRef) => secretRef.id === mount.secretRefId) ?? null;
+                return (
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.1fr)_auto] md:items-end">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
+                        Secret {index + 1}
+                      </p>
+                      <p className="mt-1 truncate text-sm font-semibold text-[#171717]">
+                        {selectedSecret?.label ?? "Unknown secret"}
+                      </p>
+                    </div>
+                    <Field
+                      label="Mount as"
+                      value={mount.mountAs}
+                      onChange={(value) => onUpdateMount(mount.id, "mountAs", value)}
+                      placeholder="OPENAI_API_KEY or /var/run/..."
+                    />
+                    <div className="md:pb-[1px]">
+                      <ActionButton
+                        label="Remove"
+                        onClick={() => onRemoveMount(mount.id)}
+                        variant="secondary"
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-[#746d66]">
+          {mode === "single"
+            ? "No secrets are attached yet. Add one from your project secret list only if this repo needs it to install or verify correctly."
+            : "No secrets are attached yet. Pull in only the project secrets this repo needs."}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -1914,9 +4360,9 @@ function Field({
   return (
     <label className={`block ${className ?? ""}`}>
       <span className="mb-2 flex items-center justify-between gap-3 text-sm">
-        <span className="font-medium text-[#171717]">{label}</span>
+        <span className="font-semibold text-[#171717]">{label}</span>
         {helperText ? (
-          <span className="text-[11px] font-medium text-[#8d857d]">{helperText}</span>
+          <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#93867d]">{helperText}</span>
         ) : null}
       </span>
       <input
@@ -1935,7 +4381,7 @@ function Field({
         data-bwignore={suppressPasswordManagers ? "true" : undefined}
         data-op-ignore={suppressPasswordManagers ? "true" : undefined}
         data-protonpass-ignore={suppressPasswordManagers ? "true" : undefined}
-        className="w-full rounded-[16px] border border-[rgba(29,26,24,0.10)] bg-[rgba(255,250,245,0.82)] px-4 py-3 text-sm text-[#171717] outline-none transition placeholder:text-[#9c9388] focus:border-[rgba(255,106,61,0.36)] focus:bg-white"
+        className="w-full rounded-[16px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-3.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
       />
     </label>
   );
@@ -1943,11 +4389,23 @@ function Field({
 
 function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="block">
-      <span className="mb-2 block text-sm font-medium text-[#171717]">{label}</span>
-      <div className="w-full rounded-[16px] border border-[rgba(29,26,24,0.10)] bg-[linear-gradient(180deg,#f2eae1,#ede4da)] px-4 py-3 text-sm text-[#171717]">
-        {value}
+    <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(247,242,236,0.96),rgba(239,232,223,0.96))] px-4 py-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</span>
+        <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6f655d]">
+          Locked
+        </span>
       </div>
+      <div className="mt-3 text-sm font-medium text-[#171717]">{value}</div>
+    </div>
+  );
+}
+
+function StatusValueCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(247,242,236,0.96),rgba(239,232,223,0.96))] px-4 py-4">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</p>
+      <p className="mt-3 text-base font-medium text-[#171717]">{value}</p>
     </div>
   );
 }
@@ -1957,26 +4415,153 @@ function SelectField({
   value,
   onChange,
   options,
+  helperText,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
+  helperText?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0] ?? null;
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   return (
     <label className="block">
-      <span className="mb-2 block text-sm font-medium text-[#171717]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-[16px] border border-[rgba(29,26,24,0.10)] bg-[rgba(255,250,245,0.82)] px-4 py-3 text-sm text-[#171717] outline-none transition focus:border-[rgba(255,106,61,0.36)] focus:bg-white"
+      <span className="mb-2 block text-sm font-semibold text-[#171717]">{label}</span>
+      <div ref={containerRef} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className={`flex w-full items-center justify-between rounded-[16px] border px-4 py-3.5 text-left text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition ${
+            open
+              ? "border-[rgba(255,106,61,0.34)] bg-white shadow-[0_0_0_4px_rgba(255,106,61,0.08),0_18px_34px_rgba(15,23,42,0.08)]"
+              : "border-[rgba(20,24,33,0.12)] bg-white hover:border-[rgba(255,106,61,0.2)] hover:shadow-[0_10px_20px_rgba(15,23,42,0.06)]"
+          }`}
+        >
+          <span>{selectedOption?.label ?? "Select an option"}</span>
+          <span
+            aria-hidden="true"
+            className={`ml-3 text-[#8a8178] transition ${open ? "rotate-180" : ""}`}
+          >
+            <svg
+              viewBox="0 0 20 20"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m5.5 7.75 4.5 4.5 4.5-4.5" />
+            </svg>
+          </span>
+        </button>
+
+        {open ? (
+          <div
+            role="listbox"
+            className="absolute left-0 right-0 top-[calc(100%+0.55rem)] z-30 max-h-[280px] overflow-y-auto rounded-[20px] border border-[rgba(29,26,24,0.10)] bg-[linear-gradient(180deg,rgba(255,250,245,0.98),rgba(249,241,232,0.98))] p-2 shadow-[0_24px_48px_rgba(15,23,42,0.16)] backdrop-blur-xl"
+          >
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between rounded-[14px] px-3 py-3 text-sm transition ${
+                    active
+                      ? "bg-[rgba(255,106,61,0.14)] text-[#171717]"
+                      : "text-[#5f6470] hover:bg-[rgba(255,255,255,0.82)] hover:text-[#171717]"
+                  }`}
+                >
+                  <span>{option.label}</span>
+                  {active ? (
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9b4c2f]">
+                      Selected
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+      {helperText ? <p className="mt-2 text-[12px] leading-5 text-[#93867d]">{helperText}</p> : null}
+    </label>
+  );
+}
+
+function CodePanel({ title, code }: { title: string; code: string }) {
+  return (
+    <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[#fffdfb] p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{title}</p>
+      <pre className="mt-3 overflow-x-auto rounded-[14px] bg-[rgba(23,23,23,0.96)] px-4 py-3 text-xs leading-6 text-white">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function PolicyToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4">
+      <div>
+        <p className="text-sm font-semibold text-[#171717]">{label}</p>
+        <p className="mt-1 text-sm leading-6 text-[#746d66]">{description}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        className={`inline-flex h-7 min-w-[3.25rem] items-center rounded-full border px-1 transition ${
+          checked
+            ? "border-[rgba(22,163,74,0.28)] bg-[linear-gradient(180deg,#22c55e,#16a34a)] justify-end"
+            : "border-[rgba(17,24,39,0.1)] bg-[rgba(29,26,24,0.08)] justify-start"
+        }`}
+        aria-pressed={checked}
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        <span className="h-5 w-5 rounded-full bg-white shadow-[0_4px_10px_rgba(15,23,42,0.12)]" />
+      </button>
     </label>
   );
 }
@@ -1997,9 +4582,9 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`inline-flex items-center justify-center rounded-[16px] px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`inline-flex items-center justify-center rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
         variant === "secondary"
-          ? "border border-[rgba(29,26,24,0.08)] bg-[rgba(255,250,245,0.84)] text-[#17385d] hover:border-[rgba(255,106,61,0.2)] hover:bg-[#fff5ef]"
+          ? "border border-[rgba(23,56,93,0.14)] bg-white text-[#17385d] shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.24)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.10)]"
           : variant === "success"
             ? "bg-[linear-gradient(180deg,#1fbf68_0%,#16a34a_100%)] text-white shadow-[0_14px_28px_rgba(22,163,74,0.18)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(22,163,74,0.24)]"
           : "bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
@@ -2007,6 +4592,91 @@ function ActionButton({
     >
       {label}
     </button>
+  );
+}
+
+function ManualFallbackDialog({
+  open,
+  warnings,
+  strategy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  warnings: string[];
+  strategy: SdkBootstrapPlanPreview["strategies"][number] | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-[rgba(15,23,42,0.42)] px-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,#fffdfb,#f8efe7)] p-6 shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#9b4c2f]">
+              Automatic setup unavailable
+            </p>
+            <h3 className="mt-2 text-xl font-semibold text-[#171717]">
+              Stimpact could not prepare a safe automatic SDK PR
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-[rgba(29,26,24,0.08)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#6f655d] transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white"
+          >
+            Close
+          </button>
+        </div>
+
+        <p className="mt-4 text-sm leading-6 text-[#746d66]">
+          The planner inspected this repository, but it did not find a safe runtime entrypoint for an
+          automatic patch. Stimpact kept the safer manual route instead of guessing.
+        </p>
+
+        {warnings.length ? (
+          <div className="mt-4 space-y-2">
+            {warnings.map((warning) => (
+              <p
+                key={warning}
+                className="rounded-[16px] bg-[rgba(255,106,61,0.08)] px-4 py-3 text-sm text-[#8f4b31]"
+              >
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : null}
+
+        {strategy ? (
+          <div className="mt-4 rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white/80 px-4 py-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-[#171717]">{strategy.framework}</p>
+              <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6f655d]">
+                Manual setup
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-[#746d66]">{strategy.summary}</p>
+            {strategy.blockers.length ? (
+              <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
+                {strategy.blockers.map((item) => (
+                  <li key={item}>• {item}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          <ActionButton label="Continue to manual setup" onClick={onConfirm} />
+          <ActionButton label="Stay here" onClick={onClose} variant="secondary" />
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

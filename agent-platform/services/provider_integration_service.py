@@ -28,6 +28,7 @@ from services.aws_secrets_manager import SecretsReader, SecretsWriter
 from services.github_provider import GitHubProviderClient
 from services.gitlab_provider import GitLabProviderClient
 from services.provider_clients import ProviderInstallation, get_provider_client
+from services.repo_profile_inference import RepoProfileInferenceResult, infer_repo_profile_from_clone
 
 
 @dataclass(slots=True)
@@ -141,21 +142,38 @@ class ProviderIntegrationService:
         redirect_url: str,
     ) -> tuple[ProviderIntegrationRecord, str]:
         state = str(uuid4())
-        integration = await self._repository.create_provider_integration(
-            provider=ProviderKind.GITHUB,
-            name=name,
-            credentials_secret_ref_id=None,
-            webhook_secret_ref_id=None,
-            aws_region=get_aws_region(),
-            metadata={
-                "project_id": project_id,
-                "redirect_project_id": project_id,
-                "auth_mode": "github_app",
-                "install_state": state,
-                "redirect_url": redirect_url,
-            },
-            status=ProviderIntegrationStatus.DISABLED,
+        existing_integrations = await self._repository.list_provider_integrations(project_id=project_id)
+        existing_github_integration = next(
+            (item for item in reversed(existing_integrations) if item.provider is ProviderKind.GITHUB),
+            None,
         )
+        metadata = {
+            **(existing_github_integration.metadata if existing_github_integration is not None else {}),
+            "project_id": project_id,
+            "redirect_project_id": project_id,
+            "auth_mode": "github_app",
+            "install_state": state,
+            "redirect_url": redirect_url,
+        }
+        if existing_github_integration is not None:
+            integration = await self._repository.update_provider_integration(
+                existing_github_integration.id,
+                status=ProviderIntegrationStatus.DISABLED,
+                credentials_secret_ref_id=existing_github_integration.credentials_secret_ref_id,
+                webhook_secret_ref_id=existing_github_integration.webhook_secret_ref_id,
+                aws_region=existing_github_integration.aws_region,
+                metadata=metadata,
+            )
+        else:
+            integration = await self._repository.create_provider_integration(
+                provider=ProviderKind.GITHUB,
+                name=name,
+                credentials_secret_ref_id=None,
+                webhook_secret_ref_id=None,
+                aws_region=get_aws_region(),
+                metadata=metadata,
+                status=ProviderIntegrationStatus.DISABLED,
+            )
         return integration, self._github_client.build_installation_url(state=state)
 
     async def preview_github_callback(
@@ -425,6 +443,67 @@ class ProviderIntegrationService:
             change_request_url=change_request.change_request_url,
             reference_id=change_request.reference_id,
             mergeable=change_request.mergeable,
+        )
+
+    async def build_authenticated_repository_clone_url(
+        self,
+        *,
+        project_id: str,
+        provider_repository_id: str,
+    ) -> tuple[ProviderRepositoryRecord, str]:
+        repository = await self._repository.get_provider_repository(provider_repository_id)
+        if repository is None:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        integration = await self._require_integration(repository.provider_integration_id)
+        if self._require_project_id(integration) != project_id:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found for project {project_id}.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        credentials_secret_ref = await self._load_credentials_secret_ref(integration)
+        client = get_provider_client(integration.provider)
+        access = await client.build_sandbox_access(
+            integration,
+            repository,
+            credentials_secret_ref=credentials_secret_ref,
+        )
+        return repository, access.secret_value
+
+    async def infer_repo_profile_defaults(
+        self,
+        *,
+        project_id: str,
+        provider_repository_id: str,
+    ) -> RepoProfileInferenceResult:
+        repository = await self._repository.get_provider_repository(provider_repository_id)
+        if repository is None:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        integration = await self._require_integration(repository.provider_integration_id)
+        if self._require_project_id(integration) != project_id:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found for project {project_id}.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        credentials_secret_ref = await self._load_credentials_secret_ref(integration)
+        client = get_provider_client(integration.provider)
+        access = await client.build_sandbox_access(
+            integration,
+            repository,
+            credentials_secret_ref=credentials_secret_ref,
+        )
+        return infer_repo_profile_from_clone(
+            clone_url=access.secret_value,
+            default_branch=repository.default_branch,
         )
 
     def verify_github_webhook(self, *, body: bytes, signature_header: str | None) -> None:

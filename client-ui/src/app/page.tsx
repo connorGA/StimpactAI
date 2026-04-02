@@ -149,8 +149,11 @@ export default function Home() {
         id="home"
         className="landing-reference-shell relative flex min-h-screen w-full flex-col overflow-hidden px-6 py-6 sm:px-8 sm:py-8 lg:px-12 lg:py-10"
       >
-        <div className="landing-static-tag absolute bottom-12 right-8 z-20 sm:bottom-14 sm:right-16">
+        <div className="landing-static-tag absolute bottom-12 left-8 z-20 text-left sm:bottom-14 sm:left-16 sm:text-left">
           Self-healing Software
+        </div>
+        <div className="landing-static-tag absolute bottom-12 right-8 z-20 sm:bottom-14 sm:right-16">
+          SDK currently supports JavaScript and Python repositories.
         </div>
         <div className="landing-orb landing-orb-top" />
         <div className="landing-orb landing-orb-right" />
@@ -173,12 +176,20 @@ export default function Home() {
             ))}
           </nav>
 
-          <Link
-            href="/login"
-            className="landing-reference-outline-button hidden justify-self-end px-5 py-2 text-sm font-medium text-white/80 sm:inline-flex"
-          >
-            Login
-          </Link>
+          <div className="hidden justify-self-end sm:flex sm:items-center sm:gap-3">
+            <Link
+              href="/signup"
+              className="landing-reference-outline-button inline-flex px-5 py-2 text-sm font-medium text-white/80"
+            >
+              Sign up
+            </Link>
+            <Link
+              href="/login"
+              className="landing-reference-outline-button inline-flex px-5 py-2 text-sm font-medium text-white/80"
+            >
+              Login
+            </Link>
+          </div>
         </header>
 
         <AnimatedWaveHero />
@@ -194,14 +205,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="relative z-30 mt-auto pt-16">
-          <Link
-            href="#pricing"
-            className="landing-reference-outline-button inline-flex px-6 py-2.5 text-xl font-medium text-white/88"
-          >
-            sign up
-          </Link>
-        </div>
+        <div className="relative z-30 mt-auto pt-16" />
 
       </section>
 

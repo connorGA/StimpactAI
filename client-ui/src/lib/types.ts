@@ -445,6 +445,126 @@ export type ProjectApiKeyCreateResponse = {
   plaintext_key: string;
 };
 
+export type SdkBootstrapEnvVar = {
+  name: string;
+  example_value: string;
+  description: string;
+};
+
+export type SdkBootstrapPlannedFile = {
+  path: string;
+  action: string;
+  reason: string;
+};
+
+export type SdkBootstrapManualStep = {
+  title: string;
+  content: string;
+};
+
+export type SdkBootstrapStrategy = {
+  id: string;
+  language: string;
+  framework: string;
+  summary: string;
+  confidence: string;
+  pr_supported: boolean;
+  target_subpath: string;
+  entrypoints: string[];
+  assumptions: string[];
+  blockers: string[];
+  planned_files: SdkBootstrapPlannedFile[];
+  env_vars: SdkBootstrapEnvVar[];
+  install_command: string | null;
+  package_name: string | null;
+  manual_steps: SdkBootstrapManualStep[];
+  preview_snippet: string | null;
+  source: string;
+  evidence: string[];
+  confidence_reason: string | null;
+};
+
+export type SdkBootstrapPlanPreview = {
+  runtime: string | null;
+  warnings: string[];
+  strategies: SdkBootstrapStrategy[];
+  recommended_strategy_id: string | null;
+  requires_confirmation: boolean;
+};
+
+export type SdkBootstrapPullRequestPreview = {
+  branch_name: string;
+  title: string;
+  description: string;
+  commit_message: string;
+};
+
+export type SdkBootstrapPreview = {
+  selected_strategy_id: string;
+  strategy: SdkBootstrapStrategy;
+  pull_request: SdkBootstrapPullRequestPreview;
+  patch_diff: string;
+};
+
+export type SdkBootstrapChangeRequestResponse = {
+  api_key: ProjectApiKey;
+  plaintext_key: string;
+  branch_name: string;
+  commit_sha: string;
+  change_request_url: string;
+  reference_id: string | null;
+  mergeable: boolean | null;
+  onboarding_state: ProjectOnboardingState;
+};
+
+export type ProjectSdkSetupStatus =
+  | "pending"
+  | "manual"
+  | "change_request"
+  | "deferred";
+
+export type ProjectOnboardingState = {
+  project_id: string;
+  policy_reviewed: boolean;
+  sdk_setup_status: ProjectSdkSetupStatus;
+  sdk_setup_provider_repository_id: string | null;
+  sdk_setup_change_request_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectOperationalReadiness = {
+  has_provider_connection: boolean;
+  has_synced_repositories: boolean;
+  has_secrets: boolean;
+  has_repo_profiles: boolean;
+  has_services: boolean;
+  has_active_api_keys: boolean;
+  policy_reviewed: boolean;
+  sdk_setup_ready: boolean;
+  complete: boolean;
+};
+
+export type ProjectTelemetryHeartbeat = {
+  project_id: string;
+  service: string;
+  environment: string;
+  last_seen_at: string;
+  commit_sha: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectTelemetryVerification = {
+  service: string;
+  environment: string;
+  status: "unseen" | "healthy" | "stale";
+  last_seen_at: string | null;
+  commit_sha: string | null;
+  stale_after_seconds: number;
+  heartbeat: ProjectTelemetryHeartbeat | null;
+};
+
 export type ProviderIntegration = {
   id: string;
   provider: "github" | "gitlab";
@@ -474,6 +594,17 @@ export type ProviderRepository = {
 export type ProviderIntegrationOnboarding = {
   integration: ProviderIntegration;
   repositories: ProviderRepository[];
+};
+
+export type RepoProfileInference = {
+  runtime_kind: "generic" | "python" | "node" | "container";
+  base_image: string | null;
+  install_command: string | null;
+  reproduce_command: string | null;
+  verify_command: string | null;
+  detected_from: string[];
+  warnings: string[];
+  monorepo: boolean;
 };
 
 export type GitLabOAuthStartResponse = {
@@ -523,6 +654,7 @@ export type RepoProfile = {
 export type ProjectServiceType =
   | "frontend"
   | "backend"
+  | "fullstack"
   | "api"
   | "worker"
   | "cron"
@@ -591,12 +723,16 @@ export type HealthReadiness = {
 
 export type ProjectOnboarding = {
   project_id: string;
+  platform_base_url: string | null;
   policy: ProjectPolicy;
+  onboarding_state: ProjectOnboardingState;
+  operational_readiness: ProjectOperationalReadiness;
   secret_refs: SecretRef[];
   api_keys: ProjectApiKey[];
   integrations: ProviderIntegrationOnboarding[];
   repo_profiles: RepoProfile[];
   project_services: ProjectService[];
+  telemetry_heartbeats: ProjectTelemetryHeartbeat[];
   suggested_next_steps: string[];
 };
 

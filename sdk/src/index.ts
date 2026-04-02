@@ -3,6 +3,8 @@ export type {
   BrowserAutoCaptureOptions,
   BrowserCaptureSubscription,
   CaptureErrorInput,
+  HeartbeatInput,
+  HeartbeatSubscription,
   HttpRequestContext,
   HttpResponseContext,
   StimpactClientOptions,

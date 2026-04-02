@@ -22,6 +22,7 @@ import type {
   IncidentSandboxRun,
   OrganizationInvite,
   ProjectApiKey,
+  ProjectApiKeyCreateResponse,
   ProjectOnboarding,
   ProjectPolicy,
   ProjectSandboxPlanPreview,
@@ -384,6 +385,58 @@ export async function listProjectApiKeys(projectId: string): Promise<ProjectApiK
   );
 }
 
+export async function createProjectApiKey(
+  projectId: string,
+  body: { name: string },
+): Promise<ProjectApiKeyCreateResponse> {
+  return fetchFromControlPlane<ProjectApiKeyCreateResponse>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/api-keys`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function revokeProjectApiKey(
+  projectId: string,
+  keyId: string,
+): Promise<ProjectApiKey> {
+  return fetchFromControlPlane<ProjectApiKey>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/api-keys/${encodeURIComponent(keyId)}/revoke`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function updateProjectPolicy(
+  projectId: string,
+  body: ProjectPolicy,
+): Promise<ProjectPolicy> {
+  return fetchFromControlPlane<ProjectPolicy>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/policy`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        autonomy_mode: body.autonomy_mode,
+        require_human_approval: body.require_human_approval,
+        allow_production_writes: body.allow_production_writes,
+        allow_low_risk_autonomy: body.allow_low_risk_autonomy,
+        block_during_active_deploys: body.block_during_active_deploys,
+        restrict_to_approved_services: body.restrict_to_approved_services,
+        require_rollback_plan: body.require_rollback_plan,
+        require_post_action_verification: body.require_post_action_verification,
+        approved_services: body.approved_services,
+        failure_classifier_enabled: body.failure_classifier_enabled,
+        root_cause_enabled: body.root_cause_enabled,
+        patch_planner_enabled: body.patch_planner_enabled,
+        runbook_executor_enabled: body.runbook_executor_enabled,
+      }),
+    },
+  );
+}
+
 export async function bootstrapProjectOnboarding(
   projectId: string,
 ): Promise<ProjectOnboarding> {
@@ -518,6 +571,7 @@ export async function createProjectService(
     service_type:
       | "frontend"
       | "backend"
+      | "fullstack"
       | "api"
       | "worker"
       | "cron"
@@ -562,6 +616,7 @@ export async function updateProjectService(
     service_type:
       | "frontend"
       | "backend"
+      | "fullstack"
       | "api"
       | "worker"
       | "cron"

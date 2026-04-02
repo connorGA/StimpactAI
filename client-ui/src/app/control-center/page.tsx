@@ -167,7 +167,7 @@ export default async function ControlCenterPage() {
       <PageHeader
         eyebrow="Control center"
         title="Autonomy policy, guardrails, and project access"
-        description={`Live control-plane state for ${projectId}. Review policy, credentials, repo profiles, and platform readiness here, then use onboarding to connect a new repository or add secrets.`}
+        description={`Live control-plane state for ${projectId}. Onboarding now covers first-time repo, telemetry, and automation setup, so use the control center for policy tuning, credentials review, and ongoing governance.`}
         action={
           <Link
             href="/onboarding"

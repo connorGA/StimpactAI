@@ -29,7 +29,7 @@ from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.observability import get_metrics_registry
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.identity_repository import IdentityRepository
-from api.schemas.telemetry import TelemetryErrorRequest
+from api.schemas.telemetry import TelemetryErrorRequest, TelemetryHeartbeatRequest
 from models.auth import OrganizationMembershipRole
 
 PROJECT_API_KEY_HEADER = "X-Stimpact-Project-Key"
@@ -307,10 +307,14 @@ async def enforce_control_plane_rate_limit(request: Request) -> None:
     await _get_rate_limiter(request).enforce(bucket, limit=limit)
 
 
-async def enforce_telemetry_rate_limit(request: Request, payload: TelemetryErrorRequest) -> None:
+async def enforce_telemetry_payload_rate_limit(request: Request, payload) -> None:
     limit = get_telemetry_rate_limit_per_minute()
     bucket = f"telemetry:{payload.project_id}:{_client_identity(request)}"
     await _get_rate_limiter(request).enforce(bucket, limit=limit)
+
+
+async def enforce_telemetry_rate_limit(request: Request, payload: TelemetryErrorRequest) -> None:
+    await enforce_telemetry_payload_rate_limit(request, payload)
 
 
 async def require_control_plane_access(request: Request) -> None:
@@ -457,10 +461,10 @@ async def require_project_list_access(
     )
 
 
-async def require_telemetry_ingest_access(
+async def authorize_telemetry_ingest_payload(
     request: Request,
-    payload: TelemetryErrorRequest,
-    repository: ControlPlaneRepository = Depends(get_security_control_plane_repository),
+    payload,
+    repository: ControlPlaneRepository,
 ) -> None:
     if isinstance(repository, ControlPlaneRepository) and getattr(repository, "_pool", None) is None:
         if is_project_api_key_auth_enforced():
@@ -496,3 +500,19 @@ async def require_telemetry_ingest_access(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="project_api_key_required",
         )
+
+
+async def require_telemetry_ingest_access(
+    request: Request,
+    payload: TelemetryErrorRequest,
+    repository: ControlPlaneRepository = Depends(get_security_control_plane_repository),
+) -> None:
+    await authorize_telemetry_ingest_payload(request, payload, repository)
+
+
+async def require_telemetry_heartbeat_access(
+    request: Request,
+    payload: TelemetryHeartbeatRequest,
+    repository: ControlPlaneRepository = Depends(get_security_control_plane_repository),
+) -> None:
+    await authorize_telemetry_ingest_payload(request, payload, repository)

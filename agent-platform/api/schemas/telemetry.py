@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -35,3 +36,29 @@ class TelemetryAcceptedResponse(BaseModel):
     status: Literal["accepted"] = "accepted"
     telemetry_id: str
     fingerprint: str
+
+
+class TelemetryHeartbeatRequest(TelemetryEnvelope):
+    @field_validator("project_id", "service")
+    @classmethod
+    def ensure_non_empty_trimmed_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("commit_sha")
+    @classmethod
+    def normalize_commit_sha(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
+
+
+class TelemetryHeartbeatAcceptedResponse(BaseModel):
+    status: Literal["accepted"] = "accepted"
+    project_id: str
+    service: str
+    environment: str
+    last_seen_at: datetime

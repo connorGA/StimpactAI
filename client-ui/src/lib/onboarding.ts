@@ -6,37 +6,46 @@ export type ProjectOnboardingProgress = {
   hasSecrets: boolean;
   hasRepoProfiles: boolean;
   hasServices: boolean;
+  hasActiveApiKeys: boolean;
+  hasReviewedPolicy: boolean;
+  hasSdkSetup: boolean;
 };
 
 export function getProjectOnboardingProgress(
   onboarding: Pick<
     ProjectOnboarding,
-    "integrations" | "secret_refs" | "repo_profiles" | "project_services"
+    | "integrations"
+    | "secret_refs"
+    | "repo_profiles"
+    | "project_services"
+    | "api_keys"
+    | "onboarding_state"
+    | "operational_readiness"
   >,
 ): ProjectOnboardingProgress {
   return {
-    hasProviderConnection: onboarding.integrations.length > 0,
-    hasSyncedRepositories: onboarding.integrations.some(
-      (integration) => integration.repositories.length > 0,
-    ),
-    hasSecrets: onboarding.secret_refs.length > 0,
-    hasRepoProfiles: onboarding.repo_profiles.length > 0,
-    hasServices: onboarding.project_services.length > 0,
+    hasProviderConnection: onboarding.operational_readiness.has_provider_connection,
+    hasSyncedRepositories: onboarding.operational_readiness.has_synced_repositories,
+    hasSecrets: onboarding.operational_readiness.has_secrets,
+    hasRepoProfiles: onboarding.operational_readiness.has_repo_profiles,
+    hasServices: onboarding.operational_readiness.has_services,
+    hasActiveApiKeys: onboarding.operational_readiness.has_active_api_keys,
+    hasReviewedPolicy: onboarding.operational_readiness.policy_reviewed,
+    hasSdkSetup: onboarding.operational_readiness.sdk_setup_ready,
   };
 }
 
 export function isProjectOnboardingComplete(
   onboarding: Pick<
     ProjectOnboarding,
-    "integrations" | "secret_refs" | "repo_profiles" | "project_services"
+    | "integrations"
+    | "secret_refs"
+    | "repo_profiles"
+    | "project_services"
+    | "api_keys"
+    | "onboarding_state"
+    | "operational_readiness"
   >,
 ): boolean {
-  const progress = getProjectOnboardingProgress(onboarding);
-  return (
-    progress.hasProviderConnection &&
-    progress.hasSyncedRepositories &&
-    progress.hasSecrets &&
-    progress.hasRepoProfiles &&
-    progress.hasServices
-  );
+  return onboarding.operational_readiness.complete;
 }

@@ -1,14 +1,46 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { AppShellNav } from "@/components/app-shell-nav";
 import { BrandMark } from "@/components/brand-mark";
 import type { AuthSession } from "@/lib/types";
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+type AppShellSessionContextValue = {
+  session: AuthSession | null;
+  sessionLoading: boolean;
+  selectedProjectId: string | null;
+  currentProject: AuthSession["projects"][number] | null;
+  refreshSession: () => Promise<void>;
+};
+
+const AppShellSessionContext = createContext<AppShellSessionContextValue | null>(null);
+let inFlightSessionRequest: Promise<Omit<AuthSession, "access_token">> | null = null;
+
+async function fetchAuthSessionPayload(): Promise<Omit<AuthSession, "access_token">> {
+  if (!inFlightSessionRequest) {
+    inFlightSessionRequest = fetch("/api/auth/session", { method: "GET" })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Unable to load session.");
+        }
+        return (await response.json()) as Omit<AuthSession, "access_token">;
+      })
+      .finally(() => {
+        inFlightSessionRequest = null;
+      });
+  }
+  return inFlightSessionRequest;
+}
+
+export function useAppShellSession() {
+  return useContext(AppShellSessionContext);
+}
+
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
@@ -32,11 +64,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     async function loadSession() {
       setSessionLoading(true);
       try {
-        const response = await fetch("/api/auth/session", { method: "GET" });
-        if (!response.ok) {
-          throw new Error("Unable to load session.");
-        }
-        const payload = (await response.json()) as Omit<AuthSession, "access_token">;
+        const payload = await fetchAuthSessionPayload();
         if (!cancelled) {
           setSession({ ...payload, access_token: "" });
           setSelectedProjectId(readCurrentProjectCookie());
@@ -109,9 +137,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       : null) ??
     session?.projects[0] ??
     null;
+  const sessionContextValue = {
+    session,
+    sessionLoading,
+    selectedProjectId,
+    currentProject,
+    refreshSession: async () => {
+      setSessionLoading(true);
+      try {
+        const payload = await fetchAuthSessionPayload();
+        setSession({ ...payload, access_token: "" });
+        setSelectedProjectId(readCurrentProjectCookie());
+      } catch {
+        setSession(null);
+      } finally {
+        setSessionLoading(false);
+      }
+    },
+  } satisfies AppShellSessionContextValue;
 
   return (
-    <div className="h-screen overflow-hidden bg-transparent">
+    <AppShellSessionContext.Provider value={sessionContextValue}>
+      <div className="h-screen overflow-hidden bg-transparent">
       <div className="hidden lg:block">
         <DesktopTopBar
           session={session}
@@ -176,25 +223,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 lg:px-8 lg:pb-10 lg:pt-[5.5rem]">
-          <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-6">
-            {pendingNavHref ? <WorkspaceRouteLoading href={pendingNavHref} /> : children}
+          <div className="relative mx-auto flex w-full max-w-[1320px] flex-col gap-6">
+            {children}
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function WorkspaceRouteLoading({ href }: { href: string }) {
-  void href;
-
-  return (
-    <div className="flex min-h-[520px] items-center justify-center">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <span className="inline-flex h-9 w-9 animate-spin rounded-full border-2 border-[rgba(23,56,93,0.18)] border-t-[rgba(255,106,61,0.88)]" />
-        <p className="text-sm font-medium text-[#746d66]">Loading..</p>
       </div>
-    </div>
+    </AppShellSessionContext.Provider>
   );
 }
 

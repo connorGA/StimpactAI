@@ -36,6 +36,7 @@ from api.routes.incidents import (
     router as incidents_router,
 )
 from api.routes.telemetry import (
+    get_control_plane_repository as get_telemetry_control_plane_repository,
     get_incident_event_publisher,
     get_outbox_signaler,
     get_telemetry_repository,
@@ -58,7 +59,10 @@ from models.control_plane import (
     AutonomyMode,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
+    ProjectSdkSetupStatus,
+    ProjectTelemetryHeartbeatRecord,
     ProviderIntegrationRecord,
     ProviderIntegrationStatus,
     ProviderKind,
@@ -82,7 +86,13 @@ from models.sandbox import (
 from shared.events.incident_events import IncidentEvent, IncidentEventType
 from shared.types.telemetry import Environment
 from services.provider_clients import ProviderInstallation
-from services.provider_integration_service import GitHubCallbackPreview, GitHubCallbackResult, GitLabCallbackResult
+from services.provider_integration_service import (
+    GitHubCallbackPreview,
+    GitHubCallbackResult,
+    GitLabCallbackResult,
+    ProviderWritebackResult,
+)
+from services.repo_profile_inference import RepoProfileInferenceResult
 
 
 def build_test_app() -> FastAPI:
@@ -222,6 +232,7 @@ class StubControlPlaneRepository:
         now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
         self.attached_mounts: list[str] = []
         self.project_api_keys: list[ProjectApiKeyRecord] = []
+        self.project_telemetry_heartbeats: list[ProjectTelemetryHeartbeatRecord] = []
         self.secret_ref = SecretRefRecord(
             id="secret-1",
             project_id="project-1",
@@ -287,6 +298,15 @@ class StubControlPlaneRepository:
             root_cause_enabled=True,
             patch_planner_enabled=True,
             runbook_executor_enabled=False,
+            created_at=now,
+            updated_at=now,
+        )
+        self.project_onboarding_state = ProjectOnboardingStateRecord(
+            project_id="project-1",
+            policy_reviewed=False,
+            sdk_setup_status=ProjectSdkSetupStatus.PENDING,
+            sdk_setup_provider_repository_id=None,
+            sdk_setup_change_request_url=None,
             created_at=now,
             updated_at=now,
         )
@@ -384,9 +404,63 @@ class StubControlPlaneRepository:
                 return updated
         raise AssertionError(f"unknown project api key {key_id}")
 
+    async def upsert_project_telemetry_heartbeat(
+        self,
+        *,
+        project_id: str,
+        service: str,
+        environment: str,
+        last_seen_at,
+        commit_sha: str | None,
+    ) -> ProjectTelemetryHeartbeatRecord:
+        record = ProjectTelemetryHeartbeatRecord(
+            project_id=project_id,
+            service=service,
+            environment=Environment(environment),
+            last_seen_at=last_seen_at,
+            commit_sha=commit_sha,
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        self.project_telemetry_heartbeats = [
+            item
+            for item in self.project_telemetry_heartbeats
+            if not (
+                item.project_id == project_id
+                and item.service == service
+                and item.environment.value == environment
+            )
+        ]
+        self.project_telemetry_heartbeats.append(record)
+        return record
+
+    async def get_project_telemetry_heartbeat(
+        self,
+        *,
+        project_id: str,
+        service: str,
+        environment: str,
+    ) -> ProjectTelemetryHeartbeatRecord | None:
+        for item in self.project_telemetry_heartbeats:
+            if item.project_id == project_id and item.service == service and item.environment.value == environment:
+                return item
+        return None
+
+    async def list_project_telemetry_heartbeats(self, project_id: str) -> list[ProjectTelemetryHeartbeatRecord]:
+        return [item for item in self.project_telemetry_heartbeats if item.project_id == project_id]
+
     async def get_or_create_project_policy(self, project_id: str) -> ProjectPolicyRecord:
         assert project_id == self.project_policy.project_id
         return self.project_policy
+
+    async def get_or_create_project_onboarding_state(self, project_id: str) -> ProjectOnboardingStateRecord:
+        assert project_id == self.project_onboarding_state.project_id
+        return self.project_onboarding_state
+
+    async def update_project_onboarding_state(self, *, project_id: str, **kwargs) -> ProjectOnboardingStateRecord:
+        assert project_id == self.project_onboarding_state.project_id
+        self.project_onboarding_state = self.project_onboarding_state.model_copy(update=kwargs)
+        return self.project_onboarding_state
 
     async def update_project_policy(self, *, project_id: str, **kwargs) -> ProjectPolicyRecord:
         assert project_id == self.project_policy.project_id
@@ -590,6 +664,60 @@ class StubProviderIntegrationService:
     async def list_synced_repositories(self, provider_integration_id: str) -> list[ProviderRepositoryRecord]:
         assert provider_integration_id == "integration-1"
         return self.repositories
+
+    async def build_authenticated_repository_clone_url(
+        self,
+        *,
+        project_id: str,
+        provider_repository_id: str,
+    ) -> tuple[ProviderRepositoryRecord, str]:
+        assert project_id == "project-1"
+        assert provider_repository_id == "provider-repo-1"
+        return self.repositories[0], "https://token@example.com/acme/billing-api.git"
+
+    async def propose_patch_writeback(
+        self,
+        *,
+        provider_repository_id: str,
+        branch_name: str,
+        patch_diff: str,
+        title: str,
+        description: str,
+        commit_message: str,
+    ) -> ProviderWritebackResult:
+        assert provider_repository_id == "provider-repo-1"
+        assert branch_name.startswith("stimpact/sdk-bootstrap-")
+        assert patch_diff
+        assert title.startswith("Add Stimpact telemetry bootstrap")
+        assert commit_message.startswith("Add Stimpact telemetry bootstrap")
+        return ProviderWritebackResult(
+            branch_name=branch_name,
+            commit_sha="commit-123",
+            change_request_url="https://github.com/acme/billing-api/pull/42",
+            reference_id="42",
+            mergeable=True,
+        )
+
+    async def infer_repo_profile_defaults(
+        self,
+        *,
+        project_id: str,
+        provider_repository_id: str,
+    ) -> RepoProfileInferenceResult:
+        assert project_id == "project-1"
+        assert provider_repository_id == "provider-repo-1"
+        return RepoProfileInferenceResult(
+            runtime_kind=RuntimeKind.NODE,
+            base_image="public.ecr.aws/docker/library/node:20",
+            install_command="npm ci",
+            reproduce_command="npm test",
+            verify_command="npm test",
+            detected_from=["package.json scripts", "package.json and lockfile"],
+            warnings=[
+                "This repository looks like a monorepo. If frontend and backend deploy separately, map them as separate services.",
+            ],
+            monorepo=True,
+        )
 
     async def preview_github_callback(
         self,
@@ -1020,6 +1148,73 @@ def test_ingest_error_returns_accepted_response_and_signals_outbox() -> None:
     assert len(body["fingerprint"]) == 64
     assert len(telemetry_repository.calls) == 1
     assert outbox_signaler.calls == [("outbox-1", IncidentEventType.TELEMETRY_RECEIVED.value)]
+
+
+def test_ingest_heartbeat_updates_project_telemetry_verification(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    api_key = ProjectApiKeyRecord(
+        id="api-key-1",
+        project_id="project-1",
+        name="Telemetry key",
+        key_prefix="stimp_live_1234",
+        key_hash=hash_api_key("stimp_live_123"),
+        status=ProjectApiKeyStatus.ACTIVE,
+        last_used_at=None,
+        revoked_at=None,
+        created_at=datetime(2026, 3, 16, 12, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 3, 16, 12, 0, tzinfo=UTC),
+    )
+    repository.project_api_keys.append(api_key)
+    app.dependency_overrides[get_telemetry_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    heartbeat_response = client.post(
+        "/telemetry/heartbeat",
+        headers={"X-Stimpact-Project-Key": "stimp_live_123"},
+        json={
+            "project_id": "project-1",
+            "environment": "production",
+            "service": "billing-api",
+            "commit_sha": "abc123",
+            "timestamp": datetime.now(tz=UTC).isoformat(),
+        },
+    )
+
+    assert heartbeat_response.status_code == 202
+    verification_response = client.get(
+        "/control-plane/projects/project-1/telemetry-verification",
+        params={"service": "billing-api", "environment": "production"},
+        headers={"Authorization": "Bearer super-admin-token"},
+    )
+
+    assert verification_response.status_code == 200
+    body = verification_response.json()
+    assert body["status"] == "healthy"
+    assert body["commit_sha"] == "abc123"
+    assert body["heartbeat"]["service"] == "billing-api"
+
+
+def test_telemetry_verification_returns_unseen_when_no_heartbeat_exists(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get(
+        "/control-plane/projects/project-1/telemetry-verification",
+        params={"service": "billing-api", "environment": "production"},
+        headers={"Authorization": "Bearer super-admin-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unseen"
+    assert body["heartbeat"] is None
 
 
 def test_list_incidents_passes_filters_and_serializes_response() -> None:
@@ -1612,6 +1807,23 @@ def test_list_provider_repositories_returns_synced_records() -> None:
     assert body[0]["provider_integration_id"] == "integration-1"
 
 
+def test_infer_project_repo_profile_defaults_returns_suggestions() -> None:
+    app = build_test_app()
+    app.dependency_overrides[get_provider_integration_service] = StubProviderIntegrationService
+
+    client = TestClient(app)
+    response = client.get(
+        "/control-plane/projects/project-1/provider-repositories/provider-repo-1/repo-profile-defaults",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime_kind"] == "node"
+    assert body["install_command"] == "npm ci"
+    assert body["verify_command"] == "npm test"
+    assert body["monorepo"] is True
+
+
 def test_project_onboarding_returns_aggregated_project_state() -> None:
     app = build_test_app()
     repository = StubControlPlaneRepository()
@@ -1624,6 +1836,9 @@ def test_project_onboarding_returns_aggregated_project_state() -> None:
     body = response.json()
     assert body["project_id"] == "project-1"
     assert body["policy"]["project_id"] == "project-1"
+    assert body["onboarding_state"]["sdk_setup_status"] == "pending"
+    assert body["operational_readiness"]["has_active_api_keys"] is False
+    assert body["operational_readiness"]["complete"] is False
     assert body["secret_refs"][0]["id"] == "secret-1"
     assert body["integrations"][0]["integration"]["id"] == "integration-1"
     assert body["integrations"][0]["repositories"][0]["id"] == "provider-repo-1"
@@ -1888,3 +2103,375 @@ def test_project_api_keys_can_be_created_listed_and_revoked(monkeypatch) -> None
     )
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
+
+
+def test_updating_project_policy_marks_onboarding_policy_reviewed(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    response = client.put(
+        "/control-plane/projects/project-1/policy",
+        json={
+            "autonomy_mode": "recommend",
+            "require_human_approval": True,
+            "allow_production_writes": False,
+            "allow_low_risk_autonomy": True,
+            "block_during_active_deploys": True,
+            "restrict_to_approved_services": False,
+            "require_rollback_plan": True,
+            "require_post_action_verification": True,
+            "approved_services": ["billing-api"],
+            "failure_classifier_enabled": True,
+            "root_cause_enabled": True,
+            "patch_planner_enabled": True,
+            "runbook_executor_enabled": False,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert repository.project_onboarding_state.policy_reviewed is True
+
+
+def test_project_onboarding_state_can_be_updated(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    response = client.put(
+        "/control-plane/projects/project-1/onboarding-state",
+        json={
+            "sdk_setup_status": "manual",
+            "sdk_setup_provider_repository_id": "provider-repo-1",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sdk_setup_status"] == "manual"
+    assert body["sdk_setup_provider_repository_id"] == "provider-repo-1"
+
+
+def test_sdk_bootstrap_change_request_creates_key_and_updates_onboarding_state(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapStrategy,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "plan_sdk_bootstrap_from_clone",
+        lambda **_: SdkBootstrapPlan(
+            runtime="javascript",
+            warnings=[],
+            recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+            requires_confirmation=False,
+            strategies=[
+                SdkBootstrapStrategy(
+                    id="javascript-next:.:src/app/layout.tsx",
+                    language="javascript",
+                    framework="Next.js",
+                    summary="Inject browser auto-capture.",
+                    confidence="high",
+                    pr_supported=True,
+                    target_subpath=".",
+                    entrypoints=["src/app/layout.tsx"],
+                    planned_files=[
+                        SdkBootstrapPlannedFile(
+                            path="package.json",
+                            action="update",
+                            reason="Add dependency.",
+                        )
+                    ],
+                    manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        control_plane_module,
+        "build_sdk_bootstrap_patch_from_clone",
+        lambda **_: SdkBootstrapPatch(patch_diff="diff --git a/package.json b/package.json\n"),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/change-request",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "api_key_name": "Telemetry bootstrap",
+            "service_name": "billing-api",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "branch_name": "stimpact/sdk-bootstrap-preview-1234",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["plaintext_key"].startswith("stimp_live_")
+    assert body["branch_name"] == "stimpact/sdk-bootstrap-preview-1234"
+    assert body["change_request_url"] == "https://github.com/acme/billing-api/pull/42"
+    assert repository.project_onboarding_state.sdk_setup_status is ProjectSdkSetupStatus.CHANGE_REQUEST
+
+
+def test_sdk_bootstrap_preview_returns_patch_and_pr_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapStrategy,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "plan_sdk_bootstrap_from_clone",
+        lambda **_: SdkBootstrapPlan(
+            runtime="javascript",
+            warnings=[],
+            recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+            requires_confirmation=False,
+            strategies=[
+                SdkBootstrapStrategy(
+                    id="javascript-next:.:src/app/layout.tsx",
+                    language="javascript",
+                    framework="Next.js",
+                    summary="Inject browser auto-capture into the app shell.",
+                    confidence="high",
+                    pr_supported=True,
+                    target_subpath=".",
+                    entrypoints=["src/app/layout.tsx"],
+                    assumptions=["src/app/layout.tsx is the main browser shell."],
+                    blockers=[],
+                    planned_files=[
+                        SdkBootstrapPlannedFile(
+                            path="src/app/layout.tsx",
+                            action="update",
+                            reason="Mount the provider in the root shell.",
+                        )
+                    ],
+                    manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                    install_command="npm install @stimpact/sdk",
+                    package_name="@stimpact/sdk",
+                    preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+                    source="llm",
+                    evidence=["src/app/layout.tsx", "package.json"],
+                    confidence_reason="The root layout is the browser shell.",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        control_plane_module,
+        "build_sdk_bootstrap_patch_from_clone",
+        lambda **_: SdkBootstrapPatch(patch_diff="diff --git a/src/app/layout.tsx b/src/app/layout.tsx\n"),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/preview",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "service_name": "billing-web",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "strategy_id": "javascript-next:.:src/app/layout.tsx",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["selected_strategy_id"] == "javascript-next:.:src/app/layout.tsx"
+    assert body["strategy"]["framework"] == "Next.js"
+    assert body["strategy"]["source"] == "llm"
+    assert body["strategy"]["confidence_reason"] == "The root layout is the browser shell."
+    assert body["strategy"]["evidence"] == ["src/app/layout.tsx", "package.json"]
+    assert body["pull_request"]["branch_name"].startswith("stimpact/sdk-bootstrap-")
+    assert body["pull_request"]["title"] == "Add Stimpact telemetry bootstrap for Next.js"
+    assert body["patch_diff"].startswith("diff --git")
+
+
+def test_sdk_bootstrap_plan_preview_returns_detected_strategies(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapStrategy,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "plan_sdk_bootstrap_from_clone",
+        lambda **_: SdkBootstrapPlan(
+            runtime="python",
+            warnings=["Multiple app roots detected."],
+            recommended_strategy_id="python-fastapi:backend:main.py",
+            requires_confirmation=True,
+            strategies=[
+                SdkBootstrapStrategy(
+                    id="python-fastapi:backend:main.py",
+                    language="python",
+                    framework="FastAPI",
+                    summary="Inject request-scoped telemetry capture.",
+                    confidence="high",
+                    pr_supported=True,
+                    target_subpath="backend",
+                    entrypoints=["backend/main.py"],
+                    assumptions=["backend/main.py is the primary ASGI entrypoint."],
+                    blockers=[],
+                    planned_files=[
+                        SdkBootstrapPlannedFile(
+                            path="backend/main.py",
+                            action="update",
+                            reason="Install middleware hook.",
+                        )
+                    ],
+                    manual_steps=[
+                        SdkBootstrapManualStep(
+                            title="Install",
+                            content="Run pip install stimpact-sdk",
+                        )
+                    ],
+                    install_command="pip install stimpact-sdk",
+                    package_name="stimpact-sdk",
+                    preview_snippet="from stimpact_sdk import StimpactClient",
+                )
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/plan",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "service_name": "billing-api",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime"] == "python"
+    assert body["recommended_strategy_id"] == "python-fastapi:backend:main.py"
+    assert body["requires_confirmation"] is True
+    assert body["warnings"] == ["Multiple app roots detected."]
+    assert body["strategies"][0]["framework"] == "FastAPI"
+
+
+def test_sdk_bootstrap_change_request_requires_preview_branch_name(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapStrategy,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "plan_sdk_bootstrap_from_clone",
+        lambda **_: SdkBootstrapPlan(
+            runtime="javascript",
+            warnings=[],
+            recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+            requires_confirmation=False,
+            strategies=[
+                SdkBootstrapStrategy(
+                    id="javascript-next:.:src/app/layout.tsx",
+                    language="javascript",
+                    framework="Next.js",
+                    summary="Inject browser auto-capture into the app shell.",
+                    confidence="high",
+                    pr_supported=True,
+                    target_subpath=".",
+                    entrypoints=["src/app/layout.tsx"],
+                    assumptions=[],
+                    blockers=[],
+                    planned_files=[
+                        SdkBootstrapPlannedFile(
+                            path="src/app/layout.tsx",
+                            action="update",
+                            reason="Mount the provider in the root shell.",
+                        )
+                    ],
+                    manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                    install_command="npm install @stimpact/sdk",
+                    package_name="@stimpact/sdk",
+                    preview_snippet="import { StimpactClient } from '@stimpact/sdk';",
+                )
+            ],
+        ),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/change-request",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "api_key_name": "Telemetry bootstrap",
+            "service_name": "billing-web",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "strategy_id": "javascript-next:.:src/app/layout.tsx",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "sdk_bootstrap_preview_required"

@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from shared.types.telemetry import Environment
 
 
 def _decode_json_array(value: Any) -> list[str]:
@@ -70,6 +71,13 @@ class ProjectApiKeyStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class ProjectSdkSetupStatus(StrEnum):
+    PENDING = "pending"
+    MANUAL = "manual"
+    CHANGE_REQUEST = "change_request"
+    DEFERRED = "deferred"
+
+
 class AutonomyMode(StrEnum):
     OBSERVE = "observe"
     RECOMMEND = "recommend"
@@ -87,6 +95,7 @@ class RuntimeKind(StrEnum):
 class ProjectServiceType(StrEnum):
     FRONTEND = "frontend"
     BACKEND = "backend"
+    FULLSTACK = "fullstack"
     API = "api"
     WORKER = "worker"
     CRON = "cron"
@@ -263,6 +272,58 @@ class ProjectPolicyRecord(BaseModel):
             root_cause_enabled=bool(row["root_cause_enabled"]),
             patch_planner_enabled=bool(row["patch_planner_enabled"]),
             runbook_executor_enabled=bool(row["runbook_executor_enabled"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectOnboardingStateRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    policy_reviewed: bool
+    sdk_setup_status: ProjectSdkSetupStatus
+    sdk_setup_provider_repository_id: str | None = None
+    sdk_setup_change_request_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectOnboardingStateRecord":
+        return cls(
+            project_id=str(row["project_id"]),
+            policy_reviewed=bool(row["policy_reviewed"]),
+            sdk_setup_status=ProjectSdkSetupStatus(str(row["sdk_setup_status"])),
+            sdk_setup_provider_repository_id=(
+                str(row["sdk_setup_provider_repository_id"])
+                if row["sdk_setup_provider_repository_id"] is not None
+                else None
+            ),
+            sdk_setup_change_request_url=row["sdk_setup_change_request_url"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectTelemetryHeartbeatRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    service: str
+    environment: Environment
+    last_seen_at: datetime
+    commit_sha: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectTelemetryHeartbeatRecord":
+        return cls(
+            project_id=str(row["project_id"]),
+            service=str(row["service"]),
+            environment=Environment(str(row["environment"])),
+            last_seen_at=row["last_seen_at"],
+            commit_sha=str(row["commit_sha"]) if row["commit_sha"] is not None else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

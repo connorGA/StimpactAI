@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
+from openai import OpenAI
 
 from api.core.security import (
     build_project_api_key,
@@ -10,13 +14,21 @@ from api.core.security import (
     require_control_plane_access,
     require_project_control_plane_access,
 )
-from api.core.config import get_frontend_base_url
+from api.core.config import (
+    get_frontend_base_url,
+    get_openai_api_key,
+    get_openai_patch_model,
+    get_public_base_url,
+)
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.core.errors import APIError
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.schemas.control_plane import (
     CreateProjectServiceRequest,
     CreateProjectApiKeyRequest,
+    CreateSdkBootstrapPlanRequest,
+    CreateSdkBootstrapPreviewRequest,
+    CreateSdkBootstrapChangeRequestRequest,
     CreateProviderIntegrationRequest,
     CreateProviderRepositoryRequest,
     CreateRepoProfileRequest,
@@ -30,7 +42,11 @@ from api.schemas.control_plane import (
     ProjectApiKeyCreateResponse,
     ProjectApiKeyResponse,
     ProjectOnboardingResponse,
+    ProjectOnboardingStateResponse,
+    ProjectOperationalReadinessResponse,
     ProjectPolicyResponse,
+    ProjectTelemetryHeartbeatResponse,
+    ProjectTelemetryVerificationResponse,
     ProjectSandboxPlanPreviewResponse,
     ProjectServiceResponse,
     SandboxPlanServiceResponse,
@@ -40,13 +56,23 @@ from api.schemas.control_plane import (
     ProviderRepositoryResponse,
     ProviderRepositorySyncResponse,
     ProviderWebhookResponse,
+    RepoProfileInferenceResponse,
     RepoProfileResponse,
+    SdkBootstrapEnvVarResponse,
     StartGitLabOAuthRequest,
     SecretRefResponse,
+    SdkBootstrapManualStepResponse,
+    SdkBootstrapChangeRequestResponse,
+    SdkBootstrapPlanPreviewResponse,
+    SdkBootstrapPreviewResponse,
+    SdkBootstrapPlannedFileResponse,
+    SdkBootstrapPullRequestPreviewResponse,
+    SdkBootstrapStrategyResponse,
     UpdateProjectPolicyRequest,
+    UpdateProjectOnboardingStateRequest,
     UpdateProjectServiceRequest,
 )
-from models.control_plane import ProviderKind, SecretBackend
+from models.control_plane import ProjectSdkSetupStatus, ProviderKind, SecretBackend
 from services.aws_secrets_manager import (
     AwsSecretsManagerReader,
     AwsSecretsManagerWriter,
@@ -54,6 +80,14 @@ from services.aws_secrets_manager import (
     SecretsWriter,
 )
 from services.provider_integration_service import ProviderIntegrationService
+from services.sdk_bootstrap import (
+    SDK_BOOTSTRAP_API_KEY_PLACEHOLDER,
+    SdkBootstrapPlan,
+    SdkBootstrapStrategy,
+    build_sdk_bootstrap_patch_from_clone,
+    plan_sdk_bootstrap_from_clone,
+)
+from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner
 
 router = APIRouter(
     prefix="/control-plane",
@@ -66,6 +100,7 @@ project_router = APIRouter(
     dependencies=[Depends(require_project_control_plane_access), Depends(enforce_control_plane_rate_limit)],
 )
 public_router = APIRouter(tags=["provider-callbacks"])
+TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS = 900
 
 
 def get_control_plane_repository(
@@ -94,6 +129,16 @@ def get_provider_integration_service(
     )
 
 
+def get_sdk_bootstrap_fallback_planner() -> SdkBootstrapFallbackPlanner | None:
+    api_key = get_openai_api_key()
+    if api_key is None:
+        return None
+    return SdkBootstrapFallbackPlanner(
+        client=OpenAI(api_key=api_key),
+        model=get_openai_patch_model(),
+    )
+
+
 def _assert_project_matches(path_project_id: str, payload_project_id: str) -> None:
     if path_project_id != payload_project_id:
         raise APIError(
@@ -119,12 +164,55 @@ async def _require_project_integration(
     return integration
 
 
+def _build_operational_readiness(
+    *,
+    integrations: list[ProviderIntegrationOnboardingResponse],
+    secret_refs: list[SecretRefResponse],
+    repo_profiles: list[RepoProfileResponse],
+    project_services: list[ProjectServiceResponse],
+    api_keys: list[ProjectApiKeyResponse],
+    policy_reviewed: bool,
+    sdk_setup_status: ProjectSdkSetupStatus,
+) -> ProjectOperationalReadinessResponse:
+    has_provider_connection = len(integrations) > 0
+    has_synced_repositories = any(item.repositories for item in integrations)
+    has_secrets = len(secret_refs) > 0
+    has_repo_profiles = len(repo_profiles) > 0
+    has_services = len(project_services) > 0
+    has_active_api_keys = any(item.status == "active" for item in api_keys)
+    sdk_setup_ready = sdk_setup_status is not ProjectSdkSetupStatus.PENDING
+    complete = (
+        has_provider_connection
+        and has_synced_repositories
+        and has_secrets
+        and has_repo_profiles
+        and has_services
+        and has_active_api_keys
+        and policy_reviewed
+        and sdk_setup_ready
+    )
+    return ProjectOperationalReadinessResponse(
+        has_provider_connection=has_provider_connection,
+        has_synced_repositories=has_synced_repositories,
+        has_secrets=has_secrets,
+        has_repo_profiles=has_repo_profiles,
+        has_services=has_services,
+        has_active_api_keys=has_active_api_keys,
+        policy_reviewed=policy_reviewed,
+        sdk_setup_ready=sdk_setup_ready,
+        complete=complete,
+    )
+
+
 def _build_onboarding_next_steps(
     *,
     integrations: list[ProviderIntegrationOnboardingResponse],
     secret_refs: list[SecretRefResponse],
     repo_profiles: list[RepoProfileResponse],
     project_services: list[ProjectServiceResponse],
+    api_keys: list[ProjectApiKeyResponse],
+    policy_reviewed: bool,
+    sdk_setup_status: ProjectSdkSetupStatus,
 ) -> list[str]:
     steps: list[str] = []
     if not integrations:
@@ -141,9 +229,138 @@ def _build_onboarding_next_steps(
         steps.append("Choose a repository after the sync completes.")
     if integrations and secret_refs and not repo_profiles:
         steps.append("Sync provider repositories and create repo profiles for the services you need.")
+    if not any(item.status == "active" for item in api_keys):
+        steps.append("Create an active project API key for telemetry ingest.")
+    if not policy_reviewed:
+        steps.append("Review and confirm the automation controls for this project.")
+    if sdk_setup_status is ProjectSdkSetupStatus.PENDING:
+        steps.append("Choose an SDK setup path: follow the manual guide, open a bootstrap PR, or defer it for later.")
     if not steps:
-        steps.append("Project onboarding looks complete. Run a sandbox verification to validate the setup.")
+        steps.append("Project onboarding looks complete. Run a sandbox verification and validate telemetry flow.")
     return steps
+
+
+def _build_sdk_bootstrap_strategy_response(strategy: SdkBootstrapStrategy) -> SdkBootstrapStrategyResponse:
+    return SdkBootstrapStrategyResponse(
+        id=strategy.id,
+        language=strategy.language,
+        framework=strategy.framework,
+        summary=strategy.summary,
+        confidence=strategy.confidence,
+        pr_supported=strategy.pr_supported,
+        target_subpath=strategy.target_subpath,
+        entrypoints=list(strategy.entrypoints),
+        assumptions=list(strategy.assumptions),
+        blockers=list(strategy.blockers),
+        planned_files=[
+            SdkBootstrapPlannedFileResponse(
+                path=item.path,
+                action=item.action,
+                reason=item.reason,
+            )
+            for item in strategy.planned_files
+        ],
+        env_vars=[
+            SdkBootstrapEnvVarResponse(
+                name=item.name,
+                example_value=item.example_value,
+                description=item.description,
+            )
+            for item in strategy.env_vars
+        ],
+        install_command=strategy.install_command,
+        package_name=strategy.package_name,
+        manual_steps=[
+            SdkBootstrapManualStepResponse(title=item.title, content=item.content)
+            for item in strategy.manual_steps
+        ],
+        preview_snippet=strategy.preview_snippet,
+        source=strategy.source,
+        evidence=list(strategy.evidence),
+        confidence_reason=strategy.confidence_reason,
+    )
+
+
+def _build_sdk_bootstrap_plan_response(plan: SdkBootstrapPlan) -> SdkBootstrapPlanPreviewResponse:
+    return SdkBootstrapPlanPreviewResponse(
+        runtime=plan.runtime,
+        warnings=list(plan.warnings),
+        strategies=[_build_sdk_bootstrap_strategy_response(item) for item in plan.strategies],
+        recommended_strategy_id=plan.recommended_strategy_id,
+        requires_confirmation=plan.requires_confirmation,
+    )
+
+
+def _resolve_sdk_bootstrap_strategy(
+    *,
+    plan: SdkBootstrapPlan,
+    strategy_id: str | None,
+) -> tuple[str, SdkBootstrapStrategy]:
+    selected_strategy_id = strategy_id or plan.recommended_strategy_id
+    if selected_strategy_id is None:
+        raise APIError(
+            "No SDK bootstrap strategy could be recommended for this repository.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_plan_unavailable",
+        )
+    if plan.requires_confirmation and strategy_id is None:
+        raise APIError(
+            "This repository has multiple or ambiguous SDK bootstrap surfaces. Preview the plan and submit an explicit strategy_id before generating a PR.",
+            status_code=status.HTTP_409_CONFLICT,
+            code="sdk_bootstrap_confirmation_required",
+        )
+    selected_strategy = next((item for item in plan.strategies if item.id == selected_strategy_id), None)
+    if selected_strategy is None:
+        raise APIError(
+            f"SDK bootstrap strategy {selected_strategy_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="sdk_bootstrap_strategy_not_found",
+        )
+    return selected_strategy_id, selected_strategy
+
+
+def _build_sdk_bootstrap_pr_metadata(
+    *,
+    strategy: SdkBootstrapStrategy,
+    branch_name: str,
+) -> SdkBootstrapPullRequestPreviewResponse:
+    return SdkBootstrapPullRequestPreviewResponse(
+        branch_name=branch_name,
+        title=f"Add Stimpact telemetry bootstrap for {strategy.framework}",
+        description=(
+            f"This PR applies the {strategy.framework} SDK bootstrap plan for "
+            f"{strategy.target_subpath}, adds dependency and env scaffolding, "
+            "and wires Stimpact telemetry into the detected runtime entrypoint."
+        ),
+        commit_message=f"Add Stimpact telemetry bootstrap for {strategy.framework}",
+    )
+
+
+def _build_project_telemetry_verification_response(
+    *,
+    service: str,
+    environment: str,
+    heartbeat,
+) -> ProjectTelemetryVerificationResponse:
+    if heartbeat is None:
+        return ProjectTelemetryVerificationResponse(
+            service=service,
+            environment=environment,
+            status="unseen",
+            stale_after_seconds=TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS,
+            heartbeat=None,
+        )
+    stale_cutoff = datetime.now(UTC) - timedelta(seconds=TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS)
+    status_value = "healthy" if heartbeat.last_seen_at >= stale_cutoff else "stale"
+    return ProjectTelemetryVerificationResponse(
+        service=service,
+        environment=environment,
+        status=status_value,
+        last_seen_at=heartbeat.last_seen_at,
+        commit_sha=heartbeat.commit_sha,
+        stale_after_seconds=TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS,
+        heartbeat=ProjectTelemetryHeartbeatResponse.from_record(heartbeat),
+    )
 
 
 async def _build_project_onboarding_response(
@@ -152,6 +369,7 @@ async def _build_project_onboarding_response(
     repository: ControlPlaneRepository,
 ) -> ProjectOnboardingResponse:
     policy = await repository.get_or_create_project_policy(project_id)
+    onboarding_state = await repository.get_or_create_project_onboarding_state(project_id)
     secret_refs = [SecretRefResponse.from_record(record) for record in await repository.list_secret_refs(project_id)]
     api_keys = [
         ProjectApiKeyResponse.from_record(record)
@@ -194,19 +412,39 @@ async def _build_project_onboarding_response(
         )
         for record in project_service_records
     ]
+    telemetry_heartbeats = [
+        ProjectTelemetryHeartbeatResponse.from_record(record)
+        for record in await repository.list_project_telemetry_heartbeats(project_id)
+    ]
+    operational_readiness = _build_operational_readiness(
+        integrations=integration_payloads,
+        secret_refs=secret_refs,
+        repo_profiles=repo_profiles,
+        project_services=project_services,
+        api_keys=api_keys,
+        policy_reviewed=onboarding_state.policy_reviewed,
+        sdk_setup_status=onboarding_state.sdk_setup_status,
+    )
     return ProjectOnboardingResponse(
         project_id=project_id,
+        platform_base_url=get_public_base_url(),
         policy=ProjectPolicyResponse.from_record(policy),
+        onboarding_state=ProjectOnboardingStateResponse.from_record(onboarding_state),
+        operational_readiness=operational_readiness,
         secret_refs=secret_refs,
         api_keys=api_keys,
         integrations=integration_payloads,
         repo_profiles=repo_profiles,
         project_services=project_services,
+        telemetry_heartbeats=telemetry_heartbeats,
         suggested_next_steps=_build_onboarding_next_steps(
             integrations=integration_payloads,
             secret_refs=secret_refs,
             repo_profiles=repo_profiles,
             project_services=project_services,
+            api_keys=api_keys,
+            policy_reviewed=onboarding_state.policy_reviewed,
+            sdk_setup_status=onboarding_state.sdk_setup_status,
         ),
     )
 
@@ -411,6 +649,243 @@ async def get_project_policy(
     return ProjectPolicyResponse.from_record(record)
 
 
+@router.get(
+    "/projects/{project_id}/onboarding-state",
+    response_model=ProjectOnboardingStateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_onboarding_state(
+    project_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectOnboardingStateResponse:
+    record = await repository.get_or_create_project_onboarding_state(project_id)
+    return ProjectOnboardingStateResponse.from_record(record)
+
+
+@router.put(
+    "/projects/{project_id}/onboarding-state",
+    response_model=ProjectOnboardingStateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_project_onboarding_state(
+    project_id: str,
+    payload: UpdateProjectOnboardingStateRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectOnboardingStateResponse:
+    current = await repository.get_or_create_project_onboarding_state(project_id)
+    record = await repository.update_project_onboarding_state(
+        project_id=project_id,
+        policy_reviewed=payload.policy_reviewed if payload.policy_reviewed is not None else current.policy_reviewed,
+        sdk_setup_status=payload.sdk_setup_status or current.sdk_setup_status,
+        sdk_setup_provider_repository_id=(
+            payload.sdk_setup_provider_repository_id
+            if payload.sdk_setup_provider_repository_id is not None
+            else current.sdk_setup_provider_repository_id
+        ),
+        sdk_setup_change_request_url=(
+            payload.sdk_setup_change_request_url
+            if payload.sdk_setup_change_request_url is not None
+            else current.sdk_setup_change_request_url
+        ),
+    )
+    return ProjectOnboardingStateResponse.from_record(record)
+
+
+@router.post(
+    "/projects/{project_id}/sdk-bootstrap/plan",
+    response_model=SdkBootstrapPlanPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def preview_project_sdk_bootstrap_plan(
+    project_id: str,
+    payload: CreateSdkBootstrapPlanRequest,
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+    fallback_planner: SdkBootstrapFallbackPlanner | None = Depends(get_sdk_bootstrap_fallback_planner),
+) -> SdkBootstrapPlanPreviewResponse:
+    _assert_project_matches(project_id, payload.project_id)
+    provider_repository, clone_url = await service.build_authenticated_repository_clone_url(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+    )
+    plan = plan_sdk_bootstrap_from_clone(
+        clone_url=clone_url,
+        default_branch=provider_repository.default_branch,
+        project_id=project_id,
+        service_name=payload.service_name,
+        environment=payload.environment,
+        base_url=payload.base_url,
+        fallback_planner=fallback_planner,
+    )
+    return _build_sdk_bootstrap_plan_response(plan)
+
+
+@router.get(
+    "/projects/{project_id}/telemetry-verification",
+    response_model=ProjectTelemetryVerificationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_telemetry_verification(
+    project_id: str,
+    service: str = Query(min_length=1, max_length=128),
+    environment: str = Query(min_length=1, max_length=32),
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectTelemetryVerificationResponse:
+    heartbeat = await repository.get_project_telemetry_heartbeat(
+        project_id=project_id,
+        service=service.strip(),
+        environment=environment.strip(),
+    )
+    return _build_project_telemetry_verification_response(
+        service=service.strip(),
+        environment=environment.strip(),
+        heartbeat=heartbeat,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/sdk-bootstrap/preview",
+    response_model=SdkBootstrapPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def preview_project_sdk_bootstrap_change_request(
+    project_id: str,
+    payload: CreateSdkBootstrapPreviewRequest,
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+    fallback_planner: SdkBootstrapFallbackPlanner | None = Depends(get_sdk_bootstrap_fallback_planner),
+) -> SdkBootstrapPreviewResponse:
+    _assert_project_matches(project_id, payload.project_id)
+    provider_repository, clone_url = await service.build_authenticated_repository_clone_url(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+    )
+    plan = plan_sdk_bootstrap_from_clone(
+        clone_url=clone_url,
+        default_branch=provider_repository.default_branch,
+        project_id=project_id,
+        service_name=payload.service_name,
+        environment=payload.environment,
+        base_url=payload.base_url,
+        fallback_planner=fallback_planner,
+    )
+    selected_strategy_id, selected_strategy = _resolve_sdk_bootstrap_strategy(
+        plan=plan,
+        strategy_id=payload.strategy_id,
+    )
+    if not selected_strategy.pr_supported:
+        raise APIError(
+            f"{selected_strategy.framework} must be completed manually for this repository. Automatic PR generation is not enabled for the selected strategy.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_strategy_requires_manual_setup",
+        )
+    branch_name = f"stimpact/sdk-bootstrap-{uuid4().hex[:8]}"
+    bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
+        clone_url=clone_url,
+        default_branch=provider_repository.default_branch,
+        project_id=project_id,
+        service_name=payload.service_name,
+        environment=payload.environment,
+        base_url=payload.base_url,
+        strategy_id=selected_strategy_id,
+        api_key=SDK_BOOTSTRAP_API_KEY_PLACEHOLDER,
+        fallback_planner=fallback_planner,
+    )
+    return SdkBootstrapPreviewResponse(
+        selected_strategy_id=selected_strategy_id,
+        strategy=_build_sdk_bootstrap_strategy_response(selected_strategy),
+        pull_request=_build_sdk_bootstrap_pr_metadata(strategy=selected_strategy, branch_name=branch_name),
+        patch_diff=bootstrap_patch.patch_diff,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/sdk-bootstrap/change-request",
+    response_model=SdkBootstrapChangeRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_project_sdk_bootstrap_change_request(
+    project_id: str,
+    payload: CreateSdkBootstrapChangeRequestRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+    fallback_planner: SdkBootstrapFallbackPlanner | None = Depends(get_sdk_bootstrap_fallback_planner),
+) -> SdkBootstrapChangeRequestResponse:
+    _assert_project_matches(project_id, payload.project_id)
+    provider_repository, clone_url = await service.build_authenticated_repository_clone_url(
+        project_id=project_id,
+        provider_repository_id=payload.provider_repository_id,
+    )
+    plan = plan_sdk_bootstrap_from_clone(
+        clone_url=clone_url,
+        default_branch=provider_repository.default_branch,
+        project_id=project_id,
+        service_name=payload.service_name,
+        environment=payload.environment,
+        base_url=payload.base_url,
+        fallback_planner=fallback_planner,
+    )
+    selected_strategy_id, selected_strategy = _resolve_sdk_bootstrap_strategy(
+        plan=plan,
+        strategy_id=payload.strategy_id,
+    )
+    if not selected_strategy.pr_supported:
+        raise APIError(
+            f"{selected_strategy.framework} must be completed manually for this repository. Automatic PR generation is not enabled for the selected strategy.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_strategy_requires_manual_setup",
+        )
+    if not payload.branch_name:
+        raise APIError(
+            "Preview the SDK bootstrap PR draft and approve it before creating the real provider PR.",
+            status_code=status.HTTP_409_CONFLICT,
+            code="sdk_bootstrap_preview_required",
+        )
+    plaintext_key, key_prefix = build_project_api_key()
+    bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
+        clone_url=clone_url,
+        default_branch=provider_repository.default_branch,
+        project_id=project_id,
+        service_name=payload.service_name,
+        environment=payload.environment,
+        base_url=payload.base_url,
+        strategy_id=selected_strategy_id,
+        api_key=plaintext_key,
+        fallback_planner=fallback_planner,
+    )
+    api_key_record = await repository.create_project_api_key(
+        project_id=project_id,
+        name=payload.api_key_name,
+        key_prefix=key_prefix,
+        key_hash=hash_api_key(plaintext_key),
+    )
+    pr_metadata = _build_sdk_bootstrap_pr_metadata(strategy=selected_strategy, branch_name=payload.branch_name)
+    writeback = await service.propose_patch_writeback(
+        provider_repository_id=payload.provider_repository_id,
+        branch_name=pr_metadata.branch_name,
+        patch_diff=bootstrap_patch.patch_diff,
+        title=pr_metadata.title,
+        description=pr_metadata.description,
+        commit_message=pr_metadata.commit_message,
+    )
+    current_onboarding_state = await repository.get_or_create_project_onboarding_state(project_id)
+    onboarding_state = await repository.update_project_onboarding_state(
+        project_id=project_id,
+        policy_reviewed=current_onboarding_state.policy_reviewed,
+        sdk_setup_status=ProjectSdkSetupStatus.CHANGE_REQUEST,
+        sdk_setup_provider_repository_id=payload.provider_repository_id,
+        sdk_setup_change_request_url=writeback.change_request_url,
+    )
+    return SdkBootstrapChangeRequestResponse(
+        api_key=ProjectApiKeyResponse.from_record(api_key_record),
+        plaintext_key=plaintext_key,
+        branch_name=writeback.branch_name,
+        commit_sha=writeback.commit_sha,
+        change_request_url=writeback.change_request_url,
+        reference_id=writeback.reference_id,
+        mergeable=writeback.mergeable,
+        onboarding_state=ProjectOnboardingStateResponse.from_record(onboarding_state),
+    )
+
+
 @router.put(
     "/projects/{project_id}/policy",
     response_model=ProjectPolicyResponse,
@@ -436,6 +911,14 @@ async def update_project_policy(
         root_cause_enabled=payload.root_cause_enabled,
         patch_planner_enabled=payload.patch_planner_enabled,
         runbook_executor_enabled=payload.runbook_executor_enabled,
+    )
+    onboarding_state = await repository.get_or_create_project_onboarding_state(project_id)
+    await repository.update_project_onboarding_state(
+        project_id=project_id,
+        policy_reviewed=True,
+        sdk_setup_status=onboarding_state.sdk_setup_status,
+        sdk_setup_provider_repository_id=onboarding_state.sdk_setup_provider_repository_id,
+        sdk_setup_change_request_url=onboarding_state.sdk_setup_change_request_url,
     )
     return ProjectPolicyResponse.from_record(record)
 
@@ -776,6 +1259,32 @@ async def sync_project_provider_repositories(
         provider_integration_id=provider_integration_id,
     )
     return await sync_provider_repositories(provider_integration_id=provider_integration_id, service=service)
+
+
+@project_router.get(
+    "/provider-repositories/{provider_repository_id}/repo-profile-defaults",
+    response_model=RepoProfileInferenceResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def infer_project_repo_profile_defaults(
+    project_id: str,
+    provider_repository_id: str,
+    service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> RepoProfileInferenceResponse:
+    inference = await service.infer_repo_profile_defaults(
+        project_id=project_id,
+        provider_repository_id=provider_repository_id,
+    )
+    return RepoProfileInferenceResponse(
+        runtime_kind=inference.runtime_kind,
+        base_image=inference.base_image,
+        install_command=inference.install_command,
+        reproduce_command=inference.reproduce_command,
+        verify_command=inference.verify_command,
+        detected_from=inference.detected_from,
+        warnings=inference.warnings,
+        monorepo=inference.monorepo,
+    )
 
 
 @project_router.post("/repo-profiles", response_model=RepoProfileResponse, status_code=status.HTTP_201_CREATED)

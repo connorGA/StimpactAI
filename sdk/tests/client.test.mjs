@@ -71,3 +71,26 @@ test("wrapAsync preserves the original error when telemetry capture fails", asyn
   );
   assert.ok(original.captureFailure instanceof Error);
 });
+
+test("sendHeartbeat posts to the heartbeat endpoint", async () => {
+  const calls = [];
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-web",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  await client.sendHeartbeat({ commitSha: "abc123" });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "https://stimpact.example.com/telemetry/heartbeat");
+  const payload = JSON.parse(calls[0][1].body);
+  assert.equal(payload.project_id, "project-1");
+  assert.equal(payload.service, "billing-web");
+  assert.equal(payload.commit_sha, "abc123");
+});
