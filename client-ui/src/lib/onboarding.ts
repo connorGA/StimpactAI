@@ -29,7 +29,9 @@ export function getProjectOnboardingProgress(
     hasSecrets: onboarding.operational_readiness.has_secrets,
     hasRepoProfiles: onboarding.operational_readiness.has_repo_profiles,
     hasServices: onboarding.operational_readiness.has_services,
-    hasActiveApiKeys: onboarding.operational_readiness.has_active_api_keys,
+    hasActiveApiKeys:
+      onboarding.operational_readiness.has_active_api_keys ||
+      onboarding.operational_readiness.has_active_browser_keys,
     hasReviewedPolicy: onboarding.operational_readiness.policy_reviewed,
     hasSdkSetup: onboarding.operational_readiness.sdk_setup_ready,
   };

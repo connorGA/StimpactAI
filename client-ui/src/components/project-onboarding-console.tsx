@@ -1753,18 +1753,29 @@ export function ProjectOnboardingConsole() {
 
   async function createTelemetryApiKey() {
     await withFeedback(async () => {
-      const created = await requestJson<ProjectApiKeyCreateResponse>(
-        `projects/${encodeURIComponent(projectId.trim())}/api-keys`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            name: telemetryKeyName.trim() || "Project telemetry key",
-          }),
-        },
-      );
+      const created = sdkUsesBrowserCredential
+        ? await requestJson<{ plaintext_key: string }>(
+            `projects/${encodeURIComponent(projectId.trim())}/browser-keys`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                name: telemetryKeyName.trim() || "Browser telemetry key",
+                allowed_origins: [],
+              }),
+            },
+          )
+        : await requestJson<ProjectApiKeyCreateResponse>(
+            `projects/${encodeURIComponent(projectId.trim())}/api-keys`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                name: telemetryKeyName.trim() || "Project telemetry key",
+              }),
+            },
+          );
       setTelemetryKeyPlaintext(created.plaintext_key);
       await loadOnboardingState(false);
-    }, "Telemetry API key created.");
+    }, sdkUsesBrowserCredential ? "Telemetry browser key created." : "Telemetry API key created.");
   }
 
   async function copyTelemetryKeyToClipboard() {
@@ -1778,7 +1789,7 @@ export function ProjectOnboardingConsole() {
         setCopiedTelemetryKey(false);
       }, 1800);
     } catch {
-      setErrorMessage("Unable to copy the API key to your clipboard.");
+      setErrorMessage(`Unable to copy the ${sdkCredentialLabel} to your clipboard.`);
     }
   }
 
@@ -1979,9 +1990,12 @@ export function ProjectOnboardingConsole() {
   const hasRepoProfiles = (state?.repo_profiles.length ?? 0) > 0;
   const hasProjectServices = (state?.project_services.length ?? 0) > 0;
   const hasActiveApiKeys = state?.operational_readiness.has_active_api_keys ?? false;
+  const hasActiveBrowserKeys = state?.operational_readiness.has_active_browser_keys ?? false;
   const hasReviewedPolicy = state?.operational_readiness.policy_reviewed ?? false;
   const hasSdkSetup = state?.operational_readiness.sdk_setup_ready ?? false;
   const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
+  const activeBrowserKeys = state?.browser_keys.filter((item) => item.status === "active") ?? [];
+  const hasAnyActiveTelemetryKeys = hasActiveApiKeys || hasActiveBrowserKeys;
   const sdkStatusLabel =
     onboardingState?.sdk_setup_status === "change_request"
       ? "Bootstrap PR opened"
@@ -2209,6 +2223,16 @@ export function ProjectOnboardingConsole() {
     sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
     sdkBootstrapPlan?.strategies[0] ??
     null;
+  const sdkUsesBrowserCredential =
+    selectedSdkStrategy?.env_vars.some((item) => item.name.includes("BROWSER_KEY")) ?? false;
+  const sdkCredentialEnvVarName =
+    selectedSdkStrategy?.env_vars.find(
+      (item) => item.name.includes("BROWSER_KEY") || item.name.includes("API_KEY"),
+    )?.name ?? (sdkUsesBrowserCredential ? "STIMPACT_BROWSER_KEY" : "STIMPACT_API_KEY");
+  const sdkCredentialPlaceholder = sdkUsesBrowserCredential
+    ? "stimp_browser_replace_me"
+    : "stimp_live_replace_me";
+  const sdkCredentialLabel = sdkUsesBrowserCredential ? "browser key" : "API key";
   const sdkEnvironmentSnippet = selectedSdkStrategy
     ? selectedSdkStrategy.env_vars
         .map((item) => {
@@ -2217,8 +2241,8 @@ export function ProjectOnboardingConsole() {
               ? platformBaseUrl || item.example_value
               : item.name.includes("PROJECT_ID")
                 ? projectId || item.example_value
-                : item.name.includes("API_KEY")
-                  ? telemetryKeyPlaintext || "stimp_live_replace_me"
+                : item.name.includes("API_KEY") || item.name.includes("BROWSER_KEY")
+                  ? telemetryKeyPlaintext || sdkCredentialPlaceholder
                   : item.name.includes("SERVICE")
                     ? effectiveSdkServiceName
                     : item.name.includes("ENVIRONMENT")
@@ -2248,15 +2272,15 @@ export function ProjectOnboardingConsole() {
             ? "Approve and create the PR"
             : "Review the preview before opening a PR",
           detail: sdkBootstrapPreview.attempt.change_request_allowed
-            ? "If the diff looks right, open the PR from this screen. Stimpact will generate the project API key during PR creation."
+            ? `If the diff looks right, open the PR from this screen. Stimpact will generate the required ${sdkCredentialLabel} during PR creation.`
             : sdkBootstrapPreview.attempt.verification.summary ??
               "This preview still needs human review before the PR should be created.",
         },
         {
-          title: "Add the Stimpact API key and env vars",
+          title: `Add the Stimpact ${sdkCredentialLabel} and env vars`,
           detail: telemetryKeyPlaintext
-            ? `Add ${sdkPreviewEnvVarSummary} to your deployment provider. Use STIMPACT_API_KEY=${telemetryKeyPlaintext} for the runtime key value.`
-            : `After creating the PR, add ${sdkPreviewEnvVarSummary} to your deployment provider. Stimpact will generate the STIMPACT_API_KEY when the PR is opened.`,
+            ? `Add ${sdkPreviewEnvVarSummary} to your deployment provider. Use ${sdkCredentialEnvVarName}=${telemetryKeyPlaintext} for the runtime credential value.`
+            : `After creating the PR, add ${sdkPreviewEnvVarSummary} to your deployment provider. Stimpact will generate the ${sdkCredentialEnvVarName} when the PR is opened.`,
         },
         {
           title: "Merge, redeploy, then refresh heartbeat verification",
@@ -2298,8 +2322,8 @@ export function ProjectOnboardingConsole() {
   const sdkManualPrimarySteps = sdkManualActionItems.slice(0, 3);
   const sdkManualFollowUpItems = [
     telemetryKeyPlaintext
-      ? `Add STIMPACT_API_KEY=${telemetryKeyPlaintext} and the required Stimpact env vars to your deployed environment.`
-      : "Add STIMPACT_API_KEY and the required Stimpact env vars to your deployed environment before redeploying.",
+      ? `Add ${sdkCredentialEnvVarName}=${telemetryKeyPlaintext} and the required Stimpact env vars to your deployed environment.`
+      : `Add ${sdkCredentialEnvVarName} and the required Stimpact env vars to your deployed environment before redeploying.`,
     !platformBaseUrl
       ? "Replace the placeholder Stimpact base URL with your real public platform URL before deploying."
       : `Confirm the Stimpact base URL points at ${platformBaseUrl}.`,
@@ -2388,8 +2412,8 @@ export function ProjectOnboardingConsole() {
               {
                 step: "6",
                 label: "Telemetry",
-                detail: "Create API key and SDK path",
-                complete: hasActiveApiKeys && hasSdkSetup,
+                detail: "Create telemetry credentials and SDK path",
+                complete: hasAnyActiveTelemetryKeys && hasSdkSetup,
               },
               {
                 step: "7",
@@ -3317,9 +3341,9 @@ export function ProjectOnboardingConsole() {
           step="06"
           stepKey="6"
           title="Enable telemetry and SDK bootstrap"
-          description="Create the project API key used for telemetry ingest, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
-          complete={hasActiveApiKeys && hasSdkSetup}
-          editable={hasActiveApiKeys || hasSdkSetup || Boolean(telemetryKeyPlaintext)}
+          description="Create the telemetry credential used for ingest, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
+          complete={hasAnyActiveTelemetryKeys && hasSdkSetup}
+          editable={hasAnyActiveTelemetryKeys || hasSdkSetup || Boolean(telemetryKeyPlaintext)}
           isEditing={editingStepKey === "6"}
           editDisabled={Boolean(editingStepKey) && editingStepKey !== "6"}
           onEdit={() => beginStepEditing("6")}
@@ -3334,7 +3358,7 @@ export function ProjectOnboardingConsole() {
                 <div>
                   <p className="text-sm font-semibold text-[#171717]">Telemetry key</p>
                   <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
-                    Create the project-scoped API key first. Your app will use it for both telemetry
+                    Create the project-scoped telemetry credential first. Your app will use it for telemetry
                     delivery and heartbeat verification after the SDK is deployed.
                   </p>
                 </div>
@@ -3344,16 +3368,20 @@ export function ProjectOnboardingConsole() {
               </div>
               <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <Field
-                  label="API key name"
+                  label={sdkUsesBrowserCredential ? "Browser key name" : "API key name"}
                   value={telemetryKeyName}
                   onChange={setTelemetryKeyName}
                   placeholder="Production telemetry key"
                 />
                 <ActionButton
-                  label={activeApiKeys.length ? "Generate another key" : "Create telemetry key"}
+                  label={
+                    activeApiKeys.length || activeBrowserKeys.length
+                      ? `Generate another ${sdkCredentialLabel}`
+                      : `Create telemetry ${sdkCredentialLabel}`
+                  }
                   onClick={createTelemetryApiKey}
                   disabled={loading || !telemetryKeyName.trim()}
-                  variant={activeApiKeys.length ? "secondary" : "primary"}
+                  variant={activeApiKeys.length || activeBrowserKeys.length ? "secondary" : "primary"}
                 />
               </div>
               <div className="mt-4 flex flex-wrap gap-2.5">
@@ -3361,7 +3389,9 @@ export function ProjectOnboardingConsole() {
                   <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
                     Active keys
                   </span>
-                  <span className="text-sm font-semibold text-[#171717]">{activeApiKeys.length}</span>
+                  <span className="text-sm font-semibold text-[#171717]">
+                    {activeApiKeys.length + activeBrowserKeys.length}
+                  </span>
                 </div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
@@ -3381,7 +3411,9 @@ export function ProjectOnboardingConsole() {
               {telemetryKeyPlaintext ? (
                 <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-[rgba(240,253,244,0.92)] px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <p className="text-sm font-semibold text-[#166534]">New plaintext API key</p>
+                    <p className="text-sm font-semibold text-[#166534]">
+                      {`New plaintext ${sdkCredentialLabel}`}
+                    </p>
                     <button
                       type="button"
                       onClick={() => {
@@ -4208,7 +4240,7 @@ export function ProjectOnboardingConsole() {
                         <p className="text-sm font-semibold text-[#17385d]">Copy these 3 things</p>
                         <p className="mt-2 text-sm leading-6 text-[#5f6470]">
                           Manual setup should be quick: install the SDK, add the env vars including
-                          your Stimpact API key, then paste the code into the detected entrypoint.
+                          {` your Stimpact ${sdkCredentialLabel}, then paste the code into the detected entrypoint.`}
                         </p>
                         <div className="mt-4 grid gap-5">
                           {sdkManualPrimarySteps.map((item, index) => (
@@ -4268,7 +4300,7 @@ export function ProjectOnboardingConsole() {
                         setSdkSetupMode("manual");
                         void saveSdkSetupStatus("manual");
                       }}
-                      disabled={loading || (!activeApiKeys.length && !telemetryKeyPlaintext)}
+                      disabled={loading || (!activeApiKeys.length && !activeBrowserKeys.length && !telemetryKeyPlaintext)}
                       variant="success"
                     />
                     {automaticSdkAvailable ? (

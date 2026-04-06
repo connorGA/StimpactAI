@@ -8,6 +8,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlparse
+from uuid import uuid4
 
 import jwt
 from redis.asyncio import Redis
@@ -18,6 +20,8 @@ from api.core.config import (
     get_admin_api_token,
     get_auth_session_secret,
     get_auth_session_ttl_seconds,
+    get_browser_ingest_token_secret,
+    get_browser_ingest_token_ttl_seconds,
     get_control_plane_rate_limit_per_minute,
     get_redis_url,
     get_telemetry_rate_limit_per_minute,
@@ -35,11 +39,17 @@ from models.auth import OrganizationMembershipRole
 PROJECT_API_KEY_HEADER = "X-Stimpact-Project-Key"
 BEARER_PREFIX = "Bearer "
 AUTH_SESSION_ALGORITHM = "HS256"
+BROWSER_INGEST_TOKEN_TYPE = "browser_ingest"
 
 
 def build_project_api_key() -> tuple[str, str]:
     raw_key = f"stimp_live_{secrets.token_urlsafe(24)}"
     return raw_key, raw_key[:16]
+
+
+def build_project_browser_key() -> tuple[str, str]:
+    raw_key = f"stimp_browser_{secrets.token_urlsafe(24)}"
+    return raw_key, raw_key[:24]
 
 
 def hash_api_key(value: str) -> str:
@@ -84,6 +94,22 @@ class AuthenticatedUserContext:
     user_id: str
     organization_id: str
     role: OrganizationMembershipRole
+
+
+@dataclass(frozen=True)
+class BrowserIngestTokenContext:
+    project_id: str
+    service: str
+    environment: str
+    origin: str | None
+    browser_key_id: str
+
+
+@dataclass(frozen=True)
+class BrowserIngestTokenIssue:
+    token: str
+    expires_at: int
+    expires_in_seconds: int
 
 
 def build_session_token(
@@ -241,7 +267,116 @@ def _extract_project_api_key(request: Request) -> str | None:
     explicit = request.headers.get(PROJECT_API_KEY_HEADER)
     if explicit is not None and explicit.strip():
         return explicit.strip()
-    return _extract_bearer_token(request)
+    return None
+
+
+def _normalize_origin(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = urlparse(value.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _extract_request_origin(request: Request) -> str | None:
+    origin = _normalize_origin(request.headers.get("Origin"))
+    if origin is not None:
+        return origin
+    return _normalize_origin(request.headers.get("Referer"))
+
+
+def _assert_origin_allowed(*, allowed_origins: list[str], request_origin: str | None) -> None:
+    if not allowed_origins:
+        return
+    normalized_allowed = {_normalize_origin(item) for item in allowed_origins}
+    if request_origin is None or request_origin not in normalized_allowed:
+        raise APIError(
+            "The request origin is not allowed for this browser telemetry credential.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="browser_origin_not_allowed",
+        )
+
+
+def build_browser_ingest_token(
+    *,
+    project_id: str,
+    service: str,
+    environment: str,
+    origin: str | None,
+    browser_key_id: str,
+) -> BrowserIngestTokenIssue:
+    issued_at = int(time.time())
+    expires_in_seconds = get_browser_ingest_token_ttl_seconds()
+    expires_at = issued_at + expires_in_seconds
+    payload = {
+        "type": BROWSER_INGEST_TOKEN_TYPE,
+        "scope": "telemetry",
+        "project_id": project_id,
+        "service": service,
+        "environment": environment,
+        "origin": origin,
+        "browser_key_id": browser_key_id,
+        "iat": issued_at,
+        "exp": expires_at,
+        "jti": uuid4().hex,
+    }
+    return BrowserIngestTokenIssue(
+        token=jwt.encode(
+            payload,
+            get_browser_ingest_token_secret(),
+            algorithm=AUTH_SESSION_ALGORITHM,
+        ),
+        expires_at=expires_at,
+        expires_in_seconds=expires_in_seconds,
+    )
+
+
+def decode_browser_ingest_token(token: str) -> BrowserIngestTokenContext:
+    try:
+        payload = jwt.decode(
+            token,
+            get_browser_ingest_token_secret(),
+            algorithms=[AUTH_SESSION_ALGORITHM],
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise APIError(
+            "The browser ingest token has expired.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="browser_ingest_token_expired",
+        ) from exc
+    except jwt.PyJWTError as exc:
+        raise APIError(
+            "The browser ingest token is invalid.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="browser_ingest_token_invalid",
+        ) from exc
+    if payload.get("type") != BROWSER_INGEST_TOKEN_TYPE or payload.get("scope") != "telemetry":
+        raise APIError(
+            "The browser ingest token is invalid.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="browser_ingest_token_invalid",
+        )
+    project_id = payload.get("project_id")
+    service = payload.get("service")
+    environment = payload.get("environment")
+    browser_key_id = payload.get("browser_key_id")
+    origin = payload.get("origin")
+    if not all(isinstance(item, str) and item for item in [project_id, service, environment, browser_key_id]):
+        raise APIError(
+            "The browser ingest token is invalid.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="browser_ingest_token_invalid",
+        )
+    return BrowserIngestTokenContext(
+        project_id=project_id,
+        service=service,
+        environment=environment,
+        origin=origin if isinstance(origin, str) and origin else None,
+        browser_key_id=browser_key_id,
+    )
 
 
 def _has_valid_admin_token(request: Request) -> bool:
@@ -310,6 +445,12 @@ async def enforce_control_plane_rate_limit(request: Request) -> None:
 async def enforce_telemetry_payload_rate_limit(request: Request, payload) -> None:
     limit = get_telemetry_rate_limit_per_minute()
     bucket = f"telemetry:{payload.project_id}:{_client_identity(request)}"
+    await _get_rate_limiter(request).enforce(bucket, limit=limit)
+
+
+async def enforce_browser_token_issue_rate_limit(request: Request, project_id: str) -> None:
+    limit = get_telemetry_rate_limit_per_minute()
+    bucket = f"telemetry-browser-token:{project_id}:{_client_identity(request)}"
     await _get_rate_limiter(request).enforce(bucket, limit=limit)
 
 
@@ -466,6 +607,31 @@ async def authorize_telemetry_ingest_payload(
     payload,
     repository: ControlPlaneRepository,
 ) -> None:
+    bearer_token = _extract_bearer_token(request)
+    if bearer_token is not None and _extract_project_api_key(request) is None:
+        token_context = decode_browser_ingest_token(bearer_token)
+        request_origin = _extract_request_origin(request)
+        if token_context.project_id != payload.project_id:
+            raise APIError(
+                "The browser ingest token does not match the requested project.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_project_mismatch",
+            )
+        payload_environment = payload.environment.value if hasattr(payload.environment, "value") else str(payload.environment)
+        if token_context.service != payload.service or token_context.environment != payload_environment:
+            raise APIError(
+                "The browser ingest token does not match the requested telemetry scope.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_scope_mismatch",
+            )
+        if token_context.origin is not None and request_origin != token_context.origin:
+            raise APIError(
+                "The browser ingest token is not valid for this request origin.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_origin_mismatch",
+            )
+        return
+
     if isinstance(repository, ControlPlaneRepository) and getattr(repository, "_pool", None) is None:
         if is_project_api_key_auth_enforced():
             raise APIError(
@@ -500,6 +666,44 @@ async def authorize_telemetry_ingest_payload(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="project_api_key_required",
         )
+
+
+async def issue_browser_ingest_token_for_request(
+    request: Request,
+    *,
+    project_id: str,
+    browser_key: str,
+    service: str,
+    environment: str,
+    repository: ControlPlaneRepository,
+) -> BrowserIngestTokenIssue:
+    if isinstance(repository, ControlPlaneRepository) and getattr(repository, "_pool", None) is None:
+        raise APIError(
+            "Browser token issuance requires Postgres-backed control-plane access.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="browser_key_auth_unavailable",
+        )
+    record = await repository.find_active_project_browser_key(
+        project_id=project_id,
+        key_hash=hash_api_key(browser_key),
+    )
+    if record is None:
+        raise APIError(
+            "The browser telemetry key is invalid for this project.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="browser_key_invalid",
+        )
+    request_origin = _extract_request_origin(request)
+    _assert_origin_allowed(allowed_origins=record.allowed_origins, request_origin=request_origin)
+    await repository.mark_project_browser_key_used(record.id)
+    await repository.mark_project_browser_key_issued(record.id)
+    return build_browser_ingest_token(
+        project_id=project_id,
+        service=service,
+        environment=environment,
+        origin=request_origin,
+        browser_key_id=record.id,
+    )
 
 
 async def require_telemetry_ingest_access(

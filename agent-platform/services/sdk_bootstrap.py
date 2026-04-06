@@ -16,6 +16,7 @@ from services.sdk_catalog import SdkEnvVarSpec, get_framework_spec
 from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner, SdkBootstrapFallbackProposal
 
 SDK_BOOTSTRAP_API_KEY_PLACEHOLDER = "stimp_live_replace_me"
+SDK_BOOTSTRAP_BROWSER_KEY_PLACEHOLDER = "stimp_browser_replace_me"
 logger = logging.getLogger(__name__)
 _ROOT_MANIFEST_DIR_NAMES = (
     "frontend",
@@ -457,7 +458,7 @@ def _detect_javascript_strategies(
                     ),
                     SdkBootstrapManualStep(
                         title="Configure telemetry",
-                        content="Pass your project API key, project id, service name, environment, and public Stimpact base URL when constructing `StimpactClient`.",
+                        content="Pass a server `apiKey` for backend runtimes, or a browser `browserKey` / token provider for frontend runtimes, alongside the project id, service name, environment, and public Stimpact base URL when constructing `StimpactClient`.",
                     ),
                 ],
                 preview_snippet=_build_generic_javascript_snippet(service_name=service_name, environment=environment),
@@ -1090,7 +1091,7 @@ def _run_sdk_bootstrap_attempts(
             service_name=service_name,
             environment=environment,
             base_url=base_url,
-            api_key=api_key,
+            api_key=_resolve_strategy_credential_value(strategy=strategy, credential_value=api_key),
         )
         if patch.attempt is None:
             continue
@@ -1435,7 +1436,7 @@ def _apply_next_strategy(
         [
             ("NEXT_PUBLIC_STIMPACT_BASE_URL", base_url),
             ("NEXT_PUBLIC_STIMPACT_PROJECT_ID", project_id),
-            ("NEXT_PUBLIC_STIMPACT_API_KEY", api_key),
+            ("NEXT_PUBLIC_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
 
@@ -1474,7 +1475,7 @@ def _apply_vite_react_strategy(
         [
             ("VITE_STIMPACT_BASE_URL", base_url),
             ("VITE_STIMPACT_PROJECT_ID", project_id),
-            ("VITE_STIMPACT_API_KEY", api_key),
+            ("VITE_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
 
@@ -1514,7 +1515,7 @@ def _apply_react_scripts_strategy(
         [
             ("REACT_APP_STIMPACT_BASE_URL", base_url),
             ("REACT_APP_STIMPACT_PROJECT_ID", project_id),
-            ("REACT_APP_STIMPACT_API_KEY", api_key),
+            ("REACT_APP_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
 
@@ -1919,6 +1920,19 @@ def _entrypoint_relative_to_subpath(strategy: SdkBootstrapStrategy) -> Path:
     return Path(entrypoint.removeprefix(f"{strategy.target_subpath}/"))
 
 
+def _resolve_strategy_credential_value(*, strategy: SdkBootstrapStrategy, credential_value: str) -> str:
+    if credential_value != SDK_BOOTSTRAP_API_KEY_PLACEHOLDER:
+        return credential_value
+    if any(
+        item.name.startswith("NEXT_PUBLIC_")
+        or item.name.startswith("VITE_")
+        or item.name.startswith("REACT_APP_")
+        for item in strategy.env_vars
+    ):
+        return SDK_BOOTSTRAP_BROWSER_KEY_PLACEHOLDER
+    return credential_value
+
+
 def _resolve_subpath(repo_dir: Path, subpath: str) -> Path:
     return repo_dir if subpath == "." else repo_dir / subpath
 
@@ -1981,18 +1995,18 @@ export function StimpactProvider() {{
   useEffect(() => {{
     const baseUrl = process.env.NEXT_PUBLIC_STIMPACT_BASE_URL;
     const projectId = process.env.NEXT_PUBLIC_STIMPACT_PROJECT_ID;
-    const apiKey = process.env.NEXT_PUBLIC_STIMPACT_API_KEY;
+    const browserKey = process.env.NEXT_PUBLIC_STIMPACT_BROWSER_KEY;
     const service = "{service_name}";
     const runtimeEnvironment = "{environment}";
 
-    if (!baseUrl || !projectId || !apiKey || !service) {{
+    if (!baseUrl || !projectId || !browserKey || !service) {{
       return;
     }}
 
     const client = new StimpactClient({{
       baseUrl,
       projectId,
-      apiKey,
+      browserKey,
       service,
       environment: runtimeEnvironment,
     }});
@@ -2023,18 +2037,18 @@ export function installStimpact() {{
 
   const baseUrl = import.meta.env.VITE_STIMPACT_BASE_URL;
   const projectId = import.meta.env.VITE_STIMPACT_PROJECT_ID;
-  const apiKey = import.meta.env.VITE_STIMPACT_API_KEY;
+  const browserKey = import.meta.env.VITE_STIMPACT_BROWSER_KEY;
   const service = "{service_name}";
   const runtimeEnvironment = "{environment}";
 
-  if (!baseUrl || !projectId || !apiKey || !service) {{
+  if (!baseUrl || !projectId || !browserKey || !service) {{
     return;
   }}
 
   const client = new StimpactClient({{
     baseUrl,
     projectId,
-    apiKey,
+    browserKey,
     service,
     environment: runtimeEnvironment,
   }});
@@ -2058,18 +2072,18 @@ export function installStimpact() {{
 
   const baseUrl = process.env.REACT_APP_STIMPACT_BASE_URL;
   const projectId = process.env.REACT_APP_STIMPACT_PROJECT_ID;
-  const apiKey = process.env.REACT_APP_STIMPACT_API_KEY;
+  const browserKey = process.env.REACT_APP_STIMPACT_BROWSER_KEY;
   const service = "{service_name}";
   const runtimeEnvironment = "{environment}";
 
-  if (!baseUrl || !projectId || !apiKey || !service) {{
+  if (!baseUrl || !projectId || !browserKey || !service) {{
     return;
   }}
 
   const client = new StimpactClient({{
     baseUrl,
     projectId,
-    apiKey,
+    browserKey,
     service,
     environment: runtimeEnvironment,
   }});
@@ -2141,7 +2155,7 @@ def _build_generic_javascript_snippet(*, service_name: str, environment: str) ->
 const stimpact = new StimpactClient({{
   baseUrl: "<public-stimpact-url>",
   projectId: "<project-id>",
-  apiKey: "<project-api-key>",
+  browserKey: "<browser-key>",
   service: "{service_name}",
   environment: "{environment}",
 }});

@@ -23,6 +23,8 @@ import type {
   OrganizationInvite,
   ProjectApiKey,
   ProjectApiKeyCreateResponse,
+  ProjectBrowserKey,
+  ProjectBrowserKeyCreateResponse,
   ProjectOnboarding,
   ProjectPolicy,
   ProjectSandboxPlanPreview,
@@ -394,6 +396,38 @@ export async function createProjectApiKey(
     {
       method: "POST",
       body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function listProjectBrowserKeys(projectId: string): Promise<ProjectBrowserKey[]> {
+  return fetchFromControlPlane<ProjectBrowserKey[]>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/browser-keys`,
+    { method: "GET" },
+  );
+}
+
+export async function createProjectBrowserKey(
+  projectId: string,
+  body: { name: string; allowed_origins: string[] },
+): Promise<ProjectBrowserKeyCreateResponse> {
+  return fetchFromControlPlane<ProjectBrowserKeyCreateResponse>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/browser-keys`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function revokeProjectBrowserKey(
+  projectId: string,
+  keyId: string,
+): Promise<ProjectBrowserKey> {
+  return fetchFromControlPlane<ProjectBrowserKey>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/browser-keys/${encodeURIComponent(keyId)}/revoke`,
+    {
+      method: "POST",
     },
   );
 }

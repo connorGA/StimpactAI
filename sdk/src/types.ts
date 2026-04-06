@@ -4,6 +4,8 @@ export type StimpactEnvironment =
   | "development"
   | "test";
 
+export type StimpactTokenProvider = () => Promise<string>;
+
 export type HttpRequestContext = {
   method?: string;
   url?: string;
@@ -37,7 +39,10 @@ export type HeartbeatInput = {
 export type StimpactClientOptions = {
   baseUrl: string;
   projectId: string;
-  apiKey: string;
+  apiKey?: string;
+  browserKey?: string;
+  browserTokenEndpoint?: string;
+  tokenProvider?: StimpactTokenProvider;
   service: string;
   environment?: StimpactEnvironment;
   fetchImpl?: typeof fetch;
@@ -45,6 +50,11 @@ export type StimpactClientOptions = {
   timeoutMs?: number;
   retryAttempts?: number;
   retryDelayMs?: number;
+  captureRequestContext?: boolean;
+  captureResponseContext?: boolean;
+  includeBodies?: boolean;
+  redactedHeaders?: string[];
+  maxValueLength?: number;
 };
 
 export type BrowserAutoCaptureOptions = {

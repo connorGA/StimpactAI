@@ -71,6 +71,11 @@ class ProjectApiKeyStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class ProjectBrowserKeyStatus(StrEnum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
 class ProjectSdkSetupStatus(StrEnum):
     PENDING = "pending"
     MANUAL = "manual"
@@ -229,6 +234,40 @@ class ProjectApiKeyRecord(BaseModel):
             key_hash=str(row["key_hash"]),
             status=ProjectApiKeyStatus(str(row["status"])),
             last_used_at=row["last_used_at"],
+            revoked_at=row["revoked_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+class ProjectBrowserKeyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    key_prefix: str
+    key_hash: str
+    allowed_origins: list[str] = Field(default_factory=list)
+    status: ProjectBrowserKeyStatus
+    last_used_at: datetime | None = None
+    last_issued_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_db_row(cls, row: Any) -> "ProjectBrowserKeyRecord":
+        return cls(
+            id=str(row["id"]),
+            project_id=str(row["project_id"]),
+            name=str(row["name"]),
+            key_prefix=str(row["key_prefix"]),
+            key_hash=str(row["key_hash"]),
+            allowed_origins=_decode_json_array(row["allowed_origins"]),
+            status=ProjectBrowserKeyStatus(str(row["status"])),
+            last_used_at=row["last_used_at"],
+            last_issued_at=row["last_issued_at"],
             revoked_at=row["revoked_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],

@@ -4,6 +4,8 @@ from api.core.config import (
     get_admin_api_token,
     get_async_job_stale_lease_seconds,
     get_aws_region,
+    get_browser_ingest_token_secret,
+    get_browser_ingest_token_ttl_seconds,
     get_control_plane_namespace,
     get_control_plane_rate_limit_per_minute,
     get_control_plane_service_account,
@@ -87,6 +89,9 @@ def clear_model_env(monkeypatch) -> None:
     monkeypatch.delenv("GITLAB_CALLBACK_URL", raising=False)
     monkeypatch.delenv("GITLAB_OAUTH_SCOPES", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_AUTH_SESSION_SECRET", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_TTL_SECONDS", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_CONTROL_PLANE_AUTH", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", raising=False)
     monkeypatch.delenv("AGENT_PLATFORM_REQUIRE_DATABASE", raising=False)
@@ -197,6 +202,8 @@ def test_aws_and_kubernetes_config_defaults(monkeypatch) -> None:
     assert get_gitlab_callback_url() is None
     assert get_gitlab_oauth_scopes() == ["api", "read_repository", "write_repository"]
     assert get_admin_api_token() is None
+    assert get_browser_ingest_token_secret() == "stimpact-dev-session-secret"
+    assert get_browser_ingest_token_ttl_seconds() == 300
     assert is_local_development_environment() is True
     assert is_control_plane_auth_enforced() is False
     assert is_project_api_key_auth_enforced() is False
@@ -255,6 +262,9 @@ def test_aws_and_kubernetes_config_overrides(monkeypatch) -> None:
 def test_auth_and_rate_limit_overrides(monkeypatch) -> None:
     clear_model_env(monkeypatch)
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("AGENT_PLATFORM_AUTH_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_SECRET", "browser-secret")
+    monkeypatch.setenv("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_TTL_SECONDS", "120")
     monkeypatch.setenv("AGENT_PLATFORM_REQUIRE_PROJECT_API_KEYS", "true")
     monkeypatch.setenv("AGENT_PLATFORM_RUN_MIGRATIONS", "false")
     monkeypatch.setenv("AGENT_PLATFORM_CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", "45")
@@ -263,6 +273,8 @@ def test_auth_and_rate_limit_overrides(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ASYNC_JOB_STALE_LEASE_SECONDS", "180")
 
     assert get_admin_api_token() == "admin-token"
+    assert get_browser_ingest_token_secret() == "browser-secret"
+    assert get_browser_ingest_token_ttl_seconds() == 120
     assert is_control_plane_auth_enforced() is True
     assert is_project_api_key_auth_enforced() is True
     assert should_run_migrations_on_startup() is False

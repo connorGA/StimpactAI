@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Request, status
 
 from api.core.security import (
     authorize_telemetry_ingest_payload,
+    enforce_browser_token_issue_rate_limit,
     enforce_telemetry_payload_rate_limit,
     enforce_telemetry_rate_limit,
+    issue_browser_ingest_token_for_request,
     require_telemetry_ingest_access,
 )
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
@@ -14,6 +18,8 @@ from api.events.outbox_signaler import OutboxSignaler
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.telemetry_repository import PostgresTelemetryRepository
 from api.schemas.telemetry import (
+    BrowserTelemetryTokenIssueRequest,
+    BrowserTelemetryTokenIssueResponse,
     TelemetryAcceptedResponse,
     TelemetryErrorRequest,
     TelemetryHeartbeatAcceptedResponse,
@@ -38,6 +44,32 @@ def get_control_plane_repository(
 
 def get_outbox_signaler(request: Request) -> OutboxSignaler:
     return request.app.state.outbox_signaler
+
+
+@router.post(
+    "/browser-token",
+    response_model=BrowserTelemetryTokenIssueResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def issue_browser_token(
+    request: Request,
+    payload: BrowserTelemetryTokenIssueRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> BrowserTelemetryTokenIssueResponse:
+    await enforce_browser_token_issue_rate_limit(request, payload.project_id)
+    issued = await issue_browser_ingest_token_for_request(
+        request,
+        project_id=payload.project_id,
+        browser_key=payload.browser_key,
+        service=payload.service,
+        environment=payload.environment,
+        repository=repository,
+    )
+    return BrowserTelemetryTokenIssueResponse(
+        token=issued.token,
+        expires_at=datetime.fromtimestamp(issued.expires_at, tz=UTC),
+        expires_in_seconds=issued.expires_in_seconds,
+    )
 
 
 @router.post("/error", response_model=TelemetryAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)

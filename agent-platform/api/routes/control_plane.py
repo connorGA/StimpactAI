@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from api.core.security import (
     build_project_api_key,
+    build_project_browser_key,
     enforce_control_plane_rate_limit,
     hash_api_key,
     require_control_plane_access,
@@ -27,6 +28,7 @@ from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.schemas.control_plane import (
     CreateProjectServiceRequest,
     CreateProjectApiKeyRequest,
+    CreateProjectBrowserKeyRequest,
     CreateSdkBootstrapPlanRequest,
     CreateSdkBootstrapPreviewRequest,
     CreateSdkBootstrapChangeRequestRequest,
@@ -42,6 +44,8 @@ from api.schemas.control_plane import (
     GitLabOAuthStartResponse,
     ProjectApiKeyCreateResponse,
     ProjectApiKeyResponse,
+    ProjectBrowserKeyCreateResponse,
+    ProjectBrowserKeyResponse,
     ProjectOnboardingResponse,
     ProjectOnboardingStateResponse,
     ProjectOperationalReadinessResponse,
@@ -177,6 +181,7 @@ def _build_operational_readiness(
     repo_profiles: list[RepoProfileResponse],
     project_services: list[ProjectServiceResponse],
     api_keys: list[ProjectApiKeyResponse],
+    browser_keys: list[ProjectBrowserKeyResponse],
     policy_reviewed: bool,
     sdk_setup_status: ProjectSdkSetupStatus,
 ) -> ProjectOperationalReadinessResponse:
@@ -186,6 +191,7 @@ def _build_operational_readiness(
     has_repo_profiles = len(repo_profiles) > 0
     has_services = len(project_services) > 0
     has_active_api_keys = any(item.status == "active" for item in api_keys)
+    has_active_browser_keys = any(item.status == "active" for item in browser_keys)
     sdk_setup_ready = sdk_setup_status is not ProjectSdkSetupStatus.PENDING
     complete = (
         has_provider_connection
@@ -193,7 +199,7 @@ def _build_operational_readiness(
         and has_secrets
         and has_repo_profiles
         and has_services
-        and has_active_api_keys
+        and (has_active_api_keys or has_active_browser_keys)
         and policy_reviewed
         and sdk_setup_ready
     )
@@ -204,6 +210,7 @@ def _build_operational_readiness(
         has_repo_profiles=has_repo_profiles,
         has_services=has_services,
         has_active_api_keys=has_active_api_keys,
+        has_active_browser_keys=has_active_browser_keys,
         policy_reviewed=policy_reviewed,
         sdk_setup_ready=sdk_setup_ready,
         complete=complete,
@@ -217,6 +224,7 @@ def _build_onboarding_next_steps(
     repo_profiles: list[RepoProfileResponse],
     project_services: list[ProjectServiceResponse],
     api_keys: list[ProjectApiKeyResponse],
+    browser_keys: list[ProjectBrowserKeyResponse],
     policy_reviewed: bool,
     sdk_setup_status: ProjectSdkSetupStatus,
 ) -> list[str]:
@@ -235,8 +243,10 @@ def _build_onboarding_next_steps(
         steps.append("Choose a repository after the sync completes.")
     if integrations and secret_refs and not repo_profiles:
         steps.append("Sync provider repositories and create repo profiles for the services you need.")
-    if not any(item.status == "active" for item in api_keys):
-        steps.append("Create an active project API key for telemetry ingest.")
+    if not any(item.status == "active" for item in api_keys) and not any(
+        item.status == "active" for item in browser_keys
+    ):
+        steps.append("Create telemetry credentials for the runtime you plan to instrument.")
     if not policy_reviewed:
         steps.append("Review and confirm the automation controls for this project.")
     if sdk_setup_status is ProjectSdkSetupStatus.PENDING:
@@ -418,6 +428,15 @@ def _build_sdk_bootstrap_pr_metadata(
     )
 
 
+def _sdk_strategy_uses_browser_credentials(strategy: SdkBootstrapStrategy) -> bool:
+    return any(
+        item.name.startswith("NEXT_PUBLIC_")
+        or item.name.startswith("VITE_")
+        or item.name.startswith("REACT_APP_")
+        for item in strategy.env_vars
+    )
+
+
 def _build_project_telemetry_verification_response(
     *,
     service: str,
@@ -456,6 +475,10 @@ async def _build_project_onboarding_response(
     api_keys = [
         ProjectApiKeyResponse.from_record(record)
         for record in await repository.list_project_api_keys(project_id)
+    ]
+    browser_keys = [
+        ProjectBrowserKeyResponse.from_record(record)
+        for record in await repository.list_project_browser_keys(project_id)
     ]
     integrations = await repository.list_provider_integrations(project_id=project_id)
     integration_payloads: list[ProviderIntegrationOnboardingResponse] = []
@@ -504,6 +527,7 @@ async def _build_project_onboarding_response(
         repo_profiles=repo_profiles,
         project_services=project_services,
         api_keys=api_keys,
+        browser_keys=browser_keys,
         policy_reviewed=onboarding_state.policy_reviewed,
         sdk_setup_status=onboarding_state.sdk_setup_status,
     )
@@ -515,6 +539,7 @@ async def _build_project_onboarding_response(
         operational_readiness=operational_readiness,
         secret_refs=secret_refs,
         api_keys=api_keys,
+        browser_keys=browser_keys,
         integrations=integration_payloads,
         repo_profiles=repo_profiles,
         project_services=project_services,
@@ -525,6 +550,7 @@ async def _build_project_onboarding_response(
             repo_profiles=repo_profiles,
             project_services=project_services,
             api_keys=api_keys,
+            browser_keys=browser_keys,
             policy_reviewed=onboarding_state.policy_reviewed,
             sdk_setup_status=onboarding_state.sdk_setup_status,
         ),
@@ -716,6 +742,64 @@ async def revoke_project_api_key(
         )
     revoked = await repository.revoke_project_api_key(key_id)
     return ProjectApiKeyResponse.from_record(revoked)
+
+
+@router.post(
+    "/projects/{project_id}/browser-keys",
+    response_model=ProjectBrowserKeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_project_browser_key(
+    project_id: str,
+    payload: CreateProjectBrowserKeyRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectBrowserKeyCreateResponse:
+    plaintext_key, key_prefix = build_project_browser_key()
+    record = await repository.create_project_browser_key(
+        project_id=project_id,
+        name=payload.name,
+        key_prefix=key_prefix,
+        key_hash=hash_api_key(plaintext_key),
+        allowed_origins=payload.allowed_origins,
+    )
+    return ProjectBrowserKeyCreateResponse(
+        browser_key=ProjectBrowserKeyResponse.from_record(record),
+        plaintext_key=plaintext_key,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/browser-keys",
+    response_model=list[ProjectBrowserKeyResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_project_browser_keys(
+    project_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> list[ProjectBrowserKeyResponse]:
+    records = await repository.list_project_browser_keys(project_id)
+    return [ProjectBrowserKeyResponse.from_record(record) for record in records]
+
+
+@router.post(
+    "/projects/{project_id}/browser-keys/{key_id}/revoke",
+    response_model=ProjectBrowserKeyResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def revoke_project_browser_key(
+    project_id: str,
+    key_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectBrowserKeyResponse:
+    record = await repository.get_project_browser_key(key_id)
+    if record is None or record.project_id != project_id:
+        raise APIError(
+            f"Project browser key {key_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="project_browser_key_not_found",
+        )
+    revoked = await repository.revoke_project_browser_key(key_id)
+    return ProjectBrowserKeyResponse.from_record(revoked)
 
 
 @router.get(
@@ -956,7 +1040,10 @@ async def create_project_sdk_bootstrap_change_request(
             status_code=status.HTTP_409_CONFLICT,
             code="sdk_bootstrap_preview_verification_failed",
         )
-    plaintext_key, key_prefix = build_project_api_key()
+    uses_browser_credentials = _sdk_strategy_uses_browser_credentials(prepared_preview.strategy)
+    plaintext_key, key_prefix = (
+        build_project_browser_key() if uses_browser_credentials else build_project_api_key()
+    )
     bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
         clone_url=clone_url,
         default_branch=provider_repository.default_branch,
@@ -980,12 +1067,23 @@ async def create_project_sdk_bootstrap_change_request(
         bootstrap_patch.attempt.apply_duration_ms if bootstrap_patch.attempt is not None else None,
         bootstrap_patch.attempt.verification_duration_ms if bootstrap_patch.attempt is not None else None,
     )
-    api_key_record = await repository.create_project_api_key(
-        project_id=project_id,
-        name=payload.api_key_name,
-        key_prefix=key_prefix,
-        key_hash=hash_api_key(plaintext_key),
-    )
+    api_key_record = None
+    browser_key_record = None
+    if uses_browser_credentials:
+        browser_key_record = await repository.create_project_browser_key(
+            project_id=project_id,
+            name=payload.api_key_name,
+            key_prefix=key_prefix,
+            key_hash=hash_api_key(plaintext_key),
+            allowed_origins=[],
+        )
+    else:
+        api_key_record = await repository.create_project_api_key(
+            project_id=project_id,
+            name=payload.api_key_name,
+            key_prefix=key_prefix,
+            key_hash=hash_api_key(plaintext_key),
+        )
     pr_metadata = _build_sdk_bootstrap_pr_metadata(strategy=prepared_preview.strategy, branch_name=payload.branch_name)
     writeback = await service.propose_patch_writeback(
         provider_repository_id=payload.provider_repository_id,
@@ -1005,7 +1103,13 @@ async def create_project_sdk_bootstrap_change_request(
     )
     return SdkBootstrapChangeRequestResponse(
         run_id=prepared_preview.run.run_id,
-        api_key=ProjectApiKeyResponse.from_record(api_key_record),
+        credential_kind="browser_key" if uses_browser_credentials else "server_api_key",
+        api_key=ProjectApiKeyResponse.from_record(api_key_record) if api_key_record is not None else None,
+        browser_key=(
+            ProjectBrowserKeyResponse.from_record(browser_key_record)
+            if browser_key_record is not None
+            else None
+        ),
         plaintext_key=plaintext_key,
         branch_name=writeback.branch_name,
         commit_sha=writeback.commit_sha,

@@ -16,6 +16,8 @@ from models.control_plane import (
     ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectBrowserKeyRecord,
+    ProjectBrowserKeyStatus,
     ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
     ProjectSdkSetupStatus,
@@ -186,9 +188,64 @@ WHERE project_id = $1
   AND status = 'active';
 """
 
+INSERT_PROJECT_BROWSER_KEY_SQL = """
+INSERT INTO project_browser_keys (
+    id, project_id, name, key_prefix, key_hash, allowed_origins, status
+) VALUES (
+    $1, $2, $3, $4, $5, $6::jsonb, $7
+)
+RETURNING *;
+"""
+
+LIST_PROJECT_BROWSER_KEYS_SQL = """
+SELECT *
+FROM project_browser_keys
+WHERE project_id = $1
+ORDER BY created_at DESC;
+"""
+
+GET_PROJECT_BROWSER_KEY_SQL = """
+SELECT *
+FROM project_browser_keys
+WHERE id = $1
+LIMIT 1;
+"""
+
+FIND_ACTIVE_PROJECT_BROWSER_KEY_BY_HASH_SQL = """
+SELECT *
+FROM project_browser_keys
+WHERE project_id = $1
+  AND key_hash = $2
+  AND status = 'active'
+LIMIT 1;
+"""
+
+COUNT_ACTIVE_PROJECT_BROWSER_KEYS_SQL = """
+SELECT COUNT(*)
+FROM project_browser_keys
+WHERE project_id = $1
+  AND status = 'active';
+"""
+
 MARK_PROJECT_API_KEY_USED_SQL = """
 UPDATE project_api_keys
 SET last_used_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+MARK_PROJECT_BROWSER_KEY_USED_SQL = """
+UPDATE project_browser_keys
+SET last_used_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+MARK_PROJECT_BROWSER_KEY_ISSUED_SQL = """
+UPDATE project_browser_keys
+SET last_issued_at = NOW(),
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -229,6 +286,15 @@ ORDER BY last_seen_at DESC;
 
 REVOKE_PROJECT_API_KEY_SQL = """
 UPDATE project_api_keys
+SET status = $2,
+    revoked_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+REVOKE_PROJECT_BROWSER_KEY_SQL = """
+UPDATE project_browser_keys
 SET status = $2,
     revoked_at = NOW(),
     updated_at = NOW()
@@ -710,9 +776,75 @@ class ControlPlaneRepository:
             raise PersistenceError("Failed to execute a control-plane query.") from exc
         return bool(count and int(count) > 0)
 
+    async def create_project_browser_key(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        key_prefix: str,
+        key_hash: str,
+        allowed_origins: list[str],
+        status: ProjectBrowserKeyStatus = ProjectBrowserKeyStatus.ACTIVE,
+    ) -> ProjectBrowserKeyRecord:
+        row = await self._fetchrow(
+            INSERT_PROJECT_BROWSER_KEY_SQL,
+            str(uuid4()),
+            project_id,
+            name,
+            key_prefix,
+            key_hash,
+            json.dumps(allowed_origins),
+            status.value,
+        )
+        return ProjectBrowserKeyRecord.from_db_row(row)
+
+    async def list_project_browser_keys(self, project_id: str) -> list[ProjectBrowserKeyRecord]:
+        rows = await self._fetch(LIST_PROJECT_BROWSER_KEYS_SQL, project_id)
+        return [ProjectBrowserKeyRecord.from_db_row(row) for row in rows]
+
+    async def get_project_browser_key(self, key_id: str) -> ProjectBrowserKeyRecord | None:
+        row = await self._fetchrow(GET_PROJECT_BROWSER_KEY_SQL, key_id, allow_missing=True)
+        if row is None:
+            return None
+        return ProjectBrowserKeyRecord.from_db_row(row)
+
+    async def find_active_project_browser_key(
+        self,
+        *,
+        project_id: str,
+        key_hash: str,
+    ) -> ProjectBrowserKeyRecord | None:
+        row = await self._fetchrow(
+            FIND_ACTIVE_PROJECT_BROWSER_KEY_BY_HASH_SQL,
+            project_id,
+            key_hash,
+            allow_missing=True,
+        )
+        if row is None:
+            return None
+        return ProjectBrowserKeyRecord.from_db_row(row)
+
+    async def has_active_project_browser_keys(self, project_id: str) -> bool:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for control-plane operations.")
+        try:
+            async with self._pool.acquire() as connection:
+                count = await connection.fetchval(COUNT_ACTIVE_PROJECT_BROWSER_KEYS_SQL, project_id)
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to execute a control-plane query.") from exc
+        return bool(count and int(count) > 0)
+
     async def mark_project_api_key_used(self, key_id: str) -> ProjectApiKeyRecord:
         row = await self._fetchrow(MARK_PROJECT_API_KEY_USED_SQL, key_id)
         return ProjectApiKeyRecord.from_db_row(row)
+
+    async def mark_project_browser_key_used(self, key_id: str) -> ProjectBrowserKeyRecord:
+        row = await self._fetchrow(MARK_PROJECT_BROWSER_KEY_USED_SQL, key_id)
+        return ProjectBrowserKeyRecord.from_db_row(row)
+
+    async def mark_project_browser_key_issued(self, key_id: str) -> ProjectBrowserKeyRecord:
+        row = await self._fetchrow(MARK_PROJECT_BROWSER_KEY_ISSUED_SQL, key_id)
+        return ProjectBrowserKeyRecord.from_db_row(row)
 
     async def revoke_project_api_key(self, key_id: str) -> ProjectApiKeyRecord:
         row = await self._fetchrow(
@@ -721,6 +853,14 @@ class ControlPlaneRepository:
             ProjectApiKeyStatus.REVOKED.value,
         )
         return ProjectApiKeyRecord.from_db_row(row)
+
+    async def revoke_project_browser_key(self, key_id: str) -> ProjectBrowserKeyRecord:
+        row = await self._fetchrow(
+            REVOKE_PROJECT_BROWSER_KEY_SQL,
+            key_id,
+            ProjectBrowserKeyStatus.REVOKED.value,
+        )
+        return ProjectBrowserKeyRecord.from_db_row(row)
 
     async def upsert_project_telemetry_heartbeat(
         self,

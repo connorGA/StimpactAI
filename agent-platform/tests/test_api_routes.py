@@ -6,7 +6,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.core.errors import APIError, register_exception_handlers
-from api.core.security import get_security_control_plane_repository, hash_api_key
+from api.core.security import (
+    build_browser_ingest_token,
+    get_security_control_plane_repository,
+    hash_api_key,
+)
 from api.events.publisher import IncidentEventPublisher
 from api.routes.control_plane import (
     get_control_plane_repository,
@@ -59,6 +63,8 @@ from models.control_plane import (
     AutonomyMode,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectBrowserKeyRecord,
+    ProjectBrowserKeyStatus,
     ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
     ProjectSdkSetupStatus,
@@ -232,6 +238,7 @@ class StubControlPlaneRepository:
         now = datetime(2026, 3, 16, 12, 0, tzinfo=UTC)
         self.attached_mounts: list[str] = []
         self.project_api_keys: list[ProjectApiKeyRecord] = []
+        self.project_browser_keys: list[ProjectBrowserKeyRecord] = []
         self.project_telemetry_heartbeats: list[ProjectTelemetryHeartbeatRecord] = []
         self.secret_ref = SecretRefRecord(
             id="secret-1",
@@ -383,6 +390,63 @@ class StubControlPlaneRepository:
             for record in self.project_api_keys
         )
 
+    async def create_project_browser_key(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        key_prefix: str,
+        key_hash: str,
+        allowed_origins: list[str],
+        status: ProjectBrowserKeyStatus = ProjectBrowserKeyStatus.ACTIVE,
+    ) -> ProjectBrowserKeyRecord:
+        record = ProjectBrowserKeyRecord(
+            id=f"browser-key-{len(self.project_browser_keys) + 1}",
+            project_id=project_id,
+            name=name,
+            key_prefix=key_prefix,
+            key_hash=key_hash,
+            allowed_origins=list(allowed_origins),
+            status=status,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=self.secret_ref.created_at,
+            updated_at=self.secret_ref.updated_at,
+        )
+        self.project_browser_keys.append(record)
+        return record
+
+    async def list_project_browser_keys(self, project_id: str) -> list[ProjectBrowserKeyRecord]:
+        return [record for record in self.project_browser_keys if record.project_id == project_id]
+
+    async def get_project_browser_key(self, key_id: str) -> ProjectBrowserKeyRecord | None:
+        for record in self.project_browser_keys:
+            if record.id == key_id:
+                return record
+        return None
+
+    async def find_active_project_browser_key(
+        self,
+        *,
+        project_id: str,
+        key_hash: str,
+    ) -> ProjectBrowserKeyRecord | None:
+        for record in self.project_browser_keys:
+            if (
+                record.project_id == project_id
+                and record.key_hash == key_hash
+                and record.status is ProjectBrowserKeyStatus.ACTIVE
+            ):
+                return record
+        return None
+
+    async def has_active_project_browser_keys(self, project_id: str) -> bool:
+        return any(
+            record.project_id == project_id and record.status is ProjectBrowserKeyStatus.ACTIVE
+            for record in self.project_browser_keys
+        )
+
     async def mark_project_api_key_used(self, key_id: str) -> ProjectApiKeyRecord:
         for index, record in enumerate(self.project_api_keys):
             if record.id == key_id:
@@ -390,6 +454,22 @@ class StubControlPlaneRepository:
                 self.project_api_keys[index] = updated
                 return updated
         raise AssertionError(f"unknown project api key {key_id}")
+
+    async def mark_project_browser_key_used(self, key_id: str) -> ProjectBrowserKeyRecord:
+        for index, record in enumerate(self.project_browser_keys):
+            if record.id == key_id:
+                updated = record.model_copy(update={"last_used_at": datetime.now(tz=UTC)})
+                self.project_browser_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project browser key {key_id}")
+
+    async def mark_project_browser_key_issued(self, key_id: str) -> ProjectBrowserKeyRecord:
+        for index, record in enumerate(self.project_browser_keys):
+            if record.id == key_id:
+                updated = record.model_copy(update={"last_issued_at": datetime.now(tz=UTC)})
+                self.project_browser_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project browser key {key_id}")
 
     async def revoke_project_api_key(self, key_id: str) -> ProjectApiKeyRecord:
         for index, record in enumerate(self.project_api_keys):
@@ -403,6 +483,19 @@ class StubControlPlaneRepository:
                 self.project_api_keys[index] = updated
                 return updated
         raise AssertionError(f"unknown project api key {key_id}")
+
+    async def revoke_project_browser_key(self, key_id: str) -> ProjectBrowserKeyRecord:
+        for index, record in enumerate(self.project_browser_keys):
+            if record.id == key_id:
+                updated = record.model_copy(
+                    update={
+                        "status": ProjectBrowserKeyStatus.REVOKED,
+                        "revoked_at": datetime.now(tz=UTC),
+                    }
+                )
+                self.project_browser_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project browser key {key_id}")
 
     async def upsert_project_telemetry_heartbeat(
         self,
@@ -1196,6 +1289,144 @@ def test_ingest_heartbeat_updates_project_telemetry_verification(monkeypatch) ->
     assert body["status"] == "healthy"
     assert body["commit_sha"] == "abc123"
     assert body["heartbeat"]["service"] == "billing-api"
+
+
+def test_browser_telemetry_token_can_be_issued_and_used() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Browser telemetry",
+            key_prefix="stimp_browser_demo",
+            key_hash=hash_api_key("stimp_browser_secret"),
+            allowed_origins=["https://app.example.com"],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    telemetry_repository = RecordingTelemetryRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_repository] = lambda: telemetry_repository
+    app.dependency_overrides[get_incident_event_publisher] = IncidentEventPublisher
+    app.dependency_overrides[get_outbox_signaler] = RecordingOutboxSignaler
+
+    client = TestClient(app)
+    token_response = client.post(
+        "/telemetry/browser-token",
+        headers={"Origin": "https://app.example.com"},
+        json={
+            "project_id": "project-1",
+            "browser_key": "stimp_browser_secret",
+            "service": "billing-web",
+            "environment": "production",
+        },
+    )
+
+    assert token_response.status_code == 200
+    token = token_response.json()["token"]
+
+    ingest_response = client.post(
+        "/telemetry/error",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "https://app.example.com",
+        },
+        json={
+            "project_id": "project-1",
+            "environment": "production",
+            "service": "billing-web",
+            "error_message": "Browser crash",
+            "stacktrace": "Error: boom",
+            "timestamp": "2026-03-16T12:00:00Z",
+        },
+    )
+
+    assert ingest_response.status_code == 202
+    assert len(telemetry_repository.calls) == 1
+    assert repository.project_browser_keys[0].last_issued_at is not None
+
+
+def test_browser_telemetry_token_rejects_wrong_origin() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Browser telemetry",
+            key_prefix="stimp_browser_demo",
+            key_hash=hash_api_key("stimp_browser_secret"),
+            allowed_origins=["https://app.example.com"],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.post(
+        "/telemetry/browser-token",
+        headers={"Origin": "https://evil.example.com"},
+        json={
+            "project_id": "project-1",
+            "browser_key": "stimp_browser_secret",
+            "service": "billing-web",
+            "environment": "production",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "browser_origin_not_allowed"
+
+
+def test_browser_telemetry_token_cannot_access_project_routes() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="SDK key",
+            key_prefix="stimp_live_demo",
+            key_hash=hash_api_key("secret-project-key"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    token = build_browser_ingest_token(
+        project_id="project-1",
+        service="billing-web",
+        environment="production",
+        origin="https://app.example.com",
+        browser_key_id="browser-key-1",
+    ).token
+    app.dependency_overrides[get_incident_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get(
+        "/incidents",
+        params={"project_id": "project-1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "project_api_key_missing"
 
 
 def test_telemetry_verification_returns_unseen_when_no_heartbeat_exists(monkeypatch) -> None:
@@ -2127,6 +2358,36 @@ def test_project_api_keys_can_be_created_listed_and_revoked(monkeypatch) -> None
 
     revoked = client.post(
         f"/control-plane/projects/project-1/api-keys/{created_body['api_key']['id']}/revoke",
+        headers=headers,
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+
+
+def test_project_browser_keys_can_be_created_listed_and_revoked(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    created = client.post(
+        "/control-plane/projects/project-1/browser-keys",
+        json={"name": "Browser telemetry", "allowed_origins": ["https://app.example.com"]},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    created_body = created.json()
+    assert created_body["browser_key"]["project_id"] == "project-1"
+    assert created_body["plaintext_key"].startswith("stimp_browser_")
+
+    listed = client.get("/control-plane/projects/project-1/browser-keys", headers=headers)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+    revoked = client.post(
+        f"/control-plane/projects/project-1/browser-keys/{created_body['browser_key']['id']}/revoke",
         headers=headers,
     )
     assert revoked.status_code == 200

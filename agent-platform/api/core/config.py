@@ -171,12 +171,24 @@ def get_auth_session_secret() -> str:
     return get_nonempty_env("AGENT_PLATFORM_AUTH_SESSION_SECRET") or "stimpact-dev-session-secret"
 
 
+def get_browser_ingest_token_secret() -> str:
+    return get_nonempty_env("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_SECRET") or get_auth_session_secret()
+
+
 def get_auth_session_ttl_seconds() -> int:
     value = os.getenv("AGENT_PLATFORM_AUTH_SESSION_TTL_SECONDS", "43200").strip()
     try:
         return max(300, int(value))
     except ValueError:
         return 43_200
+
+
+def get_browser_ingest_token_ttl_seconds() -> int:
+    value = os.getenv("AGENT_PLATFORM_BROWSER_INGEST_TOKEN_TTL_SECONDS", "300").strip()
+    try:
+        return max(60, min(3600, int(value)))
+    except ValueError:
+        return 300
 
 
 def is_control_plane_auth_enforced() -> bool:

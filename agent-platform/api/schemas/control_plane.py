@@ -15,6 +15,8 @@ from models.control_plane import (
     ProjectServiceType,
     ProjectApiKeyRecord,
     ProjectApiKeyStatus,
+    ProjectBrowserKeyRecord,
+    ProjectBrowserKeyStatus,
     ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
     ProjectSdkSetupStatus,
@@ -114,6 +116,68 @@ class ProjectApiKeyCreateResponse(BaseModel):
     plaintext_key: str
 
 
+class CreateProjectBrowserKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        return normalized
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def validate_allowed_origins(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            candidate = value.strip().rstrip("/")
+            if not candidate:
+                continue
+            if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
+                raise ValueError("allowed origins must be absolute http or https origins")
+            lowered = candidate.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized.append(candidate)
+        return normalized
+
+
+class ProjectBrowserKeyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    name: str
+    key_prefix: str
+    allowed_origins: list[str] = Field(default_factory=list)
+    status: ProjectBrowserKeyStatus
+    last_used_at: datetime | None = None
+    last_issued_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, record: ProjectBrowserKeyRecord) -> "ProjectBrowserKeyResponse":
+        payload = record.model_dump(mode="json")
+        payload.pop("key_hash", None)
+        return cls(**payload)
+
+
+class ProjectBrowserKeyCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    browser_key: ProjectBrowserKeyResponse
+    plaintext_key: str
+
+
 class ProjectOnboardingStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +203,7 @@ class ProjectOperationalReadinessResponse(BaseModel):
     has_repo_profiles: bool
     has_services: bool
     has_active_api_keys: bool
+    has_active_browser_keys: bool
     policy_reviewed: bool
     sdk_setup_ready: bool
     complete: bool
@@ -401,7 +466,9 @@ class SdkBootstrapChangeRequestResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str | None = None
-    api_key: ProjectApiKeyResponse
+    credential_kind: str
+    api_key: ProjectApiKeyResponse | None = None
+    browser_key: ProjectBrowserKeyResponse | None = None
     plaintext_key: str
     branch_name: str
     commit_sha: str
@@ -938,6 +1005,7 @@ class ProjectOnboardingResponse(BaseModel):
     operational_readiness: ProjectOperationalReadinessResponse
     secret_refs: list[SecretRefResponse] = Field(default_factory=list)
     api_keys: list[ProjectApiKeyResponse] = Field(default_factory=list)
+    browser_keys: list[ProjectBrowserKeyResponse] = Field(default_factory=list)
     integrations: list[ProviderIntegrationOnboardingResponse] = Field(default_factory=list)
     repo_profiles: list[RepoProfileResponse] = Field(default_factory=list)
     project_services: list[ProjectServiceResponse] = Field(default_factory=list)

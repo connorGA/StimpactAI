@@ -212,6 +212,20 @@ const projectApiKey = {
   updated_at: "2026-03-20T12:03:00Z",
 };
 
+const projectBrowserKey = {
+  id: "browser-key-1",
+  project_id: "project-1",
+  name: "Browser telemetry",
+  key_prefix: "stimp_browser_demo",
+  allowed_origins: ["https://app.example.com"],
+  status: "active",
+  last_used_at: "2026-03-20T12:03:00Z",
+  last_issued_at: "2026-03-20T12:03:00Z",
+  revoked_at: null,
+  created_at: "2026-03-20T12:00:00Z",
+  updated_at: "2026-03-20T12:03:00Z",
+};
+
 const autonomousDetail = {
   run: autonomousRun,
   events: [],
@@ -264,9 +278,9 @@ const sdkBootstrapStrategy = {
       description: "Project identifier used by the SDK.",
     },
     {
-      name: "NEXT_PUBLIC_STIMPACT_API_KEY",
-      example_value: "stimp_live_replace_me",
-      description: "Project API key created during onboarding.",
+      name: "NEXT_PUBLIC_STIMPACT_BROWSER_KEY",
+      example_value: "stimp_browser_replace_me",
+      description: "Browser telemetry key used to request short-lived ingest tokens.",
     },
   ],
   install_command: "pnpm add @stimpact/sdk",
@@ -282,7 +296,7 @@ const sdkBootstrapStrategy = {
     },
   ],
   preview_snippet:
-    "import { StimpactClient } from '@stimpact/sdk';\n\nconst stimpact = new StimpactClient({\n  baseUrl: '<public-stimpact-url>',\n  projectId: '<project-id>',\n  apiKey: '<project-api-key>',\n  service: 'web-app',\n  environment: 'production',\n});\n\nstimpact.startHeartbeat();\nstimpact.registerBrowserAutoCapture();",
+    "import { StimpactClient } from '@stimpact/sdk';\n\nconst stimpact = new StimpactClient({\n  baseUrl: '<public-stimpact-url>',\n  projectId: '<project-id>',\n  browserKey: '<browser-key>',\n  service: 'web-app',\n  environment: 'production',\n});\n\nstimpact.startHeartbeat();\nstimpact.registerBrowserAutoCapture();",
   source: "deterministic",
   evidence: ["Detected app router layout at apps/web/src/app/layout.tsx"],
   confidence_reason: "The repo contains a supported Next.js App Router entrypoint.",
@@ -335,12 +349,14 @@ function buildOnboardingResponse(projectId) {
       has_repo_profiles: projectRepoProfiles.length > 0,
       has_services: false,
       has_active_api_keys: true,
+      has_active_browser_keys: true,
       policy_reviewed: false,
       sdk_setup_ready: false,
       complete: false,
     },
     secret_refs: projectSecretRefs,
     api_keys: [projectApiKey],
+    browser_keys: [projectBrowserKey],
     integrations,
     repo_profiles: projectRepoProfiles,
     project_services: [],

@@ -445,6 +445,25 @@ export type ProjectApiKeyCreateResponse = {
   plaintext_key: string;
 };
 
+export type ProjectBrowserKey = {
+  id: string;
+  project_id: string;
+  name: string;
+  key_prefix: string;
+  allowed_origins: string[];
+  status: "active" | "revoked";
+  last_used_at: string | null;
+  last_issued_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectBrowserKeyCreateResponse = {
+  browser_key: ProjectBrowserKey;
+  plaintext_key: string;
+};
+
 export type SdkBootstrapEnvVar = {
   name: string;
   example_value: string;
@@ -538,7 +557,9 @@ export type SdkBootstrapPreview = {
 
 export type SdkBootstrapChangeRequestResponse = {
   run_id: string | null;
-  api_key: ProjectApiKey;
+  credential_kind: "server_api_key" | "browser_key";
+  api_key: ProjectApiKey | null;
+  browser_key: ProjectBrowserKey | null;
   plaintext_key: string;
   branch_name: string;
   commit_sha: string;
@@ -572,6 +593,7 @@ export type ProjectOperationalReadiness = {
   has_repo_profiles: boolean;
   has_services: boolean;
   has_active_api_keys: boolean;
+  has_active_browser_keys: boolean;
   policy_reviewed: boolean;
   sdk_setup_ready: boolean;
   complete: boolean;
@@ -761,6 +783,7 @@ export type ProjectOnboarding = {
   operational_readiness: ProjectOperationalReadiness;
   secret_refs: SecretRef[];
   api_keys: ProjectApiKey[];
+  browser_keys: ProjectBrowserKey[];
   integrations: ProviderIntegrationOnboarding[];
   repo_profiles: RepoProfile[];
   project_services: ProjectService[];
