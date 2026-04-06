@@ -99,6 +99,21 @@ type OnboardingEditorSnapshot = {
   policyDraft: ProjectPolicy | null;
 };
 
+type ParsedDiffLine = {
+  kind: "context" | "add" | "remove" | "meta";
+  content: string;
+  oldLineNumber: number | null;
+  newLineNumber: number | null;
+};
+
+type ParsedDiffFile = {
+  path: string;
+  previousPath: string | null;
+  additions: number;
+  deletions: number;
+  lines: ParsedDiffLine[];
+};
+
 function createSecretDraft(): SecretDraft {
   return {
     id: `secret-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -113,6 +128,126 @@ function createRepoSecretMountDraft(secretRefId = "", mountAs = ""): RepoSecretM
     secretRefId,
     mountAs,
   };
+}
+
+function normalizeDiffPath(rawPath: string | null | undefined): string | null {
+  if (!rawPath || rawPath === "/dev/null") {
+    return null;
+  }
+  if (rawPath.startsWith("a/") || rawPath.startsWith("b/")) {
+    return rawPath.slice(2);
+  }
+  return rawPath;
+}
+
+function parseUnifiedDiff(diff: string | null | undefined): ParsedDiffFile[] {
+  if (!diff?.trim()) {
+    return [];
+  }
+
+  const files: ParsedDiffFile[] = [];
+  let currentFile: ParsedDiffFile | null = null;
+  let oldLineCursor: number | null = null;
+  let newLineCursor: number | null = null;
+
+  const pushCurrentFile = () => {
+    if (currentFile) {
+      files.push(currentFile);
+    }
+    currentFile = null;
+    oldLineCursor = null;
+    newLineCursor = null;
+  };
+
+  const ensureCurrentFile = () => {
+    if (!currentFile) {
+      currentFile = {
+        path: "Patch preview",
+        previousPath: null,
+        additions: 0,
+        deletions: 0,
+        lines: [],
+      };
+    }
+    return currentFile;
+  };
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      pushCurrentFile();
+      const parts = line.split(" ");
+      currentFile = {
+        path: normalizeDiffPath(parts[3]) ?? normalizeDiffPath(parts[2]) ?? "Patch preview",
+        previousPath: normalizeDiffPath(parts[2]),
+        additions: 0,
+        deletions: 0,
+        lines: [],
+      };
+      continue;
+    }
+
+    if (line.startsWith("--- ")) {
+      ensureCurrentFile().previousPath = normalizeDiffPath(line.slice(4).trim());
+      continue;
+    }
+
+    if (line.startsWith("+++ ")) {
+      ensureCurrentFile().path =
+        normalizeDiffPath(line.slice(4).trim()) ?? ensureCurrentFile().path ?? "Patch preview";
+      continue;
+    }
+
+    if (line.startsWith("@@")) {
+      const file = ensureCurrentFile();
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      oldLineCursor = match ? Number(match[1]) : null;
+      newLineCursor = match ? Number(match[2]) : null;
+      file.lines.push({
+        kind: "meta",
+        content: line,
+        oldLineNumber: null,
+        newLineNumber: null,
+      });
+      continue;
+    }
+
+    const file = ensureCurrentFile();
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      file.additions += 1;
+      file.lines.push({
+        kind: "add",
+        content: line,
+        oldLineNumber: null,
+        newLineNumber: newLineCursor,
+      });
+      newLineCursor = newLineCursor === null ? null : newLineCursor + 1;
+      continue;
+    }
+
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      file.deletions += 1;
+      file.lines.push({
+        kind: "remove",
+        content: line,
+        oldLineNumber: oldLineCursor,
+        newLineNumber: null,
+      });
+      oldLineCursor = oldLineCursor === null ? null : oldLineCursor + 1;
+      continue;
+    }
+
+    file.lines.push({
+      kind: "context",
+      content: line,
+      oldLineNumber: oldLineCursor,
+      newLineNumber: newLineCursor,
+    });
+    oldLineCursor = oldLineCursor === null ? null : oldLineCursor + 1;
+    newLineCursor = newLineCursor === null ? null : newLineCursor + 1;
+  }
+
+  pushCurrentFile();
+  return files;
 }
 
 async function requestJson<T>(
@@ -390,15 +525,28 @@ export function ProjectOnboardingConsole() {
   }, [effectiveServiceRepoProfileId, effectiveStepFiveMode, state?.project_services]);
   const effectiveServiceRepository =
     repositories.find((repository) => repository.id === effectiveServiceRepoProfile?.provider_repository_id) ?? null;
-  const suggestedRepositoryId = effectiveServiceRepoProfile?.provider_repository_id ?? selectedRepositoryId;
+  const inferredConnectedRepositoryId =
+    onboardingState?.sdk_setup_provider_repository_id ??
+    (repositories.length === 1 ? repositories[0]?.id ?? "" : "");
+  const suggestedRepositoryId =
+    effectiveServiceRepoProfile?.provider_repository_id ||
+    selectedRepositoryId ||
+    inferredConnectedRepositoryId;
   const effectiveSdkServiceName = effectiveProjectService?.name?.trim() || serviceName.trim() || "web-app";
   const sdkTargetRepositoryId = effectiveServiceRepository?.id ?? suggestedRepositoryId;
+  const sdkPlanningBaseUrl = platformBaseUrl || "https://stimpact.example.com";
   const shouldLoadStepFiveData =
     activeStep === "5" || editingStepKey === "5" || Boolean(selectedRepositoryId) || Boolean(effectiveServiceRepoProfile);
-  const shouldLoadStepSixData = activeStep === "6" || editingStepKey === "6";
+  const shouldLoadStepSixData =
+    activeStep === "6" ||
+    editingStepKey === "6" ||
+    Boolean(inferredConnectedRepositoryId) ||
+    Boolean(selectedRepositoryId) ||
+    Boolean(effectiveServiceRepoProfile);
   const shouldRunAutomaticSdkWorkflow =
     sdkSetupMode === "automatic" &&
     (sdkAutomaticRequested || onboardingState?.sdk_setup_status === "change_request");
+  const shouldInspectSdkBootstrapPlan = shouldLoadStepSixData;
   const savedProfileSuggestionMatchesVerify =
     Boolean(effectiveServiceRepoProfile && repoProfileInference?.verify_command) &&
     (repoProfileInference?.verify_command ?? "") === verifyCommand;
@@ -543,6 +691,12 @@ export function ProjectOnboardingConsole() {
   }, [effectiveStepFiveMode, inferredSingleRepoProfile, selectedServiceRepoProfileId]);
 
   useEffect(() => {
+    if (!selectedRepositoryId && inferredConnectedRepositoryId) {
+      setSelectedRepositoryId(inferredConnectedRepositoryId);
+    }
+  }, [inferredConnectedRepositoryId, selectedRepositoryId]);
+
+  useEffect(() => {
     if (!effectiveServiceRepository) {
       return;
     }
@@ -627,7 +781,7 @@ export function ProjectOnboardingConsole() {
   }, [onboardingState?.sdk_setup_status, sdkBootstrapPlan, selectedSdkStrategyId]);
 
   useEffect(() => {
-    if (!projectId.trim() || !sdkTargetRepositoryId || !platformBaseUrl || !effectiveSdkServiceName.trim()) {
+    if (!projectId.trim() || !sdkTargetRepositoryId || !effectiveSdkServiceName.trim()) {
       setSdkBootstrapPlan(null);
       setSdkBootstrapPreview(null);
       setSdkLatestBootstrapPreview(null);
@@ -638,7 +792,7 @@ export function ProjectOnboardingConsole() {
       sdkBootstrapPreviewKeyRef.current = "";
       return;
     }
-    if (!shouldRunAutomaticSdkWorkflow) {
+    if (!shouldInspectSdkBootstrapPlan) {
       setLoadingSdkBootstrapPlan(false);
       return;
     }
@@ -646,7 +800,7 @@ export function ProjectOnboardingConsole() {
     const requestKey = [
       projectId.trim(),
       sdkTargetRepositoryId,
-      platformBaseUrl,
+      sdkPlanningBaseUrl,
       effectiveSdkServiceName.trim(),
       sdkEnvironment.trim() || "production",
     ].join("|");
@@ -658,7 +812,9 @@ export function ProjectOnboardingConsole() {
     let cancelled = false;
     const controller = new AbortController();
     setLoadingSdkBootstrapPlan(true);
-    setSdkAutomationStage("planning");
+    if (shouldRunAutomaticSdkWorkflow) {
+      setSdkAutomationStage("planning");
+    }
     void requestJson<SdkBootstrapPlanPreview>(
       `projects/${encodeURIComponent(projectId.trim())}/sdk-bootstrap/plan`,
       {
@@ -669,7 +825,7 @@ export function ProjectOnboardingConsole() {
           provider_repository_id: sdkTargetRepositoryId,
           service_name: effectiveSdkServiceName.trim(),
           environment: sdkEnvironment.trim() || "production",
-          base_url: platformBaseUrl,
+          base_url: sdkPlanningBaseUrl,
         }),
       },
     )
@@ -680,8 +836,10 @@ export function ProjectOnboardingConsole() {
         sdkBootstrapPlanKeyRef.current = requestKey;
         sdkBootstrapPreviewKeyRef.current = "";
         setSdkBootstrapPlan(payload);
-        setSdkBootstrapPreview(null);
-        if (!payload.strategies.some((item) => item.pr_supported)) {
+        if (shouldRunAutomaticSdkWorkflow) {
+          setSdkBootstrapPreview(null);
+        }
+        if (shouldRunAutomaticSdkWorkflow && !payload.strategies.some((item) => item.pr_supported)) {
           setSdkAutomationStage("manual_only");
           if (sdkManualFallbackDialogKeyRef.current !== requestKey) {
             sdkManualFallbackDialogKeyRef.current = requestKey;
@@ -708,11 +866,15 @@ export function ProjectOnboardingConsole() {
           return;
         }
         setSdkBootstrapPlan(null);
-        setSdkBootstrapPreview(null);
+        if (shouldRunAutomaticSdkWorkflow) {
+          setSdkBootstrapPreview(null);
+        }
         setSdkLatestBootstrapPreview(null);
         setSelectedSdkStrategyId("");
         setDismissedSdkPreviewStrategyId(null);
-        setSdkAutomationStage("idle");
+        if (shouldRunAutomaticSdkWorkflow) {
+          setSdkAutomationStage("idle");
+        }
         setErrorMessage(error instanceof Error ? error.message : "Unable to inspect SDK bootstrap plan.");
       })
       .finally(() => {
@@ -726,8 +888,9 @@ export function ProjectOnboardingConsole() {
       controller.abort();
     };
   }, [
-    platformBaseUrl,
     projectId,
+    sdkPlanningBaseUrl,
+    shouldInspectSdkBootstrapPlan,
     shouldRunAutomaticSdkWorkflow,
     sdkBootstrapPlan,
     sdkEnvironment,
@@ -1867,24 +2030,6 @@ export function ProjectOnboardingConsole() {
           : sdkAutomationStage === "manual_only"
             ? "Manual only"
             : "Idle";
-  const automaticModePrimaryMessage =
-    sdkAutomationStage === "planning"
-      ? "Stimpact is inspecting the repository, checking deterministic entrypoints first, and only using the guarded model fallback if no safe hardcoded match is found."
-      : sdkAutomationStage === "previewing"
-        ? "Stimpact found a candidate runtime surface and is now generating, applying, and verifying the patch before it prepares the final preview."
-        : sdkAutomationStage === "ready"
-          ? sdkPatchAttempt?.verification.status === "passed"
-            ? "The candidate patch was generated, applied in a temp checkout, and passed focused verification before Stimpact exposed this preview."
-            : sdkPatchAttempt?.verification.status === "needs_review"
-              ? "The candidate patch was generated and applied successfully, but Stimpact could only complete a limited verification pass. Review the preview notes before approving anything."
-              : sdkPatchAttempt?.verification.status === "failed"
-                ? "Stimpact generated and applied the patch, but verification failed. Review the preview and fallback guidance before deciding whether to proceed manually."
-                : selectedSdkStrategy?.source === "llm"
-                  ? "This preview came from the model-assisted fallback. The model suggested the runtime surface, then Stimpact applied guardrails before showing you the patch."
-                  : "This preview came from the deterministic planner. Stimpact matched a supported runtime surface without needing the model fallback."
-          : sdkAutomationStage === "manual_only"
-            ? "Stimpact inspected the repository but did not find a safe automatic patch path, so it kept you on the manual route."
-            : "Choose automatic mode to let Stimpact inspect the repo, attempt a safe SDK integration, and prepare a reviewable PR preview.";
   const automaticWorkflowItems = [
     {
       id: "inspect",
@@ -1953,6 +2098,24 @@ export function ProjectOnboardingConsole() {
               : "pending",
     },
   ] as const;
+  const sdkCompletedWorkflowCount = automaticWorkflowItems.filter((item) => item.state === "complete").length;
+  const sdkVisibleWorkflowItems = automaticWorkflowItems.filter((item) => item.state !== "pending");
+  const sdkActiveWorkflowIndex = automaticWorkflowItems.findIndex((item) => item.state === "active");
+  const sdkBlockedWorkflowIndex = automaticWorkflowItems.findIndex((item) => item.state === "blocked");
+  const sdkWorkflowProgressUnits =
+    sdkCompletedWorkflowCount +
+    (sdkActiveWorkflowIndex !== -1 ? 0.65 : sdkBlockedWorkflowIndex !== -1 ? 0.65 : 0);
+  const sdkWorkflowProgressPercent = automaticWorkflowItems.length
+    ? Math.max(0, Math.min(100, (sdkWorkflowProgressUnits / automaticWorkflowItems.length) * 100))
+    : 0;
+  const sdkWorkflowProgressTone =
+    sdkActiveWorkflowIndex !== -1
+      ? "active"
+      : sdkBlockedWorkflowIndex !== -1
+        ? "blocked"
+        : sdkCompletedWorkflowCount === automaticWorkflowItems.length
+          ? "complete"
+          : "idle";
   const sdkAutomationSummaryItems = [
     { label: "Target service", value: effectiveSdkServiceName },
     { label: "Target repository", value: sdkRepositoryLabel },
@@ -2026,6 +2189,16 @@ export function ProjectOnboardingConsole() {
                 : "pending",
     },
   ] as const;
+  const sdkVisibleAgentFeedItems = sdkAgentFeedItems.filter(
+    (item, index) => item.state !== "pending" || (!sdkAutomaticRequested && index === 0),
+  );
+  const sdkAutomaticRunStarted =
+    sdkAutomaticRequested ||
+    loadingSdkBootstrapPlan ||
+    loadingSdkBootstrapPreview ||
+    sdkAutomationStage !== "idle" ||
+    Boolean(sdkBootstrapPreview) ||
+    onboardingState?.sdk_setup_status === "change_request";
   const sdkActiveThought =
     sdkAgentFeedItems.find((item) => item.state === "active")?.thought ??
     sdkAgentFeedItems.find((item) => item.state === "blocked")?.thought ??
@@ -2045,7 +2218,7 @@ export function ProjectOnboardingConsole() {
               : item.name.includes("PROJECT_ID")
                 ? projectId || item.example_value
                 : item.name.includes("API_KEY")
-                  ? "stimp_live_replace_me"
+                  ? telemetryKeyPlaintext || "stimp_live_replace_me"
                   : item.name.includes("SERVICE")
                     ? effectiveSdkServiceName
                     : item.name.includes("ENVIRONMENT")
@@ -2060,6 +2233,37 @@ export function ProjectOnboardingConsole() {
     sdkPatchAttempt?.verification.summary ??
     sdkAttemptWarnings[0] ??
     null;
+  const sdkPreviewDiffFiles = useMemo(
+    () => parseUnifiedDiff(sdkBootstrapPreview?.patch_diff),
+    [sdkBootstrapPreview?.patch_diff],
+  );
+  const sdkPreviewEnvVarNames = sdkBootstrapPreview?.strategy.env_vars.map((item) => item.name) ?? [];
+  const sdkPreviewEnvVarSummary = sdkPreviewEnvVarNames.length
+    ? sdkPreviewEnvVarNames.join(", ")
+    : "the required Stimpact runtime variables";
+  const sdkPreviewNextSteps = sdkBootstrapPreview
+    ? [
+        {
+          title: sdkBootstrapPreview.attempt.change_request_allowed
+            ? "Approve and create the PR"
+            : "Review the preview before opening a PR",
+          detail: sdkBootstrapPreview.attempt.change_request_allowed
+            ? "If the diff looks right, open the PR from this screen. Stimpact will generate the project API key during PR creation."
+            : sdkBootstrapPreview.attempt.verification.summary ??
+              "This preview still needs human review before the PR should be created.",
+        },
+        {
+          title: "Add the Stimpact API key and env vars",
+          detail: telemetryKeyPlaintext
+            ? `Add ${sdkPreviewEnvVarSummary} to your deployment provider. Use STIMPACT_API_KEY=${telemetryKeyPlaintext} for the runtime key value.`
+            : `After creating the PR, add ${sdkPreviewEnvVarSummary} to your deployment provider. Stimpact will generate the STIMPACT_API_KEY when the PR is opened.`,
+        },
+        {
+          title: "Merge, redeploy, then refresh heartbeat verification",
+          detail: `After the patch lands, redeploy ${effectiveSdkServiceName} in ${sdkEnvironment.trim() || "production"} and return here to verify the first heartbeat.`,
+        },
+      ]
+    : [];
   const sdkAttemptHistorySummary =
     sdkPreviewAttempts.length > 1
       ? `Tried ${sdkPreviewAttempts.length} candidate surfaces before selecting the best available result.`
@@ -2091,6 +2295,22 @@ export function ProjectOnboardingConsole() {
       code: `Service: ${effectiveSdkServiceName}\nEnvironment: ${sdkEnvironment || "production"}`,
     },
   ] as const;
+  const sdkManualPrimarySteps = sdkManualActionItems.slice(0, 3);
+  const sdkManualFollowUpItems = [
+    telemetryKeyPlaintext
+      ? `Add STIMPACT_API_KEY=${telemetryKeyPlaintext} and the required Stimpact env vars to your deployed environment.`
+      : "Add STIMPACT_API_KEY and the required Stimpact env vars to your deployed environment before redeploying.",
+    !platformBaseUrl
+      ? "Replace the placeholder Stimpact base URL with your real public platform URL before deploying."
+      : `Confirm the Stimpact base URL points at ${platformBaseUrl}.`,
+    `Redeploy ${effectiveSdkServiceName} in ${sdkEnvironment.trim() || "production"}.`,
+    "Return here and refresh heartbeat verification to confirm the SDK is live.",
+  ];
+  const sdkManualExtraNotes = [
+    ...(sdkAutomaticFailureExplanation ? [sdkAutomaticFailureExplanation] : []),
+    ...((selectedSdkStrategy?.manual_steps.map((item) => item.content) ?? []) as string[]),
+    ...sdkManualBlockers,
+  ];
   const canCompleteSingleRepoSetup =
     Boolean(serviceName.trim()) &&
     Boolean(serviceSlug.trim()) &&
@@ -2118,18 +2338,12 @@ export function ProjectOnboardingConsole() {
       <section className="relative px-4 pb-2 pt-2 text-center">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_26%_12%,rgba(255,178,83,0.12),transparent_24%),radial-gradient(circle_at_74%_14%,rgba(255,106,61,0.12),transparent_22%),radial-gradient(circle_at_50%_0%,rgba(29,26,24,0.06),transparent_30%)] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.58)_0%,rgba(0,0,0,0.24)_42%,transparent_78%)]" />
         <div className="relative mx-auto max-w-4xl">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#9b4c2f]">
+          <p className="landing-static-tag mx-auto block w-fit !text-center">
             Project onboarding
           </p>
           <h1 className="mx-auto mt-4 max-w-4xl text-4xl font-semibold tracking-tight text-[#171717] lg:text-[3.35rem]">
             Set up your project in one guided flow
           </h1>
-          <p className="mx-auto mt-5 max-w-3xl text-[15px] font-medium leading-8 text-[#64584f]">
-            Move straight down the page to create the project, connect the repository
-            provider, add secrets, define repo profiles, map the deployable
-            services that power sandbox verification, enable telemetry, and
-            confirm the automation controls that govern production autonomy.
-          </p>
 
           <OnboardingTimeline
             activeStep={activeStep}
@@ -3142,16 +3356,27 @@ export function ProjectOnboardingConsole() {
                   variant={activeApiKeys.length ? "secondary" : "primary"}
                 />
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <ReadOnlyField label="Active keys" value={String(activeApiKeys.length)} />
-                <ReadOnlyField
-                  label="Target service"
-                  value={effectiveSdkServiceName}
-                />
-                <ReadOnlyField
-                  label="Environment"
-                  value={sdkEnvironment.trim() || "production"}
-                />
+              <div className="mt-4 flex flex-wrap gap-2.5">
+                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                    Active keys
+                  </span>
+                  <span className="text-sm font-semibold text-[#171717]">{activeApiKeys.length}</span>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                    Target service
+                  </span>
+                  <span className="text-sm font-semibold text-[#171717]">{effectiveSdkServiceName}</span>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                    Environment
+                  </span>
+                  <span className="text-sm font-semibold text-[#171717]">
+                    {sdkEnvironment.trim() || "production"}
+                  </span>
+                </div>
               </div>
               {telemetryKeyPlaintext ? (
                 <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-[rgba(240,253,244,0.92)] px-4 py-3">
@@ -3194,66 +3419,121 @@ export function ProjectOnboardingConsole() {
                 <button
                   type="button"
                   onClick={chooseAutomaticSdkMode}
-                  className={`group rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
+                  aria-pressed={sdkSetupMode === "automatic"}
+                  className={`group relative overflow-hidden rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
                     sdkSetupMode === "automatic"
-                      ? "border-[rgba(255,106,61,0.28)] bg-white shadow-[0_16px_32px_rgba(255,106,61,0.08)]"
-                      : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.22)] hover:bg-white hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
+                      ? "border-[rgba(73,133,255,0.45)] bg-[linear-gradient(145deg,rgba(246,250,255,0.98)_0%,rgba(226,236,248,0.96)_42%,rgba(214,226,242,0.95)_100%)] shadow-[0_18px_36px_rgba(50,98,180,0.16)] ring-2 ring-[rgba(76,128,235,0.18)]"
+                      : "border-[rgba(114,138,173,0.24)] bg-[linear-gradient(145deg,rgba(248,251,255,0.94)_0%,rgba(233,240,249,0.88)_52%,rgba(222,232,244,0.84)_100%)] hover:-translate-y-0.5 hover:border-[rgba(73,133,255,0.28)] hover:shadow-[0_16px_30px_rgba(47,84,150,0.10)]"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.42)_0%,rgba(255,255,255,0.08)_32%,rgba(255,255,255,0)_100%)]" />
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <span
+                        className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition ${
+                          sdkSetupMode === "automatic"
+                            ? "border-[rgba(62,116,223,0.50)] bg-[rgba(73,133,255,0.10)]"
+                            : "border-[rgba(83,103,132,0.18)] bg-[rgba(255,255,255,0.92)]"
+                        }`}
+                      >
+                        <span
+                          className={`inline-flex h-2.5 w-2.5 rounded-full transition ${
+                            sdkSetupMode === "automatic" ? "bg-[#2e6fe8]" : "bg-transparent"
+                          }`}
+                        />
+                      </span>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex rounded-full bg-[rgba(58,79,109,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#67758a]">
+                            Automatic
+                          </span>
+                        </div>
                       <p className="text-sm font-semibold text-[#171717]">Automatic SDK installation PR</p>
+                      </div>
                     </div>
-                    <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178] transition group-hover:text-[#9b4c2f]">
-                      Click to choose
-                      <span className="transition group-hover:translate-x-0.5">→</span>
+                    <span
+                      className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                        sdkSetupMode === "automatic"
+                          ? "text-[#2457b8]"
+                          : "text-[#6a7688] transition group-hover:text-[#2457b8]"
+                      }`}
+                    >
+                      {sdkSetupMode === "automatic" ? "Active mode" : "Click to choose"}
+                      <span className={`${sdkSetupMode === "automatic" ? "" : "transition group-hover:translate-x-0.5"}`}>
+                        {sdkSetupMode === "automatic" ? "✓" : "→"}
+                      </span>
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-[#746d66]">
                     First choose this path, then explicitly start the automatic attempt below when you
                     are ready.
                   </p>
-                  <div className="mt-3 rounded-[16px] bg-[rgba(255,106,61,0.06)] px-3 py-2 text-xs font-medium text-[#8f4b31]">
+                  <div className="mt-3 rounded-[16px] bg-[rgba(73,133,255,0.08)] px-3 py-2 text-xs font-medium text-[#355e9f]">
                     Best when you want Stimpact to inspect the repo and draft a reviewable PR preview.
                   </div>
                 </button>
                 <button
                   type="button"
                   onClick={openManualSdkMode}
-                  className={`group rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
+                  aria-pressed={sdkSetupMode === "manual"}
+                  className={`group relative overflow-hidden rounded-[22px] border px-5 py-5 text-left transition cursor-pointer ${
                     sdkSetupMode === "manual"
-                      ? "border-[rgba(23,56,93,0.18)] bg-white shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
-                      : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:-translate-y-0.5 hover:border-[rgba(23,56,93,0.18)] hover:bg-white hover:shadow-[0_16px_30px_rgba(15,23,42,0.08)]"
+                      ? "border-[rgba(73,133,255,0.45)] bg-[linear-gradient(145deg,rgba(246,250,255,0.98)_0%,rgba(226,236,248,0.96)_42%,rgba(214,226,242,0.95)_100%)] shadow-[0_18px_36px_rgba(50,98,180,0.16)] ring-2 ring-[rgba(76,128,235,0.18)]"
+                      : "border-[rgba(114,138,173,0.24)] bg-[linear-gradient(145deg,rgba(248,251,255,0.94)_0%,rgba(233,240,249,0.88)_52%,rgba(222,232,244,0.84)_100%)] hover:-translate-y-0.5 hover:border-[rgba(73,133,255,0.28)] hover:shadow-[0_16px_30px_rgba(47,84,150,0.10)]"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-[#171717]">Manual installation mode</p>
-                    <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178] transition group-hover:text-[#17385d]">
-                      Click to choose
-                      <span className="transition group-hover:translate-x-0.5">→</span>
+                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.42)_0%,rgba(255,255,255,0.08)_32%,rgba(255,255,255,0)_100%)]" />
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <span
+                        className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition ${
+                          sdkSetupMode === "manual"
+                            ? "border-[rgba(62,116,223,0.50)] bg-[rgba(73,133,255,0.10)]"
+                            : "border-[rgba(83,103,132,0.18)] bg-[rgba(255,255,255,0.92)]"
+                        }`}
+                      >
+                        <span
+                          className={`inline-flex h-2.5 w-2.5 rounded-full transition ${
+                            sdkSetupMode === "manual" ? "bg-[#2e6fe8]" : "bg-transparent"
+                          }`}
+                        />
+                      </span>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex rounded-full bg-[rgba(58,79,109,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#67758a]">
+                            Manual
+                          </span>
+                        </div>
+                        <p className="text-sm font-semibold text-[#171717]">Manual installation mode</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                        sdkSetupMode === "manual"
+                          ? "text-[#2457b8]"
+                          : "text-[#6a7688] transition group-hover:text-[#2457b8]"
+                      }`}
+                    >
+                      {sdkSetupMode === "manual" ? "Active mode" : "Click to choose"}
+                      <span className={`${sdkSetupMode === "manual" ? "" : "transition group-hover:translate-x-0.5"}`}>
+                        {sdkSetupMode === "manual" ? "✓" : "→"}
+                      </span>
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-[#746d66]">
                     Use the generated framework guidance, environment variables, and starter code to
                     add the SDK yourself in the correct runtime entrypoint.
                   </p>
-                  <div className="mt-3 rounded-[16px] bg-[rgba(23,56,93,0.06)] px-3 py-2 text-xs font-medium text-[#35547d]">
+                  <div className="mt-3 rounded-[16px] bg-[rgba(73,133,255,0.08)] px-3 py-2 text-xs font-medium text-[#355e9f]">
                     Best when you want full control over where and how the SDK is added.
                   </div>
                 </button>
               </div>
             </div>
 
-            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+            <div className="px-6 pb-5 pt-5">
               {sdkSetupMode === "automatic" ? (
                 <div className="space-y-5">
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm font-semibold text-[#171717]">Automatic bootstrap PR</p>
-                    <p className="text-sm leading-6 text-[#746d66]">
-                      Let Stimpact actively inspect the repo, choose the safest SDK surface, and
-                      prepare a reviewable PR preview before anything is approved.
-                    </p>
-                  </div>
                   <div className="relative overflow-hidden rounded-[30px] border border-[rgba(44,97,255,0.16)] bg-[linear-gradient(135deg,rgba(255,248,244,0.98)_0%,rgba(255,255,255,0.98)_38%,rgba(242,247,255,0.98)_100%)] px-6 py-6 shadow-[0_28px_70px_rgba(33,97,255,0.10)]">
                     <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#ff6a3d_0%,#ff8a3d_28%,#2d7ff9_72%,#173fbe_100%)]" />
                     <div className="pointer-events-none absolute -left-10 top-6 h-32 w-32 rounded-full bg-[rgba(255,106,61,0.18)] blur-3xl" />
@@ -3358,11 +3638,18 @@ export function ProjectOnboardingConsole() {
                             </div>
                           </div>
 
-                          <p className="mt-4 text-sm leading-6 text-[#49566c]">
-                            {automaticModePrimaryMessage}
-                          </p>
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-[rgba(19,33,58,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#516075]">
+                              {sdkCompletedWorkflowCount}/{automaticWorkflowItems.length} steps complete
+                            </span>
+                            {(sdkAutomationStage === "planning" || sdkAutomationStage === "previewing") && (
+                              <span className="rounded-full bg-[rgba(255,106,61,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#d64e1d]">
+                                Live now
+                              </span>
+                            )}
+                          </div>
 
-                          <div className="mt-5 border-l-4 border-[#ff6a3d] pl-4">
+                          <div className="mt-4 border-l-4 border-[#ff6a3d] pl-4">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#ff6a3d]">
                               Current agent focus
                             </p>
@@ -3380,50 +3667,57 @@ export function ProjectOnboardingConsole() {
                           <div className="mt-5 overflow-hidden rounded-full bg-[rgba(23,63,190,0.08)]">
                             <div
                               className={`h-2 rounded-full transition-all duration-500 ${
-                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                                  ? "w-2/3 animate-pulse bg-[linear-gradient(90deg,#ff6a3d_0%,#ff9447_28%,#2d7ff9_78%,#173fbe_100%)]"
-                                  : sdkAutomationStage === "ready"
-                                    ? "w-full bg-[linear-gradient(90deg,#2d7ff9,#173fbe)]"
-                                    : sdkAutomationStage === "manual_only"
-                                      ? "w-full bg-[rgba(19,33,58,0.18)]"
-                                      : "w-0 bg-transparent"
+                                sdkWorkflowProgressTone === "active"
+                                  ? "animate-pulse bg-[linear-gradient(90deg,#ff6a3d_0%,#ff9447_28%,#2d7ff9_78%,#173fbe_100%)]"
+                                  : sdkWorkflowProgressTone === "complete"
+                                    ? "bg-[linear-gradient(90deg,#2d7ff9,#173fbe)]"
+                                    : sdkWorkflowProgressTone === "blocked"
+                                      ? "bg-[rgba(19,33,58,0.24)]"
+                                      : "bg-transparent"
                               }`}
+                              style={{ width: `${sdkWorkflowProgressPercent}%` }}
                             />
                           </div>
 
-                          <div className="mt-6 grid gap-4 md:grid-cols-3">
-                            {automaticWorkflowItems.map((item) => (
-                              <div key={item.id} className="border-l-2 border-[rgba(19,33,58,0.10)] pl-4">
-                                <div className="flex items-center gap-2">
+                          {sdkVisibleWorkflowItems.length ? (
+                            <div className="mt-5 flex flex-wrap gap-2">
+                              {sdkVisibleWorkflowItems.map((item) => (
+                                <div
+                                  key={item.id}
+                                  className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold ${
+                                    item.state === "complete"
+                                      ? "bg-[rgba(45,127,249,0.10)] text-[#173fbe]"
+                                      : item.state === "active"
+                                        ? "bg-[rgba(255,106,61,0.12)] text-[#d64e1d]"
+                                        : "bg-[rgba(19,33,58,0.08)] text-[#516075]"
+                                  }`}
+                                >
                                   <span
-                                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${
+                                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
                                       item.state === "complete"
                                         ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
                                         : item.state === "active"
                                           ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
-                                          : item.state === "blocked"
-                                            ? "bg-[rgba(19,33,58,0.10)] text-[#516075]"
-                                            : "bg-[rgba(19,33,58,0.06)] text-[#6f7b90]"
+                                          : "bg-[rgba(19,33,58,0.12)] text-[#516075]"
                                     }`}
                                   >
-                                    {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
+                                    {item.state === "complete" ? "✓" : item.state === "active" ? "•" : "!"}
                                   </span>
-                                  <p className="text-sm font-semibold text-[#13213a]">{item.label}</p>
+                                  <span>{item.label}</span>
                                 </div>
-                                <p className="mt-2 text-sm leading-6 text-[#49566c]">{item.detail}</p>
-                              </div>
-                            ))}
-                          </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-5 text-sm leading-6 text-[#6f7b90]">
+                              Start the automatic attempt to watch each step appear here as the agent progresses.
+                            </p>
+                          )}
                         </div>
 
                         <div className="xl:pl-8">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                               <p className="text-sm font-semibold text-[#13213a]">Live agent feed</p>
-                              <p className="mt-1 text-sm leading-6 text-[#49566c]">
-                                Watch the setup agent move through repository analysis and preview
-                                generation in real time.
-                              </p>
                             </div>
                             {(sdkAutomationStage === "planning" || sdkAutomationStage === "previewing") && (
                               <span className="rounded-full bg-[rgba(45,127,249,0.12)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#173fbe]">
@@ -3433,17 +3727,17 @@ export function ProjectOnboardingConsole() {
                           </div>
 
                           <div className="mt-5 space-y-4">
-                            {sdkAgentFeedItems.map((item, index) => (
+                            {sdkVisibleAgentFeedItems.map((item, index) => (
                               <div
                                 key={`${index}-${item.thought}`}
-                                className={`border-l-4 pl-4 ${
+                                className={`rounded-[18px] px-4 py-3 ${
                                   item.state === "active"
-                                    ? "border-[#ff6a3d]"
+                                    ? "bg-[rgba(255,106,61,0.08)]"
                                     : item.state === "complete"
-                                      ? "border-[#2d7ff9]"
+                                      ? "bg-[rgba(45,127,249,0.08)]"
                                       : item.state === "blocked"
-                                        ? "border-[rgba(19,33,58,0.18)]"
-                                        : "border-[rgba(19,33,58,0.10)]"
+                                        ? "bg-[rgba(19,33,58,0.07)]"
+                                        : "bg-[rgba(19,33,58,0.04)]"
                                 }`}
                               >
                                 <div className="flex items-start gap-3">
@@ -3460,7 +3754,7 @@ export function ProjectOnboardingConsole() {
                                   >
                                     {item.state === "complete" ? "✓" : item.state === "blocked" ? "!" : "•"}
                                   </span>
-                                  <div className="min-w-0 border-b border-[rgba(19,33,58,0.06)] pb-4">
+                                  <div className="min-w-0">
                                     <p className="text-sm font-medium leading-6 text-[#13213a]">{item.thought}</p>
                                     <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
                                       {item.state === "active"
@@ -3567,7 +3861,7 @@ export function ProjectOnboardingConsole() {
                       this repository.
                     </p>
                   )}
-                  {selectedSdkStrategy ? (
+                  {sdkAutomaticRunStarted && selectedSdkStrategy && !sdkBootstrapPreview ? (
                     <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] px-4 py-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-[#171717]">Selected strategy review</p>
@@ -3611,194 +3905,194 @@ export function ProjectOnboardingConsole() {
                       ) : null}
                     </div>
                   ) : null}
-                  {loadingSdkBootstrapPreview ? (
+                  {!sdkAutomaticRunStarted ? (
+                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                      Start the automatic attempt and Stimpact will inspect the repository, choose the
+                      safest supported surface, and show the verified preview here.
+                    </p>
+                  ) : loadingSdkBootstrapPreview ? (
                     <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
                       Building the exact bootstrap PR preview for the selected strategy and verifying it in a temp checkout...
                     </p>
                   ) : sdkBootstrapPreview ? (
                     <>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <ReadOnlyField
-                          label="Planned branch"
-                          value={sdkBootstrapPreview.pull_request.branch_name}
-                        />
-                        <ReadOnlyField
-                          label="Draft PR title"
-                          value={sdkBootstrapPreview.pull_request.title}
-                        />
-                      </div>
-                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-[#171717]">Planner details</p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                              sdkBootstrapPreview.strategy.source === "llm"
-                                ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                                : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
-                            }`}
-                          >
-                            {sdkBootstrapPreview.strategy.source === "llm"
-                              ? "Model-assisted strategy"
-                              : "Deterministic strategy"}
-                          </span>
-                          <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
-                            {sdkBootstrapPreview.strategy.confidence} confidence
-                          </span>
-                        </div>
-                        {sdkBootstrapPreview.strategy.confidence_reason ? (
-                          <p className="mt-3 text-sm leading-6 text-[#746d66]">
-                            {sdkBootstrapPreview.strategy.confidence_reason}
-                          </p>
-                        ) : null}
-                        {sdkBootstrapPlan?.requires_confirmation ? (
-                          <p className="mt-3 rounded-[14px] bg-[rgba(242,247,255,0.92)] px-3 py-2 text-sm text-[#214a8b]">
-                            Review required: this repository exposed multiple plausible SDK surfaces,
-                            so the agent is showing you the chosen target before PR creation.
-                          </p>
-                        ) : null}
-                        {sdkBootstrapPreview.strategy.evidence.length ? (
-                          <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
-                            {sdkBootstrapPreview.strategy.evidence.map((item) => (
-                              <li key={item}>`{item}`</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {sdkBootstrapPreview.strategy.blockers.length ? (
-                          <div className="mt-3 rounded-[14px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-3 py-3">
-                            <p className="text-sm font-semibold text-[#171717]">Guardrails or blockers</p>
-                            <div className="mt-2 space-y-2">
-                              {sdkBootstrapPreview.strategy.blockers.map((item) => (
-                                <p key={item} className="text-sm leading-6 text-[#8f4b31]">
-                                  {item}
-                                </p>
-                              ))}
+                      <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,250,255,0.92))] px-5 py-5 shadow-[0_16px_34px_rgba(15,23,42,0.06)]">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div className="max-w-3xl">
+                            <p className="text-sm font-semibold text-[#171717]">Review generated SDK patch</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                                {sdkBootstrapPreview.strategy.framework}
+                              </span>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  sdkBootstrapPreview.strategy.source === "llm"
+                                    ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                    : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
+                                }`}
+                              >
+                                {sdkBootstrapPreview.strategy.source === "llm"
+                                  ? "Model-assisted"
+                                  : "Deterministic"}
+                              </span>
+                              <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                                {sdkBootstrapPreview.strategy.confidence} confidence
+                              </span>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  sdkBootstrapPreview.attempt.verification.status === "passed"
+                                    ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                    : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                      ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
+                                      : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                }`}
+                              >
+                                {sdkBootstrapPreview.attempt.verification.status === "passed"
+                                  ? "Verification passed"
+                                  : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                    ? "Needs review"
+                                    : "Verification failed"}
+                              </span>
                             </div>
+                            <p className="mt-3 text-sm leading-6 text-[#5f6470]">
+                              {sdkBootstrapPreview.strategy.summary}
+                            </p>
+                            {sdkBootstrapPreview.attempt.verification.summary ? (
+                              <p className="mt-2 text-sm leading-6 text-[#5f6470]">
+                                <span className="font-semibold text-[#171717]">Verification:</span>{" "}
+                                {sdkBootstrapPreview.attempt.verification.summary}
+                              </p>
+                            ) : null}
+                            {sdkBootstrapPreview.strategy.confidence_reason ? (
+                              <p className="mt-2 text-sm leading-6 text-[#5f6470]">
+                                <span className="font-semibold text-[#171717]">Why this surface:</span>{" "}
+                                {sdkBootstrapPreview.strategy.confidence_reason}
+                              </p>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-[#171717]">Patch verification</p>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                              sdkBootstrapPreview.attempt.verification.status === "passed"
-                                ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                                : sdkBootstrapPreview.attempt.verification.status === "needs_review"
-                                  ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
-                                  : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                            }`}
-                          >
-                            {sdkBootstrapPreview.attempt.verification.status === "passed"
-                              ? "Verification passed"
-                              : sdkBootstrapPreview.attempt.verification.status === "needs_review"
-                                ? "Needs review"
-                                : "Verification failed"}
+                          <div className="min-w-[16rem] space-y-2 text-sm text-[#5f6470]">
+                            <p>
+                              <span className="font-semibold text-[#171717]">Branch:</span>{" "}
+                              {sdkBootstrapPreview.pull_request.branch_name}
+                            </p>
+                            <p>
+                              <span className="font-semibold text-[#171717]">PR title:</span>{" "}
+                              {sdkBootstrapPreview.pull_request.title}
+                            </p>
+                            <p>
+                              <span className="font-semibold text-[#171717]">Entrypoint:</span>{" "}
+                              {sdkEntryPointLabel}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <span className="rounded-full bg-[rgba(45,127,249,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#173fbe]">
+                            {sdkBootstrapPreview.strategy.planned_files.length} files to update
+                          </span>
+                          <span className="rounded-full bg-[rgba(45,127,249,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#173fbe]">
+                            {sdkPreviewDiffFiles.reduce((total, file) => total + file.additions, 0)} additions
+                          </span>
+                          <span className="rounded-full bg-[rgba(255,106,61,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#a54d2f]">
+                            {sdkPreviewDiffFiles.reduce((total, file) => total + file.deletions, 0)} removals
+                          </span>
+                          <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                            Failure stage: {sdkBootstrapPreview.attempt.failure_stage ?? "none"}
                           </span>
                         </div>
-                        <div className="mt-4 grid gap-4 md:grid-cols-3">
-                          <ReadOnlyField
-                            label="Patch drafted"
-                            value={sdkBootstrapPreview.attempt.patch_generated ? "Yes" : "No"}
-                          />
-                          <ReadOnlyField
-                            label="Patch applied"
-                            value={sdkBootstrapPreview.attempt.patch_applied ? "Yes" : "No"}
-                          />
-                          <ReadOnlyField
-                            label="Failure stage"
-                            value={sdkBootstrapPreview.attempt.failure_stage ?? "None"}
-                          />
-                        </div>
-                        {sdkBootstrapPreview.attempt.verification.summary ? (
-                          <p className="mt-4 text-sm leading-6 text-[#5f6470]">
-                            {sdkBootstrapPreview.attempt.verification.summary}
+
+                        {sdkBootstrapPlan?.requires_confirmation ? (
+                          <p className="mt-4 text-sm leading-6 text-[#214a8b]">
+                            Review required: this repository exposed multiple plausible SDK surfaces, so
+                            the agent is showing you the chosen target before PR creation.
                           </p>
-                        ) : null}
-                        {sdkBootstrapPreview.attempt.verification.command ? (
-                          <CodePanel
-                            title="Verification command"
-                            code={sdkBootstrapPreview.attempt.verification.command}
-                          />
-                        ) : null}
-                        {sdkBootstrapPreview.attempt.verification.output ? (
-                          <CodePanel
-                            title="Verification output"
-                            code={sdkBootstrapPreview.attempt.verification.output}
-                          />
                         ) : null}
                         {sdkBootstrapPreview.attempt.warnings.length ? (
-                          <div className="mt-4 rounded-[14px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-3 py-3">
-                            <p className="text-sm font-semibold text-[#171717]">Preview warnings</p>
-                            <div className="mt-2 space-y-2">
-                              {sdkBootstrapPreview.attempt.warnings.map((item) => (
-                                <p key={item} className="text-sm leading-6 text-[#8f4b31]">
-                                  {item}
-                                </p>
+                          <div className="mt-4 space-y-2 text-sm leading-6 text-[#8f4b31]">
+                            {sdkBootstrapPreview.attempt.warnings.map((item) => (
+                              <p key={item}>
+                                <span className="font-semibold text-[#171717]">Warning:</span> {item}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+                        {sdkBootstrapPreview.strategy.blockers.length ? (
+                          <div className="mt-4 space-y-2 text-sm leading-6 text-[#8f4b31]">
+                            {sdkBootstrapPreview.strategy.blockers.map((item) => (
+                              <p key={item}>
+                                <span className="font-semibold text-[#171717]">Guardrail:</span> {item}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-5 grid gap-4 md:grid-cols-3">
+                          {sdkPreviewNextSteps.map((item, index) => (
+                            <div key={item.title} className="border-l-2 border-[rgba(45,127,249,0.18)] pl-4">
+                              <p className="text-sm font-semibold text-[#171717]">
+                                {index + 1}. {item.title}
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-[#5f6470]">{item.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {sdkPreviewAttempts.length > 1 ? (
+                          <div className="mt-5">
+                            {sdkAttemptHistorySummary ? (
+                              <p className="text-sm leading-6 text-[#5f6470]">{sdkAttemptHistorySummary}</p>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {sdkPreviewAttempts.map((item) => (
+                                <span
+                                  key={`${item.candidate_id ?? item.strategy_id}-${item.attempt_number ?? 0}`}
+                                  className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
+                                    item.change_request_allowed
+                                      ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                      : item.preview_available
+                                        ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
+                                        : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
+                                  }`}
+                                >
+                                  Attempt {item.attempt_number ?? "?"}:{" "}
+                                  {item.change_request_allowed
+                                    ? "reviewable"
+                                    : item.preview_available
+                                      ? "preview"
+                                      : "rejected"}
+                                </span>
                               ))}
                             </div>
                           </div>
                         ) : null}
                       </div>
-                      {sdkPreviewAttempts.length ? (
-                        <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
-                          <p className="text-sm font-semibold text-[#171717]">Attempt history</p>
-                          {sdkAttemptHistorySummary ? (
-                            <p className="mt-2 text-sm leading-6 text-[#5f6470]">{sdkAttemptHistorySummary}</p>
+
+                      {(sdkBootstrapPreview.attempt.verification.command ||
+                        sdkBootstrapPreview.attempt.verification.output ||
+                        sdkBootstrapPreview.pull_request.description) && (
+                        <div className="grid gap-4 lg:grid-cols-3">
+                          {sdkBootstrapPreview.attempt.verification.command ? (
+                            <CodePanel
+                              title="Verification command"
+                              code={sdkBootstrapPreview.attempt.verification.command}
+                            />
                           ) : null}
-                          <div className="mt-4 space-y-3">
-                            {sdkPreviewAttempts.map((item) => (
-                              <div
-                                key={`${item.candidate_id ?? item.strategy_id}-${item.attempt_number ?? 0}`}
-                                className="rounded-[14px] border border-[rgba(17,24,39,0.08)] px-3 py-3"
-                              >
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-semibold text-[#171717]">
-                                    Attempt {item.attempt_number ?? "?"}
-                                  </p>
-                                  <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
-                                    {item.candidate_id ?? item.strategy_id}
-                                  </span>
-                                  <span
-                                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                      item.change_request_allowed
-                                        ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                                        : item.preview_available
-                                          ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
-                                          : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                                    }`}
-                                  >
-                                    {item.change_request_allowed
-                                      ? "Reviewable"
-                                      : item.preview_available
-                                        ? "Preview with warnings"
-                                        : "Rejected"}
-                                  </span>
-                                </div>
-                                {item.failure_reason ? (
-                                  <p className="mt-2 text-sm leading-6 text-[#5f6470]">{item.failure_reason}</p>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
+                          {sdkBootstrapPreview.attempt.verification.output ? (
+                            <CodePanel
+                              title="Verification output"
+                              code={sdkBootstrapPreview.attempt.verification.output}
+                            />
+                          ) : null}
+                          <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
                         </div>
-                      ) : null}
-                      <div className="rounded-[18px] bg-[rgba(255,255,255,0.72)] px-4 py-4">
-                        <p className="text-sm font-semibold text-[#171717]">Files Stimpact will change</p>
-                        <ul className="mt-3 grid gap-2 text-sm text-[#5f6470]">
-                          {sdkBootstrapPreview.strategy.planned_files.map((item) => (
-                            <li key={`${item.path}-${item.action}`}>
-                              <span className="font-semibold text-[#171717]">{item.action.toUpperCase()}</span> `{item.path}` {item.reason}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
-                        <CodePanel
-                          title="Patch preview"
-                          code={sdkBootstrapPreview.patch_diff ?? "# Patch preview is unavailable for this attempt"}
-                        />
-                      </div>
+                      )}
+
+                      <DiffReviewPanel
+                        title="Patch review"
+                        files={sdkPreviewDiffFiles}
+                        plannedFiles={sdkBootstrapPreview.strategy.planned_files}
+                        rawDiff={sdkBootstrapPreview.patch_diff}
+                      />
                     </>
                   ) : automaticSdkAvailable ? (
                     <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
@@ -3810,103 +4104,155 @@ export function ProjectOnboardingConsole() {
                       mode for the exact install instructions instead.
                     </p>
                   )}
-                  <div className="flex flex-wrap gap-3">
-                    <ActionButton
-                      label="Approve and create PR"
-                      onClick={createSdkBootstrapChangeRequest}
-                      disabled={
-                        loading ||
-                        !sdkTargetRepositoryId ||
-                        !platformBaseUrl ||
-                        !selectedSdkStrategy ||
-                        !selectedSdkStrategy.pr_supported ||
-                        !sdkBootstrapPreview ||
-                        !sdkBootstrapPreview.attempt.change_request_allowed ||
-                        loadingSdkBootstrapPreview
-                      }
-                    />
-                    <ActionButton
-                      label="Switch to manual mode"
-                      onClick={dismissSdkBootstrapPreview}
-                      disabled={loading || loadingSdkBootstrapPreview}
-                      variant="secondary"
-                    />
-                    {onboardingState?.sdk_setup_change_request_url ? (
-                      <a
-                        href={onboardingState.sdk_setup_change_request_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-4 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3]"
-                      >
-                        Open current PR
-                      </a>
-                    ) : null}
-                  </div>
+                  {sdkAutomaticRunStarted ? (
+                    <div className="flex flex-wrap gap-3">
+                      <ActionButton
+                        label="Approve and create PR"
+                        onClick={createSdkBootstrapChangeRequest}
+                        disabled={
+                          loading ||
+                          !sdkTargetRepositoryId ||
+                          !platformBaseUrl ||
+                          !selectedSdkStrategy ||
+                          !selectedSdkStrategy.pr_supported ||
+                          !sdkBootstrapPreview ||
+                          !sdkBootstrapPreview.attempt.change_request_allowed ||
+                          loadingSdkBootstrapPreview
+                        }
+                      />
+                      <ActionButton
+                        label="Switch to manual mode"
+                        onClick={dismissSdkBootstrapPreview}
+                        disabled={loading || loadingSdkBootstrapPreview}
+                        variant="secondary"
+                      />
+                      {onboardingState?.sdk_setup_change_request_url ? (
+                        <a
+                          href={onboardingState.sdk_setup_change_request_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-4 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3]"
+                        >
+                          Open current PR
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm font-semibold text-[#171717]">Manual installation</p>
-                    <p className="text-sm leading-6 text-[#746d66]">
-                      Follow these exact steps to install the SDK yourself, wire it into the detected
-                      runtime entrypoint, and then verify telemetry is live.
-                    </p>
-                  </div>
-                  {selectedSdkStrategy ? (
-                    <>
-                      <div className="grid gap-4 md:grid-cols-3">
-                        <ReadOnlyField label="Framework" value={selectedSdkStrategy.framework} />
-                        <ReadOnlyField label="Detected entrypoint" value={sdkEntryPointLabel} />
-                        <ReadOnlyField label="Target service" value={effectiveSdkServiceName} />
+                  {loadingSdkBootstrapPlan ? (
+                    <div className="space-y-4">
+                      <div className="flex items-start gap-3">
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(45,127,249,0.10)]">
+                          <span className="inline-flex h-3 w-3 animate-pulse rounded-full bg-[linear-gradient(180deg,#2d7ff9,#173fbe)]" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-[#17385d]">
+                            Preparing manual instructions
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-[#5f6470]">
+                            Stimpact is inspecting the connected repository, finding the runtime
+                            entrypoint, and preparing the exact install, env, and code steps for you.
+                          </p>
+                        </div>
                       </div>
-                      <div className="rounded-[22px] border border-[rgba(23,56,93,0.10)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(244,248,255,0.94))] px-5 py-5">
-                        <p className="text-sm font-semibold text-[#17385d]">Do these in order</p>
-                        <div className="mt-4 space-y-4">
-                          {sdkManualActionItems.map((item, index) => (
-                            <div key={item.title} className="space-y-3 border-l-2 border-[rgba(23,56,93,0.16)] pl-4">
-                              <div>
-                                <p className="text-sm font-semibold text-[#171717]">
-                                  {index + 1}. {item.title}
-                                </p>
-                                <p className="mt-1 text-sm leading-6 text-[#5f6470]">{item.detail}</p>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(45,127,249,0.10)] text-[11px] font-semibold text-[#173fbe]">
+                            1
+                          </span>
+                          <div className="h-3 w-48 animate-pulse rounded-full bg-[rgba(23,56,93,0.10)]" />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(45,127,249,0.10)] text-[11px] font-semibold text-[#173fbe]">
+                            2
+                          </span>
+                          <div className="h-3 w-64 animate-pulse rounded-full bg-[rgba(23,56,93,0.08)]" />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(45,127,249,0.10)] text-[11px] font-semibold text-[#173fbe]">
+                            3
+                          </span>
+                          <div className="h-3 w-56 animate-pulse rounded-full bg-[rgba(23,56,93,0.08)]" />
+                        </div>
+                      </div>
+                    </div>
+                  ) : selectedSdkStrategy ? (
+                    <>
+                      <div className="flex flex-wrap gap-2.5">
+                        <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                            Framework
+                          </span>
+                          <span className="text-sm font-semibold text-[#171717]">
+                            {selectedSdkStrategy.framework}
+                          </span>
+                        </div>
+                        <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                            Entrypoint
+                          </span>
+                          <span className="text-sm font-semibold text-[#171717]">{sdkEntryPointLabel}</span>
+                        </div>
+                        <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                            Service
+                          </span>
+                          <span className="text-sm font-semibold text-[#171717]">
+                            {effectiveSdkServiceName}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-[#17385d]">Copy these 3 things</p>
+                        <p className="mt-2 text-sm leading-6 text-[#5f6470]">
+                          Manual setup should be quick: install the SDK, add the env vars including
+                          your Stimpact API key, then paste the code into the detected entrypoint.
+                        </p>
+                        <div className="mt-4 grid gap-5">
+                          {sdkManualPrimarySteps.map((item, index) => (
+                            <div key={item.title} className="space-y-3">
+                              <div className="flex items-start gap-3">
+                                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-xs font-semibold text-white">
+                                  {index + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-[#171717]">{item.title}</p>
+                                  <p className="mt-1 text-sm leading-6 text-[#5f6470]">{item.detail}</p>
+                                </div>
                               </div>
                               <CodePanel title={item.title} code={item.code} />
                             </div>
                           ))}
                         </div>
                       </div>
-                      {sdkAutomaticFailureExplanation ? (
-                        <div className="rounded-[18px] border border-[rgba(45,127,249,0.14)] bg-[rgba(242,247,255,0.92)] px-4 py-4">
-                          <p className="text-sm font-semibold text-[#17385d]">What stopped automatic setup</p>
-                          <p className="mt-2 text-sm leading-6 text-[#315589]">{sdkAutomaticFailureExplanation}</p>
-                          {sdkAttemptHistorySummary ? (
-                            <p className="mt-2 text-sm leading-6 text-[#315589]">{sdkAttemptHistorySummary}</p>
-                          ) : null}
+                      <div>
+                        <p className="text-sm font-semibold text-[#171717]">After you paste the code</p>
+                        <div className="mt-3 space-y-3">
+                          {sdkManualFollowUpItems.map((item, index) => (
+                            <div key={item} className="flex items-start gap-3">
+                              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[rgba(45,127,249,0.10)] text-[11px] font-semibold text-[#173fbe]">
+                                {index + 1}
+                              </span>
+                              <p className="min-w-0 text-sm leading-6 text-[#5f6470]">{item}</p>
+                            </div>
+                          ))}
                         </div>
-                      ) : null}
-                      {selectedSdkStrategy.manual_steps.length ? (
-                        <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.76)] px-4 py-4">
-                          <p className="text-sm font-semibold text-[#171717]">Framework-specific notes</p>
-                          <div className="mt-3 space-y-3">
-                            {selectedSdkStrategy.manual_steps.map((item, index) => (
-                              <div key={`${selectedSdkStrategy.id}-${item.title}`} className="border-l-2 border-[rgba(255,106,61,0.24)] pl-4">
-                                <p className="text-sm font-semibold text-[#171717]">
-                                  {index + 1}. {item.title}
-                                </p>
-                                <p className="mt-1 text-sm leading-6 text-[#746d66]">{item.content}</p>
-                              </div>
+                      </div>
+                      {sdkManualExtraNotes.length ? (
+                        <div>
+                          <p className="text-sm font-semibold text-[#17385d]">Need to know</p>
+                          <div className="mt-3 space-y-2">
+                            {sdkManualExtraNotes.map((item) => (
+                              <p key={item} className="text-sm leading-6 text-[#315589]">
+                                {item}
+                              </p>
                             ))}
                           </div>
-                        </div>
-                      ) : null}
-                      {sdkManualBlockers.length ? (
-                        <div className="rounded-[18px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-4 py-4">
-                          <p className="text-sm font-semibold text-[#8f4b31]">Why automatic setup stopped</p>
-                          <ul className="mt-3 grid gap-2 text-sm leading-6 text-[#8f4b31]">
-                            {sdkManualBlockers.map((item) => (
-                              <li key={item}>• {item}</li>
-                            ))}
-                          </ul>
+                          {sdkAttemptHistorySummary ? (
+                            <p className="mt-3 text-sm leading-6 text-[#315589]">{sdkAttemptHistorySummary}</p>
+                          ) : null}
                         </div>
                       ) : null}
                     </>
@@ -5028,12 +5374,187 @@ function SelectField({
 }
 
 function CodePanel({ title, code }: { title: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const lines = code.split("\n");
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => {
+        setCopied(false);
+      }, 1800);
+    } catch {
+      // Ignore clipboard failures and leave the code visible for manual copy.
+    }
+  }
+
+  const lineToneClass = (line: string) => {
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      return "text-[#86efac]";
+    }
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      return "text-[#fca5a5]";
+    }
+    if (line.startsWith("@@")) {
+      return "text-[#93c5fd]";
+    }
+    if (line.trim().startsWith("#") || line.trim().startsWith("//")) {
+      return "text-[#94a3b8]";
+    }
+    if (/^[A-Z0-9_]+=/.test(line)) {
+      return "text-[#f8c26a]";
+    }
+    return "text-[#e5eefc]";
+  };
+
   return (
-    <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[#fffdfb] p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{title}</p>
-      <pre className="mt-3 overflow-x-auto rounded-[14px] bg-[rgba(23,23,23,0.96)] px-4 py-3 text-xs leading-6 text-white">
-        <code>{code}</code>
-      </pre>
+    <div className="overflow-hidden rounded-[20px] border border-[rgba(15,23,42,0.18)] bg-[#0b1220] shadow-[0_18px_38px_rgba(15,23,42,0.14)]">
+      <div className="flex items-center justify-between border-b border-[rgba(148,163,184,0.18)] bg-[rgba(15,23,42,0.88)] px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#fb7185]" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#fbbf24]" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#34d399]" />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#c4d3ea]">{title}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-medium text-[#7f91ab]">{lines.length} lines</span>
+          <button
+            type="button"
+            onClick={() => {
+              void copyCode();
+            }}
+            className="rounded-full border border-[rgba(148,163,184,0.18)] px-3 py-1 text-[11px] font-semibold text-[#d8e4f8] transition hover:border-[rgba(96,165,250,0.34)] hover:bg-[rgba(30,41,59,0.82)]"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <pre className="min-w-full bg-[#0b1220] py-3 text-xs leading-6">
+          <code>
+            {lines.map((line, index) => (
+              <div key={`${title}-${index}`} className="grid grid-cols-[3.5rem_minmax(0,1fr)]">
+                <span className="select-none border-r border-[rgba(148,163,184,0.10)] px-3 text-right text-[#5f6f86]">
+                  {index + 1}
+                </span>
+                <span className={`whitespace-pre px-4 ${lineToneClass(line)}`}>{line || " "}</span>
+              </div>
+            ))}
+          </code>
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function DiffReviewPanel({
+  title,
+  files,
+  plannedFiles,
+  rawDiff,
+}: {
+  title: string;
+  files: ParsedDiffFile[];
+  plannedFiles: SdkBootstrapPreview["strategy"]["planned_files"];
+  rawDiff: string | null;
+}) {
+  const plannedFileMap = new Map(plannedFiles.map((item) => [item.path, item]));
+
+  if (!files.length) {
+    return <CodePanel title={title} code={rawDiff ?? "# Patch preview is unavailable for this attempt"} />;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[22px] border border-[rgba(15,23,42,0.18)] bg-[#0b1220] shadow-[0_18px_38px_rgba(15,23,42,0.14)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[rgba(148,163,184,0.18)] bg-[rgba(15,23,42,0.88)] px-5 py-4">
+        <div>
+          <p className="text-sm font-semibold text-white">{title}</p>
+          <p className="mt-1 text-sm text-[#8ea2bf]">
+            Review each file below. Added lines are green, removed lines are red.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-[rgba(45,127,249,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#c9ddff]">
+            {files.length} files
+          </span>
+          <span className="rounded-full bg-[rgba(34,197,94,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#bbf7d0]">
+            +{files.reduce((total, file) => total + file.additions, 0)}
+          </span>
+          <span className="rounded-full bg-[rgba(248,113,113,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#fecaca]">
+            -{files.reduce((total, file) => total + file.deletions, 0)}
+          </span>
+        </div>
+      </div>
+
+      <div className="divide-y divide-[rgba(148,163,184,0.14)]">
+        {files.map((file) => {
+          const plannedFile = plannedFileMap.get(file.path);
+          return (
+            <div key={`${file.previousPath ?? "new"}-${file.path}`} className="bg-[#0b1220]">
+              <div className="flex flex-wrap items-start justify-between gap-3 bg-[rgba(15,23,42,0.72)] px-5 py-4">
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm text-[#f8fafc]">{file.path}</p>
+                  {plannedFile?.reason ? (
+                    <p className="mt-1 text-sm leading-6 text-[#8ea2bf]">{plannedFile.reason}</p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {plannedFile?.action ? (
+                    <span className="rounded-full bg-[rgba(45,127,249,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#c9ddff]">
+                      {plannedFile.action}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full bg-[rgba(34,197,94,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#bbf7d0]">
+                    +{file.additions}
+                  </span>
+                  <span className="rounded-full bg-[rgba(248,113,113,0.16)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#fecaca]">
+                    -{file.deletions}
+                  </span>
+                </div>
+              </div>
+              <div className="max-h-[420px] overflow-auto">
+                {file.lines.map((line, index) => (
+                  <div
+                    key={`${file.path}-${index}`}
+                    className={`grid grid-cols-[4.25rem_4.25rem_minmax(0,1fr)] text-xs leading-6 ${
+                      line.kind === "add"
+                        ? "bg-[rgba(34,197,94,0.12)]"
+                        : line.kind === "remove"
+                          ? "bg-[rgba(248,113,113,0.12)]"
+                          : line.kind === "meta"
+                            ? "bg-[rgba(59,130,246,0.12)]"
+                            : "bg-transparent"
+                    }`}
+                  >
+                    <span className="select-none border-r border-[rgba(148,163,184,0.10)] px-3 text-right text-[#5f6f86]">
+                      {line.oldLineNumber ?? ""}
+                    </span>
+                    <span className="select-none border-r border-[rgba(148,163,184,0.10)] px-3 text-right text-[#5f6f86]">
+                      {line.newLineNumber ?? ""}
+                    </span>
+                    <span
+                      className={`whitespace-pre px-4 font-mono ${
+                        line.kind === "add"
+                          ? "text-[#bbf7d0]"
+                          : line.kind === "remove"
+                            ? "text-[#fecaca]"
+                            : line.kind === "meta"
+                              ? "text-[#bfdbfe]"
+                              : "text-[#e5eefc]"
+                      }`}
+                    >
+                      {line.content || " "}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

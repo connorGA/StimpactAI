@@ -45,16 +45,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
             ),
-            SdkEnvVarSpec(
-                name="NEXT_PUBLIC_STIMPACT_SERVICE",
-                example_value="web-app",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="NEXT_PUBLIC_STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
-            ),
         ],
     ),
     "javascript-vite-react": SdkFrameworkSpec(
@@ -78,16 +68,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 name="VITE_STIMPACT_API_KEY",
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
-            ),
-            SdkEnvVarSpec(
-                name="VITE_STIMPACT_SERVICE",
-                example_value="web-app",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="VITE_STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
             ),
         ],
     ),
@@ -113,16 +93,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
             ),
-            SdkEnvVarSpec(
-                name="REACT_APP_STIMPACT_SERVICE",
-                example_value="web-app",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="REACT_APP_STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
-            ),
         ],
     ),
     "javascript-generic": SdkFrameworkSpec(
@@ -146,16 +116,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 name="STIMPACT_API_KEY",
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_SERVICE",
-                example_value="billing-api",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
             ),
         ],
     ),
@@ -181,16 +141,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
             ),
-            SdkEnvVarSpec(
-                name="STIMPACT_SERVICE",
-                example_value="billing-api",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
-            ),
         ],
     ),
     "python-flask": SdkFrameworkSpec(
@@ -215,16 +165,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
             ),
-            SdkEnvVarSpec(
-                name="STIMPACT_SERVICE",
-                example_value="billing-api",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
-            ),
         ],
     ),
     "python-generic": SdkFrameworkSpec(
@@ -248,16 +188,6 @@ _FRAMEWORK_SPECS: dict[str, SdkFrameworkSpec] = {
                 name="STIMPACT_API_KEY",
                 example_value="stimp_live_replace_me",
                 description="Project API key created during onboarding.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_SERVICE",
-                example_value="billing-api",
-                description="Service name attached to captured incidents.",
-            ),
-            SdkEnvVarSpec(
-                name="STIMPACT_ENVIRONMENT",
-                example_value="production",
-                description="Runtime environment tag.",
             ),
         ],
     ),

@@ -1436,8 +1436,6 @@ def _apply_next_strategy(
             ("NEXT_PUBLIC_STIMPACT_BASE_URL", base_url),
             ("NEXT_PUBLIC_STIMPACT_PROJECT_ID", project_id),
             ("NEXT_PUBLIC_STIMPACT_API_KEY", api_key),
-            ("NEXT_PUBLIC_STIMPACT_SERVICE", service_name),
-            ("NEXT_PUBLIC_STIMPACT_ENVIRONMENT", environment),
         ],
     )
 
@@ -1477,8 +1475,6 @@ def _apply_vite_react_strategy(
             ("VITE_STIMPACT_BASE_URL", base_url),
             ("VITE_STIMPACT_PROJECT_ID", project_id),
             ("VITE_STIMPACT_API_KEY", api_key),
-            ("VITE_STIMPACT_SERVICE", service_name),
-            ("VITE_STIMPACT_ENVIRONMENT", environment),
         ],
     )
 
@@ -1519,8 +1515,6 @@ def _apply_react_scripts_strategy(
             ("REACT_APP_STIMPACT_BASE_URL", base_url),
             ("REACT_APP_STIMPACT_PROJECT_ID", project_id),
             ("REACT_APP_STIMPACT_API_KEY", api_key),
-            ("REACT_APP_STIMPACT_SERVICE", service_name),
-            ("REACT_APP_STIMPACT_ENVIRONMENT", environment),
         ],
     )
 
@@ -1582,8 +1576,6 @@ def _apply_python_strategy(
             ("STIMPACT_BASE_URL", base_url),
             ("STIMPACT_PROJECT_ID", project_id),
             ("STIMPACT_API_KEY", api_key),
-            ("STIMPACT_SERVICE", service_name),
-            ("STIMPACT_ENVIRONMENT", environment),
         ],
     )
 
@@ -1632,8 +1624,6 @@ def _apply_generic_javascript_strategy(
             ("STIMPACT_BASE_URL", base_url),
             ("STIMPACT_PROJECT_ID", project_id),
             ("STIMPACT_API_KEY", api_key),
-            ("STIMPACT_SERVICE", service_name),
-            ("STIMPACT_ENVIRONMENT", environment),
         ],
     )
 
@@ -1992,9 +1982,8 @@ export function StimpactProvider() {{
     const baseUrl = process.env.NEXT_PUBLIC_STIMPACT_BASE_URL;
     const projectId = process.env.NEXT_PUBLIC_STIMPACT_PROJECT_ID;
     const apiKey = process.env.NEXT_PUBLIC_STIMPACT_API_KEY;
-    const service = process.env.NEXT_PUBLIC_STIMPACT_SERVICE ?? "{service_name}";
-    const runtimeEnvironment =
-      process.env.NEXT_PUBLIC_STIMPACT_ENVIRONMENT ?? "{environment}";
+    const service = "{service_name}";
+    const runtimeEnvironment = "{environment}";
 
     if (!baseUrl || !projectId || !apiKey || !service) {{
       return;
@@ -2035,9 +2024,8 @@ export function installStimpact() {{
   const baseUrl = import.meta.env.VITE_STIMPACT_BASE_URL;
   const projectId = import.meta.env.VITE_STIMPACT_PROJECT_ID;
   const apiKey = import.meta.env.VITE_STIMPACT_API_KEY;
-  const service = import.meta.env.VITE_STIMPACT_SERVICE ?? "{service_name}";
-  const runtimeEnvironment =
-    import.meta.env.VITE_STIMPACT_ENVIRONMENT ?? "{environment}";
+  const service = "{service_name}";
+  const runtimeEnvironment = "{environment}";
 
   if (!baseUrl || !projectId || !apiKey || !service) {{
     return;
@@ -2071,9 +2059,8 @@ export function installStimpact() {{
   const baseUrl = process.env.REACT_APP_STIMPACT_BASE_URL;
   const projectId = process.env.REACT_APP_STIMPACT_PROJECT_ID;
   const apiKey = process.env.REACT_APP_STIMPACT_API_KEY;
-  const service = process.env.REACT_APP_STIMPACT_SERVICE ?? "{service_name}";
-  const runtimeEnvironment =
-    process.env.REACT_APP_STIMPACT_ENVIRONMENT ?? "{environment}";
+  const service = "{service_name}";
+  const runtimeEnvironment = "{environment}";
 
   if (!baseUrl || !projectId || !apiKey || !service) {{
     return;
@@ -2179,8 +2166,8 @@ function installStimpact() {{
   const baseUrl = process.env.STIMPACT_BASE_URL;
   const projectId = process.env.STIMPACT_PROJECT_ID;
   const apiKey = process.env.STIMPACT_API_KEY;
-  const service = process.env.STIMPACT_SERVICE ?? "{service_name}";
-  const runtimeEnvironment = process.env.STIMPACT_ENVIRONMENT ?? "{environment}";
+  const service = "{service_name}";
+  const runtimeEnvironment = "{environment}";
 
   if (!baseUrl || !projectId || !apiKey || !service) {{
     return;
@@ -2220,8 +2207,8 @@ export function installStimpact() {{
   const baseUrl = process.env.STIMPACT_BASE_URL;
   const projectId = process.env.STIMPACT_PROJECT_ID;
   const apiKey = process.env.STIMPACT_API_KEY;
-  const service = process.env.STIMPACT_SERVICE ?? "{service_name}";
-  const runtimeEnvironment = process.env.STIMPACT_ENVIRONMENT ?? "{environment}";
+  const service = "{service_name}";
+  const runtimeEnvironment = "{environment}";
 
   if (!baseUrl || !projectId || !apiKey || !service) {{
     return;

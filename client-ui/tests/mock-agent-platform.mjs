@@ -259,19 +259,14 @@ const sdkBootstrapStrategy = {
       description: "Public Stimpact platform URL.",
     },
     {
-      name: "STIMPACT_PROJECT_ID",
+      name: "NEXT_PUBLIC_STIMPACT_PROJECT_ID",
       example_value: "project-1",
       description: "Project identifier used by the SDK.",
     },
     {
-      name: "STIMPACT_SERVICE_NAME",
-      example_value: "web-app",
-      description: "Logical service name for telemetry attribution.",
-    },
-    {
-      name: "STIMPACT_ENVIRONMENT",
-      example_value: "production",
-      description: "Deployment environment name.",
+      name: "NEXT_PUBLIC_STIMPACT_API_KEY",
+      example_value: "stimp_live_replace_me",
+      description: "Project API key created during onboarding.",
     },
   ],
   install_command: "pnpm add @stimpact/sdk",
@@ -287,7 +282,7 @@ const sdkBootstrapStrategy = {
     },
   ],
   preview_snippet:
-    "import { initStimpact } from '@stimpact/sdk';\n\ninitStimpact({ baseUrl: '<public-stimpact-url>', projectId: '<project-id>' });",
+    "import { StimpactClient } from '@stimpact/sdk';\n\nconst stimpact = new StimpactClient({\n  baseUrl: '<public-stimpact-url>',\n  projectId: '<project-id>',\n  apiKey: '<project-api-key>',\n  service: 'web-app',\n  environment: 'production',\n});\n\nstimpact.startHeartbeat();\nstimpact.registerBrowserAutoCapture();",
   source: "deterministic",
   evidence: ["Detected app router layout at apps/web/src/app/layout.tsx"],
   confidence_reason: "The repo contains a supported Next.js App Router entrypoint.",
@@ -505,13 +500,9 @@ const server = http.createServer((request, response) => {
           {
             ...sdkBootstrapStrategy,
             env_vars: sdkBootstrapStrategy.env_vars.map((item) =>
-              item.name === "STIMPACT_SERVICE_NAME"
-                ? { ...item, example_value: payload.service_name }
-                : item.name === "STIMPACT_ENVIRONMENT"
-                  ? { ...item, example_value: payload.environment ?? "production" }
-                  : item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
+              item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
                     ? { ...item, example_value: payload.base_url }
-                    : item.name === "STIMPACT_PROJECT_ID"
+                  : item.name === "NEXT_PUBLIC_STIMPACT_PROJECT_ID"
                       ? { ...item, example_value: payload.project_id }
                       : item,
             ),
@@ -570,13 +561,9 @@ const server = http.createServer((request, response) => {
         strategy: {
           ...sdkBootstrapStrategy,
           env_vars: sdkBootstrapStrategy.env_vars.map((item) =>
-            item.name === "STIMPACT_SERVICE_NAME"
-              ? { ...item, example_value: payload.service_name }
-              : item.name === "STIMPACT_ENVIRONMENT"
-                ? { ...item, example_value: payload.environment ?? "production" }
-                : item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
+            item.name === "NEXT_PUBLIC_STIMPACT_BASE_URL"
                   ? { ...item, example_value: payload.base_url }
-                  : item.name === "STIMPACT_PROJECT_ID"
+                  : item.name === "NEXT_PUBLIC_STIMPACT_PROJECT_ID"
                     ? { ...item, example_value: payload.project_id }
                     : item,
           ),
