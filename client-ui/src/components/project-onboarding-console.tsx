@@ -2,6 +2,7 @@
 
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Wrench } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 
@@ -30,6 +31,14 @@ type ApiErrorPayload = {
 
 const STEP_ORDER = ["1", "2", "3", "4", "5", "6", "7"] as const;
 const inFlightOnboardingRequests = new Map<string, Promise<ProjectOnboarding>>();
+const SDK_AUTOMATIC_ACTION_PHRASES = [
+  "Thinking through the repo shape.",
+  "Tinkering with the integration path.",
+  "Poking around the runtime surface.",
+  "Sketching the SDK patch.",
+  "Tracing the cleanest entrypoint.",
+  "Polishing the review flow.",
+] as const;
 
 type SecretDraft = {
   id: string;
@@ -417,6 +426,9 @@ export function ProjectOnboardingConsole() {
   const [sdkAutomationStage, setSdkAutomationStage] = useState<
     "idle" | "planning" | "previewing" | "ready" | "manual_only"
   >("idle");
+  const [sdkAutomaticActionPhraseIndex, setSdkAutomaticActionPhraseIndex] = useState(0);
+  const [creatingSdkChangeRequest, setCreatingSdkChangeRequest] = useState(false);
+  const [sdkDisplayedWorkflowProgressPercent, setSdkDisplayedWorkflowProgressPercent] = useState(0);
   const [showSdkManualFallbackDialog, setShowSdkManualFallbackDialog] = useState(false);
   const [policyDraft, setPolicyDraft] = useState<ProjectPolicy | null>(null);
   const [loadingRepoProfileInference, setLoadingRepoProfileInference] = useState(false);
@@ -543,10 +555,10 @@ export function ProjectOnboardingConsole() {
     Boolean(inferredConnectedRepositoryId) ||
     Boolean(selectedRepositoryId) ||
     Boolean(effectiveServiceRepoProfile);
-  const shouldRunAutomaticSdkWorkflow =
-    sdkSetupMode === "automatic" &&
-    (sdkAutomaticRequested || onboardingState?.sdk_setup_status === "change_request");
-  const shouldInspectSdkBootstrapPlan = shouldLoadStepSixData;
+  const hasExistingSdkChangeRequest = onboardingState?.sdk_setup_status === "change_request";
+  const shouldRunAutomaticSdkWorkflow = sdkSetupMode === "automatic" && sdkAutomaticRequested;
+  const shouldInspectSdkBootstrapPlan =
+    shouldLoadStepSixData && (sdkSetupMode === "manual" || shouldRunAutomaticSdkWorkflow);
   const savedProfileSuggestionMatchesVerify =
     Boolean(effectiveServiceRepoProfile && repoProfileInference?.verify_command) &&
     (repoProfileInference?.verify_command ?? "") === verifyCommand;
@@ -775,10 +787,7 @@ export function ProjectOnboardingConsole() {
       }
       return current;
     });
-    if (onboardingState?.sdk_setup_status === "change_request") {
-      setSdkAutomaticRequested(true);
-    }
-  }, [onboardingState?.sdk_setup_status, sdkBootstrapPlan, selectedSdkStrategyId]);
+  }, [onboardingState?.sdk_setup_status]);
 
   useEffect(() => {
     if (!projectId.trim() || !sdkTargetRepositoryId || !effectiveSdkServiceName.trim()) {
@@ -1066,6 +1075,31 @@ export function ProjectOnboardingConsole() {
       );
     });
   }, [effectiveServiceRepoProfile, effectiveStepFiveMode, state?.secret_refs]);
+
+  useEffect(() => {
+    const shouldAnimateAutomaticThoughts =
+      (sdkAutomaticRequested ||
+        loadingSdkBootstrapPreview ||
+        sdkAutomationStage !== "idle" ||
+        Boolean(sdkBootstrapPreview)) &&
+      (sdkAutomationStage === "planning" || sdkAutomationStage === "previewing") &&
+      !sdkBootstrapPreview;
+    if (!shouldAnimateAutomaticThoughts) {
+      setSdkAutomaticActionPhraseIndex(0);
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setSdkAutomaticActionPhraseIndex((current) => current + 1);
+    }, 2600);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    loadingSdkBootstrapPreview,
+    sdkAutomaticRequested,
+    sdkAutomationStage,
+    sdkBootstrapPreview,
+  ]);
 
   useEffect(() => {
     if (!projectId.trim() || !suggestedRepositoryId) {
@@ -1842,7 +1876,10 @@ export function ProjectOnboardingConsole() {
       setErrorMessage("A public Stimpact platform URL is required before generating an SDK bootstrap PR.");
       return;
     }
-    await withFeedback(async () => {
+    setCreatingSdkChangeRequest(true);
+    setLoading(true);
+    setErrorMessage(null);
+    try {
       const response = await requestJson<SdkBootstrapChangeRequestResponse>(
         `projects/${encodeURIComponent(projectId.trim())}/sdk-bootstrap/change-request`,
         {
@@ -1863,16 +1900,14 @@ export function ProjectOnboardingConsole() {
       setSdkBootstrapPreview(null);
       await loadOnboardingState(false);
       finishStepEditing();
-    }, "SDK bootstrap PR opened.");
-  }
-
-  function dismissSdkBootstrapPreview() {
-    sdkManualFallbackDialogKeyRef.current = "";
-    setSdkSetupMode("manual");
-    setSdkAutomaticRequested(false);
-    setSdkAutomationStage("idle");
-    setDismissedSdkPreviewStrategyId(selectedSdkStrategy?.id ?? null);
-    setShowSdkManualFallbackDialog(false);
+    } catch (caughtError) {
+      setErrorMessage(
+        caughtError instanceof Error ? caughtError.message : "Unexpected onboarding error.",
+      );
+    } finally {
+      setCreatingSdkChangeRequest(false);
+      setLoading(false);
+    }
   }
 
   function startAutomaticSdkWorkflow() {
@@ -1993,6 +2028,7 @@ export function ProjectOnboardingConsole() {
   const hasActiveBrowserKeys = state?.operational_readiness.has_active_browser_keys ?? false;
   const hasReviewedPolicy = state?.operational_readiness.policy_reviewed ?? false;
   const hasSdkSetup = state?.operational_readiness.sdk_setup_ready ?? false;
+  const hasHealthyHeartbeat = telemetryVerification?.status === "healthy";
   const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
   const activeBrowserKeys = state?.browser_keys.filter((item) => item.status === "active") ?? [];
   const hasAnyActiveTelemetryKeys = hasActiveApiKeys || hasActiveBrowserKeys;
@@ -2122,6 +2158,17 @@ export function ProjectOnboardingConsole() {
   const sdkWorkflowProgressPercent = automaticWorkflowItems.length
     ? Math.max(0, Math.min(100, (sdkWorkflowProgressUnits / automaticWorkflowItems.length) * 100))
     : 0;
+  const sdkWorkflowStepPercent = automaticWorkflowItems.length ? 100 / automaticWorkflowItems.length : 0;
+  const sdkCompletedCheckpointPercent = automaticWorkflowItems.length
+    ? Math.max(0, Math.min(100, (sdkCompletedWorkflowCount / automaticWorkflowItems.length) * 100))
+    : 0;
+  const sdkNextCheckpointPercent =
+    sdkActiveWorkflowIndex !== -1 && automaticWorkflowItems.length
+      ? Math.max(
+          sdkCompletedCheckpointPercent,
+          Math.min(100, ((sdkCompletedWorkflowCount + 1) / automaticWorkflowItems.length) * 100),
+        )
+      : sdkCompletedCheckpointPercent;
   const sdkWorkflowProgressTone =
     sdkActiveWorkflowIndex !== -1
       ? "active"
@@ -2143,6 +2190,52 @@ export function ProjectOnboardingConsole() {
     : null;
   const sdkStrategyConfidenceLabel = selectedSdkStrategy ? `${selectedSdkStrategy.confidence} confidence` : "Waiting for strategy";
   const sdkManualBlockers = selectedSdkStrategy?.blockers ?? [];
+  const sdkAutomaticRunStarted =
+    sdkAutomaticRequested ||
+    loadingSdkBootstrapPreview ||
+    sdkAutomationStage !== "idle" ||
+    Boolean(sdkBootstrapPreview);
+  useEffect(() => {
+    if (!automaticWorkflowItems.length) {
+      setSdkDisplayedWorkflowProgressPercent(0);
+      return;
+    }
+    if (sdkWorkflowProgressTone !== "active") {
+      setSdkDisplayedWorkflowProgressPercent(sdkWorkflowProgressPercent);
+      return;
+    }
+
+    const maxCreepPercent = Math.max(
+      sdkCompletedCheckpointPercent,
+      sdkNextCheckpointPercent - sdkWorkflowStepPercent * 0.12,
+    );
+
+    setSdkDisplayedWorkflowProgressPercent((current) =>
+      current < sdkCompletedCheckpointPercent || current > maxCreepPercent
+        ? sdkCompletedCheckpointPercent
+        : current,
+    );
+
+    const intervalId = window.setInterval(() => {
+      setSdkDisplayedWorkflowProgressPercent((current) => {
+        const nextValue = Math.max(current, sdkCompletedCheckpointPercent) + sdkWorkflowStepPercent * 0.012;
+        return Math.min(maxCreepPercent, nextValue);
+      });
+    }, 180);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    automaticWorkflowItems.length,
+    sdkCompletedCheckpointPercent,
+    sdkNextCheckpointPercent,
+    sdkWorkflowProgressPercent,
+    sdkWorkflowProgressTone,
+    sdkWorkflowStepPercent,
+  ]);
+  const sdkAutomaticActionThought =
+    SDK_AUTOMATIC_ACTION_PHRASES[sdkAutomaticActionPhraseIndex % SDK_AUTOMATIC_ACTION_PHRASES.length];
   const sdkAgentFeedItems = [
     {
       id: "requested",
@@ -2157,7 +2250,9 @@ export function ProjectOnboardingConsole() {
         ? `Repository inspection finished for ${sdkRepositoryLabel}.`
         : "Inspecting repository manifests, entrypoints, and runtime signals.",
       state:
-        sdkBootstrapPlan || sdkAutomationStage === "previewing" || sdkAutomationStage === "ready" || sdkAutomationStage === "manual_only"
+        !sdkAutomaticRunStarted
+          ? "pending"
+          : sdkBootstrapPlan || sdkAutomationStage === "previewing" || sdkAutomationStage === "ready" || sdkAutomationStage === "manual_only"
           ? "complete"
           : sdkAutomationStage === "planning"
             ? "active"
@@ -2171,7 +2266,9 @@ export function ProjectOnboardingConsole() {
           ? "No safe automatic integration strategy was confirmed for this repository."
           : "Choosing the safest SDK integration strategy from the inspection results.",
       state:
-        sdkAutomationStage === "manual_only"
+        !sdkAutomaticRunStarted
+          ? "pending"
+          : sdkAutomationStage === "manual_only"
           ? "blocked"
           : selectedSdkStrategy && sdkBootstrapPlan
             ? "complete"
@@ -2190,9 +2287,11 @@ export function ProjectOnboardingConsole() {
               ? "Generated a preview, but verification failed before PR creation could be approved."
               : sdkAutomationStage === "manual_only"
                 ? "Automatic preview stopped because this repository needs manual setup."
-                : "Generating the exact patch diff and PR metadata for review.",
+                : sdkAutomaticActionThought,
       state:
-        sdkPatchAttempt?.verification.status === "failed"
+        !sdkAutomaticRunStarted
+          ? "pending"
+          : sdkPatchAttempt?.verification.status === "failed"
           ? "blocked"
           : sdkAutomationStage === "manual_only"
             ? "blocked"
@@ -2204,21 +2303,16 @@ export function ProjectOnboardingConsole() {
     },
   ] as const;
   const sdkVisibleAgentFeedItems = sdkAgentFeedItems.filter(
-    (item, index) => item.state !== "pending" || (!sdkAutomaticRequested && index === 0),
+    (item, index) => item.state !== "pending" || (!sdkAutomaticRunStarted && index === 0),
   );
-  const sdkAutomaticRunStarted =
-    sdkAutomaticRequested ||
-    loadingSdkBootstrapPlan ||
-    loadingSdkBootstrapPreview ||
-    sdkAutomationStage !== "idle" ||
-    Boolean(sdkBootstrapPreview) ||
-    onboardingState?.sdk_setup_status === "change_request";
   const sdkActiveThought =
-    sdkAgentFeedItems.find((item) => item.state === "active")?.thought ??
-    sdkAgentFeedItems.find((item) => item.state === "blocked")?.thought ??
-    sdkAgentFeedItems.findLast((item) => item.state === "complete")?.thought ??
-    sdkAgentFeedItems[0]?.thought ??
-    "";
+    !sdkAutomaticRunStarted
+      ? "Waiting for you to start the automatic attempt."
+      : sdkAgentFeedItems.find((item) => item.state === "active")?.thought ??
+        sdkAgentFeedItems.find((item) => item.state === "blocked")?.thought ??
+        sdkAgentFeedItems.findLast((item) => item.state === "complete")?.thought ??
+        sdkAgentFeedItems[0]?.thought ??
+        "";
   const selectedManualFallbackStrategy =
     sdkBootstrapPlan?.strategies.find((item) => item.id === selectedSdkStrategyId) ??
     sdkBootstrapPlan?.strategies[0] ??
@@ -2233,6 +2327,12 @@ export function ProjectOnboardingConsole() {
     ? "stimp_browser_replace_me"
     : "stimp_live_replace_me";
   const sdkCredentialLabel = sdkUsesBrowserCredential ? "browser key" : "API key";
+  const sdkHelperPlannedFile =
+    selectedSdkStrategy?.planned_files.find(
+      (item) =>
+        item.action === "create" &&
+        /(^|\/)(stimpact(\.[cm]?[jt]sx?|\.py)|stimpact_bootstrap\.py)$/i.test(item.path),
+    ) ?? null;
   const sdkEnvironmentSnippet = selectedSdkStrategy
     ? selectedSdkStrategy.env_vars
         .map((item) => {
@@ -2297,6 +2397,13 @@ export function ProjectOnboardingConsole() {
   const sdkCodeSnippet = (selectedSdkStrategy?.preview_snippet ?? "")
     .replaceAll("<public-stimpact-url>", platformBaseUrl || "<public-stimpact-url>")
     .replaceAll("<project-id>", projectId || "<project-id>");
+  const sdkEntrypointPatchSnippet = sdkHelperPlannedFile
+    ? buildSdkManualEntrypointSnippet({
+        strategyId: selectedSdkStrategy?.id ?? "",
+        entrypointPath: sdkEntryPointLabel,
+        helperPath: sdkHelperPlannedFile.path,
+      })
+    : "";
   const sdkManualActionItems = [
     {
       title: "Install the SDK dependency",
@@ -2309,17 +2416,28 @@ export function ProjectOnboardingConsole() {
       code: sdkEnvironmentSnippet || "# No environment variables detected",
     },
     {
-      title: `Wire the SDK into ${sdkEntryPointLabel}`,
-      detail: "Use this starter snippet in the app entrypoint the planner identified for this service.",
+      title: sdkHelperPlannedFile ? `Create ${sdkHelperPlannedFile.path}` : `Wire the SDK into ${sdkEntryPointLabel}`,
+      detail: sdkHelperPlannedFile
+        ? `Create this shared helper file, then wire it into ${sdkEntryPointLabel} so the runtime calls the bootstrap from the same surface the automatic patch would use.`
+        : "Use this starter snippet in the app entrypoint the planner identified for this service.",
       code: sdkCodeSnippet || "# No starter snippet available",
     },
+    ...(sdkHelperPlannedFile
+      ? [
+          {
+            title: `Update ${sdkEntryPointLabel}`,
+            detail: `Add this exact bootstrap call in ${sdkEntryPointLabel} so it loads the helper before the app renders.`,
+            code: sdkEntrypointPatchSnippet || "# No entrypoint patch available",
+          },
+        ]
+      : []),
     {
       title: "Verify the first heartbeat",
       detail: "Deploy or run the updated service, trigger the app once, then come back here and confirm telemetry is arriving for this exact service and environment.",
       code: `Service: ${effectiveSdkServiceName}\nEnvironment: ${sdkEnvironment || "production"}`,
     },
   ] as const;
-  const sdkManualPrimarySteps = sdkManualActionItems.slice(0, 3);
+  const sdkManualPrimarySteps = sdkManualActionItems.slice(0, sdkHelperPlannedFile ? 4 : 3);
   const sdkManualFollowUpItems = [
     telemetryKeyPlaintext
       ? `Add ${sdkCredentialEnvVarName}=${telemetryKeyPlaintext} and the required Stimpact env vars to your deployed environment.`
@@ -2413,7 +2531,7 @@ export function ProjectOnboardingConsole() {
                 step: "6",
                 label: "Telemetry",
                 detail: "Create telemetry credentials and SDK path",
-                complete: hasAnyActiveTelemetryKeys && hasSdkSetup,
+                complete: hasAnyActiveTelemetryKeys && hasSdkSetup && hasHealthyHeartbeat,
               },
               {
                 step: "7",
@@ -2778,7 +2896,7 @@ export function ProjectOnboardingConsole() {
 
             {secretDrafts.length ? (
               <div className="rounded-[24px] border border-[rgba(29,26,24,0.08)] bg-[rgba(255,255,255,0.82)] p-5 shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
-                <div className="space-y-5">
+              <div className="space-y-5">
                   {secretDrafts.map((draft, index) => (
                     <div
                       key={draft.id}
@@ -3342,7 +3460,7 @@ export function ProjectOnboardingConsole() {
           stepKey="6"
           title="Enable telemetry and SDK bootstrap"
           description="Create the telemetry credential used for ingest, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
-          complete={hasAnyActiveTelemetryKeys && hasSdkSetup}
+          complete={hasAnyActiveTelemetryKeys && hasSdkSetup && hasHealthyHeartbeat}
           editable={hasAnyActiveTelemetryKeys || hasSdkSetup || Boolean(telemetryKeyPlaintext)}
           isEditing={editingStepKey === "6"}
           editDisabled={Boolean(editingStepKey) && editingStepKey !== "6"}
@@ -3366,47 +3484,60 @@ export function ProjectOnboardingConsole() {
                   {sdkStatusLabel}
                 </span>
               </div>
-              <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                <Field
-                  label={sdkUsesBrowserCredential ? "Browser key name" : "API key name"}
-                  value={telemetryKeyName}
-                  onChange={setTelemetryKeyName}
-                  placeholder="Production telemetry key"
-                />
-                <ActionButton
-                  label={
-                    activeApiKeys.length || activeBrowserKeys.length
-                      ? `Generate another ${sdkCredentialLabel}`
-                      : `Create telemetry ${sdkCredentialLabel}`
-                  }
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <label className="block">
+                  <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                    {sdkUsesBrowserCredential ? "Browser key name" : "API key name"}
+                  </span>
+                  <input
+                    type="text"
+                    value={telemetryKeyName}
+                    onChange={(event) => setTelemetryKeyName(event.target.value)}
+                    placeholder="Production telemetry key"
+                    className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
+                  />
+                </label>
+                <button
+                  type="button"
                   onClick={createTelemetryApiKey}
                   disabled={loading || !telemetryKeyName.trim()}
-                  variant={activeApiKeys.length || activeBrowserKeys.length ? "secondary" : "primary"}
-                />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2.5">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
-                    Active keys
+                  className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[14px] border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    activeApiKeys.length || activeBrowserKeys.length
+                      ? "border-[rgba(23,56,93,0.16)] bg-white text-[#17385d] shadow-[0_10px_22px_rgba(15,23,42,0.08)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.26)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
+                      : "border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
+                  }`}
+                >
+                  {activeApiKeys.length || activeBrowserKeys.length ? <PlusMiniGlyph /> : null}
+                  <span>
+                    {activeApiKeys.length || activeBrowserKeys.length
+                      ? `Generate another ${sdkCredentialLabel}`
+                      : `Create telemetry ${sdkCredentialLabel}`}
                   </span>
-                  <span className="text-sm font-semibold text-[#171717]">
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[#4c5c72]">
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                    Active keys
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">
                     {activeApiKeys.length + activeBrowserKeys.length}
                   </span>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                </p>
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
                     Target service
-                  </span>
-                  <span className="text-sm font-semibold text-[#171717]">{effectiveSdkServiceName}</span>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(17,24,39,0.08)] bg-[rgba(247,242,236,0.7)] px-3.5 py-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">{effectiveSdkServiceName}</span>
+                </p>
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
                     Environment
-                  </span>
-                  <span className="text-sm font-semibold text-[#171717]">
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">
                     {sdkEnvironment.trim() || "production"}
                   </span>
-                </div>
+                </p>
               </div>
               {telemetryKeyPlaintext ? (
                 <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-[rgba(240,253,244,0.92)] px-4 py-3">
@@ -3476,6 +3607,9 @@ export function ProjectOnboardingConsole() {
                       </span>
                       <div className="flex flex-col gap-2">
                         <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[linear-gradient(135deg,#4b6bfb_0%,#69c7ff_38%,#ff6a3d_72%,#ffb253_100%)] text-white shadow-[0_12px_24px_rgba(75,107,251,0.18)]">
+                            <AgentRobotGlyph />
+                          </span>
                           <span className="inline-flex rounded-full bg-[rgba(58,79,109,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#67758a]">
                             Automatic
                           </span>
@@ -3532,6 +3666,9 @@ export function ProjectOnboardingConsole() {
                       </span>
                       <div className="flex flex-col gap-2">
                         <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[rgba(73,133,255,0.10)] text-[#2e6fe8] shadow-[0_10px_20px_rgba(73,133,255,0.12)]">
+                            <Wrench className="h-4 w-4" strokeWidth={2} />
+                          </span>
                           <span className="inline-flex rounded-full bg-[rgba(58,79,109,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#67758a]">
                             Manual
                           </span>
@@ -3576,20 +3713,37 @@ export function ProjectOnboardingConsole() {
                           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#ff6a3d]">
                             Agent-guided setup
                           </p>
-                          <h3 className="mt-2 text-[1.25rem] font-semibold tracking-[-0.02em] text-[#13213a]">
-                            Stimpact can configure this SDK path for you
-                          </h3>
+                          <div className="mt-2 flex items-center gap-3">
+                            <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#4b6bfb_0%,#69c7ff_38%,#ff6a3d_72%,#ffb253_100%)] text-white shadow-[0_16px_28px_rgba(75,107,251,0.2)]">
+                              <AgentRobotGlyph />
+                            </span>
+                            <h3 className="text-[1.25rem] font-semibold tracking-[-0.02em] text-[#13213a]">
+                              Stimpact can configure this SDK path for you
+                            </h3>
+                          </div>
                           <p className="mt-2 text-sm leading-6 text-[#49566c]">
                             The agent inspects the connected codebase, selects the safest integration
                             path, and prepares a reviewable PR preview before anything is written.
                           </p>
                         </div>
-                        {sdkSetupMode === "automatic" && !sdkAutomaticRequested ? (
-                          <ActionButton
-                            label="Start automatic attempt"
-                            onClick={startAutomaticSdkWorkflow}
-                            disabled={loading || !sdkTargetRepositoryId || !platformBaseUrl}
-                          />
+                        {sdkSetupMode === "automatic" && !sdkAutomaticRunStarted ? (
+                          <div className="flex flex-wrap items-center gap-3">
+                            <ActionButton
+                              label="Start automatic attempt"
+                              onClick={startAutomaticSdkWorkflow}
+                              disabled={loading || !sdkTargetRepositoryId || !platformBaseUrl}
+                            />
+                            {hasExistingSdkChangeRequest && onboardingState?.sdk_setup_change_request_url ? (
+                              <a
+                                href={onboardingState.sdk_setup_change_request_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-4 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3]"
+                              >
+                                View current PR
+                              </a>
+                            ) : null}
+                          </div>
                         ) : (
                           <div
                             className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] ${
@@ -3636,8 +3790,8 @@ export function ProjectOnboardingConsole() {
                         </label>
                       </div>
 
-                      <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.95fr)] xl:divide-x xl:divide-[rgba(19,33,58,0.08)]">
-                        <div className="xl:pr-8">
+                      <div className="mt-6 px-1 py-1">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="flex items-start gap-4">
                             <span
                               className={`inline-flex h-12 w-12 items-center justify-center rounded-full border ${
@@ -3655,7 +3809,7 @@ export function ProjectOnboardingConsole() {
                                   sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
                                     ? "animate-spin border-2 border-[rgba(255,106,61,0.25)] border-t-[#ff6a3d]"
                                     : sdkAutomationStage === "ready"
-                                      ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)]"
+                                      ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)]"
                                       : sdkAutomationStage === "manual_only"
                                         ? "bg-[rgba(19,33,58,0.24)]"
                                         : "bg-[rgba(19,33,58,0.16)]"
@@ -3663,14 +3817,13 @@ export function ProjectOnboardingConsole() {
                               />
                             </span>
                             <div>
-                              <p className="text-sm font-semibold text-[#13213a]">Automatic setup activity</p>
+                              <p className="text-sm font-semibold text-[#13213a]">Live agent workspace</p>
                               <p className="text-xs uppercase tracking-[0.18em] text-[#6f7b90]">
                                 {sdkAutomationStageLabel}
                               </p>
                             </div>
                           </div>
-
-                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-full bg-[rgba(19,33,58,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#516075]">
                               {sdkCompletedWorkflowCount}/{automaticWorkflowItems.length} steps complete
                             </span>
@@ -3680,77 +3833,75 @@ export function ProjectOnboardingConsole() {
                               </span>
                             )}
                           </div>
-
-                          <div className="mt-4 border-l-4 border-[#ff6a3d] pl-4">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#ff6a3d]">
-                              Current agent focus
-                            </p>
-                            <p
-                              className={`mt-2 text-base font-semibold text-[#13213a] ${
-                                sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
-                                  ? "animate-pulse"
-                                  : ""
-                              }`}
-                            >
-                              {sdkActiveThought}
-                            </p>
-                          </div>
-
-                          <div className="mt-5 overflow-hidden rounded-full bg-[rgba(23,63,190,0.08)]">
-                            <div
-                              className={`h-2 rounded-full transition-all duration-500 ${
-                                sdkWorkflowProgressTone === "active"
-                                  ? "animate-pulse bg-[linear-gradient(90deg,#ff6a3d_0%,#ff9447_28%,#2d7ff9_78%,#173fbe_100%)]"
-                                  : sdkWorkflowProgressTone === "complete"
-                                    ? "bg-[linear-gradient(90deg,#2d7ff9,#173fbe)]"
-                                    : sdkWorkflowProgressTone === "blocked"
-                                      ? "bg-[rgba(19,33,58,0.24)]"
-                                      : "bg-transparent"
-                              }`}
-                              style={{ width: `${sdkWorkflowProgressPercent}%` }}
-                            />
-                          </div>
-
-                          {sdkVisibleWorkflowItems.length ? (
-                            <div className="mt-5 flex flex-wrap gap-2">
-                              {sdkVisibleWorkflowItems.map((item) => (
-                                <div
-                                  key={item.id}
-                                  className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold ${
-                                    item.state === "complete"
-                                      ? "bg-[rgba(45,127,249,0.10)] text-[#173fbe]"
-                                      : item.state === "active"
-                                        ? "bg-[rgba(255,106,61,0.12)] text-[#d64e1d]"
-                                        : "bg-[rgba(19,33,58,0.08)] text-[#516075]"
-                                  }`}
-                                >
-                                  <span
-                                    className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
-                                      item.state === "complete"
-                                        ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
-                                        : item.state === "active"
-                                          ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
-                                          : "bg-[rgba(19,33,58,0.12)] text-[#516075]"
-                                    }`}
-                                  >
-                                    {item.state === "complete" ? "✓" : item.state === "active" ? "•" : "!"}
-                                  </span>
-                                  <span>{item.label}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="mt-5 text-sm leading-6 text-[#6f7b90]">
-                              Start the automatic attempt to watch each step appear here as the agent progresses.
-                            </p>
-                          )}
                         </div>
 
-                        <div className="xl:pl-8">
+                        <div className="mt-5 border-l-4 border-[#ff6a3d] pl-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#ff6a3d]">
+                            Current agent focus
+                          </p>
+                          <p
+                            className={`mt-2 text-base font-semibold text-[#13213a] ${
+                              sdkAutomationStage === "planning" || sdkAutomationStage === "previewing"
+                                ? "animate-pulse"
+                                : ""
+                            }`}
+                          >
+                            {sdkActiveThought}
+                          </p>
+                        </div>
+
+                        <div className="mt-5 overflow-hidden rounded-full bg-[rgba(23,63,190,0.08)]">
+                          <div
+                            className={`h-2 rounded-full transition-[width] duration-[180ms] linear ${
+                              sdkWorkflowProgressTone === "active"
+                                ? "bg-[linear-gradient(90deg,#ff6a3d_0%,#ff9447_28%,#2d7ff9_78%,#173fbe_100%)] shadow-[0_0_18px_rgba(45,127,249,0.18)]"
+                                : sdkWorkflowProgressTone === "complete"
+                                  ? "bg-[linear-gradient(90deg,#22c55e,#16a34a)]"
+                                  : sdkWorkflowProgressTone === "blocked"
+                                    ? "bg-[rgba(19,33,58,0.24)]"
+                                    : "bg-transparent"
+                            }`}
+                            style={{ width: `${sdkDisplayedWorkflowProgressPercent}%` }}
+                          />
+                        </div>
+
+                        {sdkVisibleWorkflowItems.length ? (
+                          <div className="mt-5 flex flex-wrap gap-2">
+                            {sdkVisibleWorkflowItems.map((item) => (
+                              <div
+                                key={item.id}
+                                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold ${
+                                  item.state === "complete"
+                                    ? "bg-[rgba(34,197,94,0.12)] text-[#15803d]"
+                                    : item.state === "active"
+                                      ? "bg-[rgba(255,106,61,0.12)] text-[#d64e1d]"
+                                      : "bg-[rgba(19,33,58,0.08)] text-[#516075]"
+                                }`}
+                              >
+                                <span
+                                  className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
+                                    item.state === "complete"
+                                      ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                      : item.state === "active"
+                                        ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
+                                        : "bg-[rgba(19,33,58,0.12)] text-[#516075]"
+                                  }`}
+                                >
+                                  {item.state === "complete" ? "✓" : item.state === "active" ? "•" : "!"}
+                                </span>
+                                <span>{item.label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-5 text-sm leading-6 text-[#6f7b90]">
+                            Start the automatic attempt to watch each step appear here as the agent progresses.
+                          </p>
+                        )}
+
+                        <div className="mt-6 border-t border-[rgba(19,33,58,0.08)] pt-5">
                           <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-[#13213a]">Live agent feed</p>
-                            </div>
+                            <p className="text-sm font-semibold text-[#13213a]">Agent timeline</p>
                             {(sdkAutomationStage === "planning" || sdkAutomationStage === "previewing") && (
                               <span className="rounded-full bg-[rgba(45,127,249,0.12)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#173fbe]">
                                 Live
@@ -3758,7 +3909,7 @@ export function ProjectOnboardingConsole() {
                             )}
                           </div>
 
-                          <div className="mt-5 space-y-4">
+                          <div className="mt-4 space-y-4">
                             {sdkVisibleAgentFeedItems.map((item, index) => (
                               <div
                                 key={`${index}-${item.thought}`}
@@ -3766,7 +3917,7 @@ export function ProjectOnboardingConsole() {
                                   item.state === "active"
                                     ? "bg-[rgba(255,106,61,0.08)]"
                                     : item.state === "complete"
-                                      ? "bg-[rgba(45,127,249,0.08)]"
+                                      ? "bg-[rgba(34,197,94,0.10)]"
                                       : item.state === "blocked"
                                         ? "bg-[rgba(19,33,58,0.07)]"
                                         : "bg-[rgba(19,33,58,0.04)]"
@@ -3778,7 +3929,7 @@ export function ProjectOnboardingConsole() {
                                       item.state === "active"
                                         ? "bg-[linear-gradient(180deg,#ff6a3d,#ff7d3d)] text-white animate-pulse"
                                         : item.state === "complete"
-                                          ? "bg-[linear-gradient(180deg,#2d7ff9,#173fbe)] text-white"
+                                          ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
                                           : item.state === "blocked"
                                             ? "bg-[rgba(19,33,58,0.10)] text-[#516075]"
                                             : "bg-[rgba(19,33,58,0.06)] text-[#6f7b90]"
@@ -3834,70 +3985,84 @@ export function ProjectOnboardingConsole() {
                     </p>
                   ) : null}
                   {sdkBootstrapPlan?.strategies.length ? (
-                    <div className="grid gap-3">
-                      {sdkBootstrapPlan.strategies.map((strategy) => {
-                        const selected = selectedSdkStrategy?.id === strategy.id;
-                        return (
-                          <button
-                            key={strategy.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedSdkStrategyId(strategy.id);
-                              setDismissedSdkPreviewStrategyId(null);
-                            }}
-                            className={`rounded-[20px] border px-4 py-4 text-left transition ${
-                              selected
-                                ? "border-[rgba(23,23,23,0.18)] bg-white shadow-[0_14px_28px_rgba(15,23,42,0.06)]"
-                                : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:border-[rgba(255,106,61,0.18)] hover:bg-white"
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-sm font-semibold text-[#171717]">{strategy.framework}</p>
-                              <span
-                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                  strategy.source === "llm"
-                                    ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                                    : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
-                                }`}
-                              >
-                                {strategy.source === "llm" ? "Model-assisted" : "Deterministic"}
-                              </span>
-                              <span
-                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                  strategy.pr_supported
-                                    ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                                    : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
-                                }`}
-                              >
-                                {strategy.pr_supported ? `${strategy.confidence} confidence` : "Manual only"}
-                              </span>
-                            </div>
-                            <p className="mt-2 text-sm leading-6 text-[#746d66]">{strategy.summary}</p>
-                            {strategy.entrypoints.length ? (
-                              <p className="mt-2 text-xs leading-5 text-[#8a8178]">
-                                Entrypoint: {strategy.entrypoints.join(", ")}
-                              </p>
-                            ) : null}
-                            {strategy.confidence_reason ? (
-                              <p className="mt-2 text-xs leading-5 text-[#8a8178]">
-                                Why this surface: {strategy.confidence_reason}
-                              </p>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    sdkBootstrapPreview && selectedSdkStrategy ? (
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-[#3f5168]">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">
+                          Selected strategy
+                        </span>
+                        <span className="font-semibold text-[#171717]">{selectedSdkStrategy.framework}</span>
+                        <span className="text-[#66758c]">at {sdkEntryPointLabel}</span>
+                        {selectedSdkStrategy.source === "llm" ? (
+                          <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#a54d2f]">
+                            Model-assisted
+                          </span>
+                        ) : null}
+                        <span className="rounded-full bg-[linear-gradient(180deg,#22c55e,#16a34a)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white">
+                          {selectedSdkStrategy.confidence} confidence
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="grid gap-3">
+                        {sdkBootstrapPlan.strategies.map((strategy) => {
+                          const selected = selectedSdkStrategy?.id === strategy.id;
+                          return (
+                            <button
+                              key={strategy.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedSdkStrategyId(strategy.id);
+                                setDismissedSdkPreviewStrategyId(null);
+                              }}
+                              className={`rounded-[20px] border px-4 py-4 text-left transition ${
+                                selected
+                                  ? "border-[rgba(23,23,23,0.18)] bg-white shadow-[0_14px_28px_rgba(15,23,42,0.06)]"
+                                  : "border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.68)] hover:border-[rgba(255,106,61,0.18)] hover:bg-white"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-[#171717]">{strategy.framework}</p>
+                              {strategy.source === "llm" ? (
+                                <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#a54d2f]">
+                                  Model-assisted
+                                </span>
+                              ) : null}
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                    strategy.pr_supported
+                                      ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                                      : "bg-[rgba(29,26,24,0.08)] text-[#5f6470]"
+                                  }`}
+                                >
+                                  {strategy.pr_supported ? `${strategy.confidence} confidence` : "Manual only"}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-[#4c5c72]">{strategy.summary}</p>
+                              {strategy.entrypoints.length ? (
+                                <p className="mt-2 text-xs leading-5 text-[#66758c]">
+                                  Entrypoint: {strategy.entrypoints.join(", ")}
+                                </p>
+                              ) : null}
+                              {strategy.confidence_reason ? (
+                                <p className="mt-2 text-xs leading-5 text-[#66758c]">
+                                  Why this surface: {strategy.confidence_reason}
+                                </p>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
                   ) : (
-                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                    <p className="py-1 text-sm text-[#4c5c72]">
                       No supported automatic JavaScript or Python bootstrap surface was detected for
                       this repository.
                     </p>
                   )}
                   {sdkAutomaticRunStarted && selectedSdkStrategy && !sdkBootstrapPreview ? (
-                    <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] px-4 py-4">
+                    <div className="space-y-3 py-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-[#171717]">Selected strategy review</p>
-                        <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
+                        <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#4c5c72]">
                           {sdkStrategyConfidenceLabel}
                         </span>
                         <span
@@ -3916,39 +4081,34 @@ export function ProjectOnboardingConsole() {
                               : "Preview blocked"}
                         </span>
                       </div>
-                      <p className="mt-3 text-sm leading-6 text-[#5f6470]">{selectedSdkStrategy.summary}</p>
+                      <p className="text-sm leading-6 text-[#3f5168]">{selectedSdkStrategy.summary}</p>
                       {selectedSdkStrategy.confidence_reason ? (
-                        <p className="mt-3 text-sm leading-6 text-[#5f6470]">
+                        <p className="text-sm leading-6 text-[#3f5168]">
                           <span className="font-semibold text-[#171717]">Why this surface:</span>{" "}
                           {selectedSdkStrategy.confidence_reason}
                         </p>
                       ) : null}
                       {sdkSelectedStrategyBlockers.length ? (
-                        <div className="mt-4 rounded-[16px] border border-[rgba(255,106,61,0.14)] bg-[rgba(255,247,242,0.9)] px-4 py-4">
+                        <div className="space-y-2 border-l-2 border-[rgba(255,106,61,0.28)] pl-4">
                           <p className="text-sm font-semibold text-[#171717]">Why automatic stopped here</p>
-                          <div className="mt-3 space-y-2">
-                            {sdkSelectedStrategyBlockers.map((item) => (
-                              <p key={item} className="text-sm leading-6 text-[#8f4b31]">
-                                {item}
-                              </p>
-                            ))}
-                          </div>
+                          {sdkSelectedStrategyBlockers.map((item) => (
+                            <p key={item} className="text-sm leading-6 text-[#8f4b31]">
+                              {item}
+                            </p>
+                          ))}
                         </div>
                       ) : null}
                     </div>
                   ) : null}
                   {!sdkAutomaticRunStarted ? (
-                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
-                      Start the automatic attempt and Stimpact will inspect the repository, choose the
-                      safest supported surface, and show the verified preview here.
-                    </p>
+                    <div />
                   ) : loadingSdkBootstrapPreview ? (
-                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                    <p className="py-1 text-sm text-[#4c5c72]">
                       Building the exact bootstrap PR preview for the selected strategy and verifying it in a temp checkout...
                     </p>
                   ) : sdkBootstrapPreview ? (
                     <>
-                      <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,250,255,0.92))] px-5 py-5 shadow-[0_16px_34px_rgba(15,23,42,0.06)]">
+                      <div className="space-y-5 py-1">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="max-w-3xl">
                             <p className="text-sm font-semibold text-[#171717]">Review generated SDK patch</p>
@@ -3956,17 +4116,11 @@ export function ProjectOnboardingConsole() {
                               <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
                                 {sdkBootstrapPreview.strategy.framework}
                               </span>
-                              <span
-                                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                  sdkBootstrapPreview.strategy.source === "llm"
-                                    ? "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
-                                    : "bg-[rgba(23,23,23,0.06)] text-[#5f564f]"
-                                }`}
-                              >
-                                {sdkBootstrapPreview.strategy.source === "llm"
-                                  ? "Model-assisted"
-                                  : "Deterministic"}
-                              </span>
+                              {sdkBootstrapPreview.strategy.source === "llm" ? (
+                                <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#a54d2f]">
+                                  Model-assisted
+                                </span>
+                              ) : null}
                               <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
                                 {sdkBootstrapPreview.strategy.confidence} confidence
                               </span>
@@ -3986,23 +4140,23 @@ export function ProjectOnboardingConsole() {
                                     : "Verification failed"}
                               </span>
                             </div>
-                            <p className="mt-3 text-sm leading-6 text-[#5f6470]">
+                            <p className="mt-3 text-sm leading-6 text-[#3f5168]">
                               {sdkBootstrapPreview.strategy.summary}
                             </p>
                             {sdkBootstrapPreview.attempt.verification.summary ? (
-                              <p className="mt-2 text-sm leading-6 text-[#5f6470]">
+                              <p className="mt-2 text-sm leading-6 text-[#3f5168]">
                                 <span className="font-semibold text-[#171717]">Verification:</span>{" "}
                                 {sdkBootstrapPreview.attempt.verification.summary}
                               </p>
                             ) : null}
                             {sdkBootstrapPreview.strategy.confidence_reason ? (
-                              <p className="mt-2 text-sm leading-6 text-[#5f6470]">
+                              <p className="mt-2 text-sm leading-6 text-[#3f5168]">
                                 <span className="font-semibold text-[#171717]">Why this surface:</span>{" "}
                                 {sdkBootstrapPreview.strategy.confidence_reason}
                               </p>
                             ) : null}
                           </div>
-                          <div className="min-w-[16rem] space-y-2 text-sm text-[#5f6470]">
+                          <div className="min-w-[16rem] space-y-2 text-sm text-[#3f5168]">
                             <p>
                               <span className="font-semibold text-[#171717]">Branch:</span>{" "}
                               {sdkBootstrapPreview.pull_request.branch_name}
@@ -4064,7 +4218,7 @@ export function ProjectOnboardingConsole() {
                               <p className="text-sm font-semibold text-[#171717]">
                                 {index + 1}. {item.title}
                               </p>
-                              <p className="mt-1 text-sm leading-6 text-[#5f6470]">{item.detail}</p>
+                              <p className="mt-1 text-sm leading-6 text-[#3f5168]">{item.detail}</p>
                             </div>
                           ))}
                         </div>
@@ -4072,7 +4226,7 @@ export function ProjectOnboardingConsole() {
                         {sdkPreviewAttempts.length > 1 ? (
                           <div className="mt-5">
                             {sdkAttemptHistorySummary ? (
-                              <p className="text-sm leading-6 text-[#5f6470]">{sdkAttemptHistorySummary}</p>
+                              <p className="text-sm leading-6 text-[#3f5168]">{sdkAttemptHistorySummary}</p>
                             ) : null}
                             <div className="mt-3 flex flex-wrap gap-2">
                               {sdkPreviewAttempts.map((item) => (
@@ -4102,20 +4256,26 @@ export function ProjectOnboardingConsole() {
                       {(sdkBootstrapPreview.attempt.verification.command ||
                         sdkBootstrapPreview.attempt.verification.output ||
                         sdkBootstrapPreview.pull_request.description) && (
-                        <div className="grid gap-4 lg:grid-cols-3">
+                        <div className="flex flex-wrap gap-4">
                           {sdkBootstrapPreview.attempt.verification.command ? (
-                            <CodePanel
-                              title="Verification command"
-                              code={sdkBootstrapPreview.attempt.verification.command}
-                            />
+                            <div className="min-w-[22rem] flex-1">
+                              <CodePanel
+                                title="Verification command"
+                                code={sdkBootstrapPreview.attempt.verification.command}
+                              />
+                            </div>
                           ) : null}
                           {sdkBootstrapPreview.attempt.verification.output ? (
-                            <CodePanel
-                              title="Verification output"
-                              code={sdkBootstrapPreview.attempt.verification.output}
-                            />
+                            <div className="min-w-[22rem] flex-1">
+                              <CodePanel
+                                title="Verification output"
+                                code={sdkBootstrapPreview.attempt.verification.output}
+                              />
+                            </div>
                           ) : null}
-                          <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
+                          <div className="min-w-[22rem] flex-1">
+                            <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
+                          </div>
                         </div>
                       )}
 
@@ -4127,7 +4287,7 @@ export function ProjectOnboardingConsole() {
                       />
                     </>
                   ) : automaticSdkAvailable ? (
-                    <p className="rounded-[16px] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+                    <p className="py-1 text-sm text-[#4c5c72]">
                       Choose a supported strategy and Stimpact will prepare the PR preview here.
                     </p>
                   ) : (
@@ -4140,7 +4300,9 @@ export function ProjectOnboardingConsole() {
                     <div className="flex flex-wrap gap-3">
                       <ActionButton
                         label="Approve and create PR"
+                        loadingLabel="Creating PR"
                         onClick={createSdkBootstrapChangeRequest}
+                        loading={creatingSdkChangeRequest}
                         disabled={
                           loading ||
                           !sdkTargetRepositoryId ||
@@ -4152,12 +4314,6 @@ export function ProjectOnboardingConsole() {
                           loadingSdkBootstrapPreview
                         }
                       />
-                      <ActionButton
-                        label="Switch to manual mode"
-                        onClick={dismissSdkBootstrapPreview}
-                        disabled={loading || loadingSdkBootstrapPreview}
-                        variant="secondary"
-                      />
                       {onboardingState?.sdk_setup_change_request_url ? (
                         <a
                           href={onboardingState.sdk_setup_change_request_url}
@@ -4165,7 +4321,7 @@ export function ProjectOnboardingConsole() {
                           rel="noreferrer"
                           className="inline-flex items-center rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-4 py-2 text-sm font-semibold text-[#171717] transition hover:border-[rgba(255,106,61,0.22)] hover:bg-[#fff8f3]"
                         >
-                          Open current PR
+                          View current PR
                         </a>
                       ) : null}
                     </div>
@@ -4237,7 +4393,9 @@ export function ProjectOnboardingConsole() {
                         </div>
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-[#17385d]">Copy these 3 things</p>
+                        <p className="text-sm font-semibold text-[#17385d]">
+                          {`Copy these ${sdkManualPrimarySteps.length} things`}
+                        </p>
                         <p className="mt-2 text-sm leading-6 text-[#5f6470]">
                           Manual setup should be quick: install the SDK, add the env vars including
                           {` your Stimpact ${sdkCredentialLabel}, then paste the code into the detected entrypoint.`}
@@ -4303,14 +4461,6 @@ export function ProjectOnboardingConsole() {
                       disabled={loading || (!activeApiKeys.length && !activeBrowserKeys.length && !telemetryKeyPlaintext)}
                       variant="success"
                     />
-                    {automaticSdkAvailable ? (
-                      <ActionButton
-                        label="Use automatic PR instead"
-                        onClick={startAutomaticSdkWorkflow}
-                        disabled={loading}
-                        variant="secondary"
-                      />
-                    ) : null}
                   </div>
                 </div>
               )}
@@ -4326,7 +4476,7 @@ export function ProjectOnboardingConsole() {
                   </p>
                 </div>
                 <ActionButton
-                  label="Refresh verification"
+                  label="Check heartbeat status"
                   onClick={() => {
                     void loadTelemetryVerification();
                   }}
@@ -4350,21 +4500,24 @@ export function ProjectOnboardingConsole() {
                   {effectiveSdkServiceName} / {sdkEnvironment.trim() || "production"}
                 </span>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <StatusValueCard
-                  label="Last heartbeat"
-                  value={
-                    telemetryVerification?.last_seen_at
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[rgba(239,68,68,0.10)] text-[#dc2626]">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 12h4l2-4 4 8 2-4h6" />
+                  </svg>
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">
+                    Last heartbeat
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-[#171717]">
+                    {telemetryVerification?.last_seen_at
                       ? formatHeartbeatTimestamp(telemetryVerification.last_seen_at)
-                      : "Not seen yet"
-                  }
-                />
-                <StatusValueCard
-                  label="Last heartbeat commit"
-                  value={telemetryVerification?.commit_sha ?? "Unavailable"}
-                />
+                      : "Not seen yet"}
+                  </p>
+                </div>
               </div>
-              <p className="mt-4 text-sm leading-6 text-[#746d66]">
+              <p className="mt-4 text-sm leading-6 text-[#4c5c72]">
                 {telemetryVerification?.status === "healthy"
                   ? "The deployed SDK is actively reaching Stimpact, so this service is live and ready to send telemetry when a real error occurs."
                   : telemetryVerification?.status === "stale"
@@ -4584,7 +4737,7 @@ function StepPanel({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <span className="inline-flex rounded-full bg-[rgba(29,26,24,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7c756d]">
+            <span className="inline-flex rounded-full bg-[rgba(29,26,24,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">
                 Step {step}
               </span>
               <StepStatus complete={complete} />
@@ -4602,7 +4755,7 @@ function StepPanel({
               <button
                 type="button"
                 onClick={onCancelEdit}
-                className="inline-flex items-center gap-2 self-start rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-3 py-2 text-sm font-semibold text-[#5f6470] transition hover:border-[rgba(29,26,24,0.14)] hover:bg-[#faf7f4] hover:text-[#171717]"
+                className="inline-flex items-center gap-2 self-start rounded-full border border-[rgba(29,26,24,0.08)] bg-white px-3 py-2 text-sm font-semibold text-[#44566d] transition hover:border-[rgba(29,26,24,0.14)] hover:bg-[#faf7f4] hover:text-[#171717]"
               >
                 Cancel
               </button>
@@ -4659,7 +4812,7 @@ function ConnectionDetail({
 }) {
   return (
     <div className="space-y-2">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">{label}</p>
       <p className={`text-base font-semibold ${emphasize ? "text-[#15803d]" : "text-[#171717]"}`}>
         {value}
       </p>
@@ -4752,6 +4905,22 @@ function GitLabGlyph() {
   );
 }
 
+function AgentRobotGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current stroke-[1.8]">
+      <path d="M12 4.5v2.25" strokeLinecap="round" />
+      <path
+        d="M8.25 8.25h7.5a2.75 2.75 0 0 1 2.75 2.75v4.5a2.75 2.75 0 0 1-2.75 2.75h-7.5A2.75 2.75 0 0 1 5.5 15.5V11a2.75 2.75 0 0 1 2.75-2.75Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M9.5 12.25h.01M14.5 12.25h.01" strokeLinecap="round" />
+      <path d="M9.5 15.25h5" strokeLinecap="round" />
+      <path d="M5.5 12h-1.5M20 12h-1.5M9 18.25v1.25M15 18.25v1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function OnboardingTimeline({
   steps,
   activeStep,
@@ -4804,7 +4973,7 @@ function OnboardingTimeline({
               <p className="text-sm font-semibold text-[#171717]">
                 {item.step}. {item.label}
               </p>
-              <p className="mt-1 text-xs leading-5 text-[#746d66]">{item.detail}</p>
+              <p className="mt-1 text-xs leading-5 text-[#5f6470]">{item.detail}</p>
             </div>
           </button>
         ))}
@@ -4835,7 +5004,7 @@ function TimelineNode({
       className="group relative w-full cursor-pointer bg-transparent px-1 pt-0 text-center focus:outline-none"
     >
       <div className="mx-auto flex w-full flex-col items-center">
-        <span className="inline-block text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8178]">
+        <span className="inline-block text-[11px] font-semibold uppercase tracking-[0.18em] text-[#66758c]">
           Step {step}
         </span>
         <div className="relative z-10 mt-2 flex h-14 items-center justify-center overflow-visible">
@@ -4845,7 +5014,7 @@ function TimelineNode({
           <p className={`mt-1 text-sm font-semibold ${active ? "text-[#171717]" : "text-[#2f241f]"}`}>
             {label}
           </p>
-          <p className="mt-1 max-w-[144px] text-[12px] font-medium leading-5 text-[#93867d]">
+          <p className="mt-1 max-w-[144px] text-[12px] font-medium leading-5 text-[#66758c]">
             {detail}
           </p>
         </div>
@@ -5050,6 +5219,60 @@ function formatHeartbeatTimestamp(value: string): string {
   }).format(new Date(timestamp));
 }
 
+function buildSdkManualEntrypointSnippet({
+  strategyId,
+  entrypointPath,
+  helperPath,
+}: {
+  strategyId: string;
+  entrypointPath: string;
+  helperPath: string;
+}) {
+  if (helperPath.endsWith(".py")) {
+    if (strategyId.startsWith("python-fastapi:")) {
+      return ['from stimpact_bootstrap import install_fastapi_stimpact', "", "install_fastapi_stimpact(app)"].join(
+        "\n",
+      );
+    }
+    if (strategyId.startsWith("python-flask:")) {
+      return ['from stimpact_bootstrap import install_flask_stimpact', "", "install_flask_stimpact(app)"].join(
+        "\n",
+      );
+    }
+    return "# Import the bootstrap helper and install it on your app instance";
+  }
+
+  const helperImportPath = buildRelativeModuleImportPath(entrypointPath, helperPath);
+
+  return [`import { installStimpact } from "${helperImportPath}";`, "", "installStimpact();"].join("\n");
+}
+
+function buildRelativeModuleImportPath(fromPath: string, toPath: string) {
+  const fromSegments = fromPath.split("/").filter(Boolean);
+  const toSegments = toPath.split("/").filter(Boolean);
+  const fromDirectorySegments = fromSegments.slice(0, -1);
+  const toFileWithoutExtension = toSegments.join("/").replace(/\.[^.]+$/, "");
+
+  const normalizedToSegments = toFileWithoutExtension.split("/").filter(Boolean);
+  let sharedIndex = 0;
+  while (
+    sharedIndex < fromDirectorySegments.length &&
+    sharedIndex < normalizedToSegments.length &&
+    fromDirectorySegments[sharedIndex] === normalizedToSegments[sharedIndex]
+  ) {
+    sharedIndex += 1;
+  }
+
+  const upwardSegments = fromDirectorySegments.slice(sharedIndex).map(() => "..");
+  const downwardSegments = normalizedToSegments.slice(sharedIndex);
+  const relativeSegments = [...upwardSegments, ...downwardSegments];
+  if (!relativeSegments.length) {
+    return "./stimpact";
+  }
+  const relativePath = relativeSegments.join("/");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}
+
 function PlusMiniGlyph() {
   return (
     <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 fill-none stroke-current stroke-[1.8]">
@@ -5245,7 +5468,7 @@ function Field({
       <span className="mb-2 flex items-center justify-between gap-3 text-sm">
         <span className="font-semibold text-[#171717]">{label}</span>
         {helperText ? (
-          <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#93867d]">{helperText}</span>
+          <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#66758c]">{helperText}</span>
         ) : null}
       </span>
       <input
@@ -5274,8 +5497,8 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(247,242,236,0.96),rgba(239,232,223,0.96))] px-4 py-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</span>
-        <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#6f655d]">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">{label}</span>
+        <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f6470]">
           Locked
         </span>
       </div>
@@ -5287,7 +5510,7 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
 function StatusValueCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(247,242,236,0.96),rgba(239,232,223,0.96))] px-4 py-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a8178]">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">{label}</p>
       <p className="mt-3 text-base font-medium text-[#171717]">{value}</p>
     </div>
   );
@@ -5349,7 +5572,7 @@ function SelectField({
           <span>{selectedOption?.label ?? "Select an option"}</span>
           <span
             aria-hidden="true"
-            className={`ml-3 text-[#8a8178] transition ${open ? "rotate-180" : ""}`}
+            className={`ml-3 text-[#66758c] transition ${open ? "rotate-180" : ""}`}
           >
             <svg
               viewBox="0 0 20 20"
@@ -5400,7 +5623,7 @@ function SelectField({
           </div>
         ) : null}
       </div>
-      {helperText ? <p className="mt-2 text-[12px] leading-5 text-[#93867d]">{helperText}</p> : null}
+      {helperText ? <p className="mt-2 text-[12px] leading-5 text-[#66758c]">{helperText}</p> : null}
     </label>
   );
 }
@@ -5628,18 +5851,22 @@ function ActionButton({
   label,
   onClick,
   disabled,
+  loading = false,
+  loadingLabel,
   variant = "primary",
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  loading?: boolean;
+  loadingLabel?: string;
   variant?: "primary" | "secondary" | "success";
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || loading}
       className={`inline-flex items-center justify-center rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
         variant === "secondary"
           ? "border border-[rgba(23,56,93,0.14)] bg-white text-[#17385d] shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.24)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.10)]"
@@ -5648,7 +5875,15 @@ function ActionButton({
           : "bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
       }`}
     >
-      {label}
+      <span className="inline-flex items-center gap-2">
+        {loading ? (
+          <span
+            aria-hidden="true"
+            className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+          />
+        ) : null}
+        <span>{loading ? `${loadingLabel ?? label}...` : label}</span>
+      </span>
     </button>
   );
 }

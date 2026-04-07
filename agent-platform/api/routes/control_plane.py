@@ -416,16 +416,25 @@ def _build_sdk_bootstrap_pr_metadata(
     strategy: SdkBootstrapStrategy,
     branch_name: str,
 ) -> SdkBootstrapPullRequestPreviewResponse:
+    target_label = _describe_sdk_bootstrap_target(strategy)
     return SdkBootstrapPullRequestPreviewResponse(
         branch_name=branch_name,
         title=f"Add Stimpact telemetry bootstrap for {strategy.framework}",
         description=(
             f"This PR applies the {strategy.framework} SDK bootstrap plan for "
-            f"{strategy.target_subpath}, adds dependency and env scaffolding, "
+            f"{target_label}, adds dependency and env scaffolding, "
             "and wires Stimpact telemetry into the detected runtime entrypoint."
         ),
         commit_message=f"Add Stimpact telemetry bootstrap for {strategy.framework}",
     )
+
+
+def _describe_sdk_bootstrap_target(strategy: SdkBootstrapStrategy) -> str:
+    if strategy.target_subpath != ".":
+        return strategy.target_subpath
+    if strategy.entrypoints:
+        return f"the repository entrypoint at {strategy.entrypoints[0]}"
+    return "the repository root"
 
 
 def _sdk_strategy_uses_browser_credentials(strategy: SdkBootstrapStrategy) -> bool:
