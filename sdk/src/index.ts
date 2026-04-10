@@ -4,6 +4,7 @@ export type {
   BrowserCaptureSubscription,
   CaptureErrorInput,
   HeartbeatInput,
+  HeartbeatScheduleOptions,
   HeartbeatSubscription,
   HttpRequestContext,
   HttpResponseContext,

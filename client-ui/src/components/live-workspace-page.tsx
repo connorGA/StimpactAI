@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ProjectSetupState } from "@/components/dashboard-ui";
+import { LiveManualPingPanel } from "@/components/live-manual-ping-panel";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -329,6 +330,12 @@ export async function LiveWorkspacePage() {
               )}
             </div>
           </section>
+
+          <LiveManualPingPanel
+            projectId={projectId}
+            services={onboarding.project_services}
+            heartbeats={onboarding.telemetry_heartbeats}
+          />
 
           <section className="ops-sheet-muted rounded-[22px] p-5">
             <div className="flex items-start justify-between gap-3">

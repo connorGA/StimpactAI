@@ -53,15 +53,50 @@ const stimpact = new StimpactClient({
   browserKey: "stimp_browser_...",
   service: "billing-web",
   environment: "production",
+  browserTokenFailureCooldownMs: 60_000,
 });
 
-stimpact.startHeartbeat();
+stimpact.startHeartbeat({
+  intervalMs: 300_000,
+  jitterRatio: 0.1,
+  skipWhenOffline: true,
+});
 stimpact.registerBrowserAutoCapture();
 ```
 
-When you use `browserKey`, configure the deployed app origins that are allowed to exchange that key for a short-lived browser token. Stimpact checks both CORS and the browser key's `allowed_origins`, then binds the issued ingest token to the request origin.
+When you use `browserKey`, configure at least one deployed app origin for that specific key during onboarding. Stimpact keeps CORS broadly compatible across active browser-key origins so browser preflights can succeed, but the actual security boundary is the browser key's `allowed_origins` check during token exchange plus the ingest token's origin binding.
+
+If you later revoke the key or remove an origin from its allowlist, new token exchanges from that origin fail and ingest re-checks the live browser-key record for defense in depth.
+
+The SDK also applies a cooldown after non-retryable browser token failures such as invalid, revoked, or origin-blocked browser keys so it does not hammer `/telemetry/browser-token` on every subsequent error event.
 
 For the strongest separation, use `browserTokenEndpoint` or `tokenProvider` so your app backend can mint short-lived ingest tokens without exposing any long-lived server credential to the browser.
+
+## Heartbeats and live status
+
+Use heartbeats as a lightweight "recently alive" signal, not a per-request health check.
+
+- `sendHeartbeat()` sends one manual heartbeat immediately.
+- `ping()` is an alias for `sendHeartbeat()` when you want a more explicit manual check-in call from UI code later.
+- `startHeartbeat()` schedules periodic heartbeats with jitter and optional browser-aware pause behavior.
+
+```ts
+const heartbeat = stimpact.startHeartbeat({
+  intervalMs: 5 * 60_000,
+  jitterRatio: 0.1,
+  skipWhenOffline: true,
+  pauseWhenHidden: false,
+});
+
+await stimpact.ping();
+
+// Manual dashboard-triggered check-in later:
+await heartbeat.triggerNow({ commitSha: window.__APP_COMMIT_SHA__ });
+```
+
+For frontend apps, heartbeat freshness means "a real browser session for this app has checked in recently." It does not guarantee the site is globally up for every visitor when no browser session is active.
+
+For server runtimes, heartbeats are a stronger liveness signal because they can run inside the long-lived process itself.
 
 ## Browser autocapture
 

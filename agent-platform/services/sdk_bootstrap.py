@@ -1991,6 +1991,46 @@ def _build_next_provider_source(*, service_name: str, environment: str) -> str:
 import {{ useEffect }} from "react";
 import {{ StimpactClient }} from "@stimpact/sdk";
 
+let stimpactClient: StimpactClient | null = null;
+
+export function getStimpactClient(): StimpactClient | null {{
+  return stimpactClient;
+}}
+
+export async function pingStimpact(): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  await stimpactClient.ping();
+}}
+
+function syncWindowStimpactControls() {{
+  if (typeof window === "undefined") {{
+    return;
+  }}
+  const scope = window as Window & {{
+    __stimpact?: {{
+      ping: typeof pingStimpact;
+      getClient: typeof getStimpactClient;
+    }};
+    pingStimpact?: typeof pingStimpact;
+  }};
+  if (stimpactClient) {{
+    scope.pingStimpact = pingStimpact;
+    scope.__stimpact = {{
+      ping: pingStimpact,
+      getClient: getStimpactClient,
+    }};
+    return;
+  }}
+  if (scope.pingStimpact === pingStimpact) {{
+    delete scope.pingStimpact;
+  }}
+  if (scope.__stimpact?.ping === pingStimpact) {{
+    delete scope.__stimpact;
+  }}
+}}
+
 export function StimpactProvider() {{
   useEffect(() => {{
     const baseUrl = process.env.NEXT_PUBLIC_STIMPACT_BASE_URL;
@@ -2010,12 +2050,18 @@ export function StimpactProvider() {{
       service,
       environment: runtimeEnvironment,
     }});
+    stimpactClient = client;
+    syncWindowStimpactControls();
 
     const heartbeat = client.startHeartbeat();
     const subscription = client.registerBrowserAutoCapture();
     return () => {{
       heartbeat.dispose();
       subscription.dispose();
+      if (stimpactClient === client) {{
+        stimpactClient = null;
+        syncWindowStimpactControls();
+      }}
     }};
   }}, []);
 
@@ -2028,6 +2074,45 @@ def _build_vite_helper_source(*, service_name: str, environment: str) -> str:
     return f'''import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
+let stimpactClient: StimpactClient | null = null;
+
+export function getStimpactClient(): StimpactClient | null {{
+  return stimpactClient;
+}}
+
+export async function pingStimpact(): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  await stimpactClient.ping();
+}}
+
+function syncWindowStimpactControls() {{
+  if (typeof window === "undefined") {{
+    return;
+  }}
+  const scope = window as Window & {{
+    __stimpact?: {{
+      ping: typeof pingStimpact;
+      getClient: typeof getStimpactClient;
+    }};
+    pingStimpact?: typeof pingStimpact;
+  }};
+  if (stimpactClient) {{
+    scope.pingStimpact = pingStimpact;
+    scope.__stimpact = {{
+      ping: pingStimpact,
+      getClient: getStimpactClient,
+    }};
+    return;
+  }}
+  if (scope.pingStimpact === pingStimpact) {{
+    delete scope.pingStimpact;
+  }}
+  if (scope.__stimpact?.ping === pingStimpact) {{
+    delete scope.__stimpact;
+  }}
+}}
 
 export function installStimpact() {{
   if (installed) {{
@@ -2052,6 +2137,8 @@ export function installStimpact() {{
     service,
     environment: runtimeEnvironment,
   }});
+  stimpactClient = client;
+  syncWindowStimpactControls();
 
   client.startHeartbeat();
   client.registerBrowserAutoCapture();
@@ -2063,6 +2150,45 @@ def _build_react_scripts_helper_source(*, service_name: str, environment: str) -
     return f'''import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
+let stimpactClient: StimpactClient | null = null;
+
+export function getStimpactClient(): StimpactClient | null {{
+  return stimpactClient;
+}}
+
+export async function pingStimpact(): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  await stimpactClient.ping();
+}}
+
+function syncWindowStimpactControls() {{
+  if (typeof window === "undefined") {{
+    return;
+  }}
+  const scope = window as Window & {{
+    __stimpact?: {{
+      ping: typeof pingStimpact;
+      getClient: typeof getStimpactClient;
+    }};
+    pingStimpact?: typeof pingStimpact;
+  }};
+  if (stimpactClient) {{
+    scope.pingStimpact = pingStimpact;
+    scope.__stimpact = {{
+      ping: pingStimpact,
+      getClient: getStimpactClient,
+    }};
+    return;
+  }}
+  if (scope.pingStimpact === pingStimpact) {{
+    delete scope.pingStimpact;
+  }}
+  if (scope.__stimpact?.ping === pingStimpact) {{
+    delete scope.__stimpact;
+  }}
+}}
 
 export function installStimpact() {{
   if (installed) {{
@@ -2087,6 +2213,8 @@ export function installStimpact() {{
     service,
     environment: runtimeEnvironment,
   }});
+  stimpactClient = client;
+  syncWindowStimpactControls();
 
   client.startHeartbeat();
   client.registerBrowserAutoCapture();
@@ -2162,6 +2290,25 @@ const stimpact = new StimpactClient({{
 
 stimpact.startHeartbeat();
 stimpact.registerBrowserAutoCapture();
+
+export async function pingStimpact() {{
+  await stimpact.ping();
+}}
+
+if (typeof window !== "undefined") {{
+  const scope = window as Window & {{
+    __stimpact?: {{
+      ping: typeof pingStimpact;
+      getClient: () => StimpactClient;
+    }};
+    pingStimpact?: typeof pingStimpact;
+  }};
+  scope.pingStimpact = pingStimpact;
+  scope.__stimpact = {{
+    ping: pingStimpact,
+    getClient: () => stimpact,
+  }};
+}}
 '''
 
 
@@ -2170,6 +2317,18 @@ def _build_generic_node_helper_source(*, service_name: str, environment: str, mo
         return f'''const {{ StimpactClient }} = require("@stimpact/sdk");
 
 let installed = false;
+let stimpactClient = null;
+
+function getStimpactClient() {{
+  return stimpactClient;
+}}
+
+async function pingStimpact() {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  await stimpactClient.ping();
+}}
 
 function installStimpact() {{
   if (installed) {{
@@ -2194,6 +2353,7 @@ function installStimpact() {{
     service,
     environment: runtimeEnvironment,
   }});
+  stimpactClient = client;
 
   client.startHeartbeat();
 
@@ -2206,11 +2366,23 @@ function installStimpact() {{
   process.on("unhandledRejection", capture);
 }}
 
-module.exports = {{ installStimpact }};
+module.exports = {{ installStimpact, getStimpactClient, pingStimpact }};
 '''
     return f'''import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
+let stimpactClient: StimpactClient | null = null;
+
+export function getStimpactClient(): StimpactClient | null {{
+  return stimpactClient;
+}}
+
+export async function pingStimpact(): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  await stimpactClient.ping();
+}}
 
 export function installStimpact() {{
   if (installed) {{
@@ -2235,6 +2407,7 @@ export function installStimpact() {{
     service,
     environment: runtimeEnvironment,
   }});
+  stimpactClient = client;
 
   client.startHeartbeat();
 
@@ -2294,7 +2467,7 @@ def _javascript_manual_steps(label: str) -> list[SdkBootstrapManualStep]:
         ),
         SdkBootstrapManualStep(
             title=f"Wire the {label} runtime",
-            content="Initialize `StimpactClient` in the main browser shell and enable `registerBrowserAutoCapture()` so uncaught errors are reported automatically.",
+            content="Initialize `StimpactClient` in the main browser shell, start heartbeats, enable `registerBrowserAutoCapture()`, and keep the exported `pingStimpact()` helper available for future manual live checks.",
         ),
     ]
 
@@ -2307,7 +2480,7 @@ def _python_manual_steps(label: str) -> list[SdkBootstrapManualStep]:
         ),
         SdkBootstrapManualStep(
             title=f"Wire the {label} app",
-            content="Create a shared Stimpact client and capture unhandled exceptions in the HTTP request lifecycle for the chosen Python app entrypoint.",
+            content="Create a shared Stimpact client, start the background heartbeat, and capture unhandled exceptions in the HTTP request lifecycle for the chosen Python app entrypoint.",
         ),
     ]
 

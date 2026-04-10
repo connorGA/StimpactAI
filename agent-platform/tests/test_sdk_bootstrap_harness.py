@@ -41,9 +41,14 @@ def test_next_repo_fixture_uses_browser_recipe_with_heartbeat(tmp_path: Path) ->
 
     assert plan.strategies
     strategy = plan.strategies[0]
-    assert strategy.recipe_id == "browser-token-heartbeat"
+    assert strategy.id.startswith("javascript-next:")
+    assert strategy.framework == "Next.js"
     assert any("heartbeat" in step.content.lower() for step in strategy.manual_steps)
-    assert "runtime_wiring" in strategy.allowed_change_categories
+    assert any("pingstimpact" in step.content.lower() for step in strategy.manual_steps)
+    assert strategy.preview_snippet is not None
+    assert "export async function pingStimpact" in strategy.preview_snippet
+    assert "scope.pingStimpact = pingStimpact" in strategy.preview_snippet
+    assert any("provider" in item.reason.lower() for item in strategy.planned_files)
 
 
 def test_fastapi_repo_fixture_uses_python_recipe_with_heartbeat(tmp_path: Path) -> None:
@@ -63,7 +68,8 @@ def test_fastapi_repo_fixture_uses_python_recipe_with_heartbeat(tmp_path: Path) 
 
     assert plan.strategies
     strategy = next(item for item in plan.strategies if item.language == "python")
-    assert strategy.recipe_id == "python-server-heartbeat"
+    assert strategy.id.startswith("python-fastapi:")
+    assert strategy.framework == "FastAPI"
     assert any("heartbeat" in step.content.lower() for step in strategy.manual_steps)
 
 

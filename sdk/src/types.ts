@@ -36,6 +36,14 @@ export type HeartbeatInput = {
   timestamp?: string | Date;
 };
 
+export type HeartbeatScheduleOptions = HeartbeatInput & {
+  intervalMs?: number;
+  immediate?: boolean;
+  jitterRatio?: number;
+  pauseWhenHidden?: boolean;
+  skipWhenOffline?: boolean;
+};
+
 export type StimpactClientOptions = {
   baseUrl: string;
   projectId: string;
@@ -50,6 +58,7 @@ export type StimpactClientOptions = {
   timeoutMs?: number;
   retryAttempts?: number;
   retryDelayMs?: number;
+  browserTokenFailureCooldownMs?: number;
   captureRequestContext?: boolean;
   captureResponseContext?: boolean;
   includeBodies?: boolean;
@@ -68,4 +77,8 @@ export type BrowserCaptureSubscription = {
 
 export type HeartbeatSubscription = {
   dispose: () => void;
+  pause: () => void;
+  resume: () => void;
+  triggerNow: (input?: HeartbeatInput) => Promise<void>;
+  isRunning: () => boolean;
 };

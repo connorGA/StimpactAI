@@ -3,6 +3,7 @@
 /.venv/
 .pytest_cache/
 **/__pycache__/
+/.tmp-e2e/
 node_modules/
 client-ui/node_modules/
 client-ui/.next/

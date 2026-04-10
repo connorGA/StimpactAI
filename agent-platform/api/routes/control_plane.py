@@ -80,7 +80,13 @@ from api.schemas.control_plane import (
     UpdateProjectOnboardingStateRequest,
     UpdateProjectServiceRequest,
 )
-from models.control_plane import ProjectSdkSetupStatus, ProviderKind, SecretBackend
+from models.control_plane import (
+    ProjectApiKeyStatus,
+    ProjectBrowserKeyStatus,
+    ProjectSdkSetupStatus,
+    ProviderKind,
+    SecretBackend,
+)
 from services.aws_secrets_manager import (
     AwsSecretsManagerReader,
     AwsSecretsManagerWriter,
@@ -1090,9 +1096,110 @@ async def create_project_sdk_bootstrap_change_request(
             code="sdk_bootstrap_preview_verification_failed",
         )
     uses_browser_credentials = _sdk_strategy_uses_browser_credentials(prepared_preview.strategy)
-    plaintext_key, key_prefix = (
-        build_project_browser_key() if uses_browser_credentials else build_project_api_key()
-    )
+    if uses_browser_credentials and not payload.allowed_origins:
+        raise APIError(
+            "Browser-key SDK setup requires at least one allowed origin.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="browser_key_allowed_origins_required",
+        )
+    if uses_browser_credentials and payload.existing_api_key_id is not None:
+        raise APIError(
+            "This SDK bootstrap strategy expects a browser key, not an API key.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_existing_key_kind_mismatch",
+        )
+    if not uses_browser_credentials and payload.existing_browser_key_id is not None:
+        raise APIError(
+            "This SDK bootstrap strategy expects an API key, not a browser key.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_existing_key_kind_mismatch",
+        )
+    if payload.existing_plaintext_key is not None and (
+        payload.existing_api_key_id is None and payload.existing_browser_key_id is None
+    ):
+        raise APIError(
+            "A plaintext key can only be reused when paired with the matching existing key id.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="sdk_bootstrap_existing_key_id_required",
+        )
+    api_key_record = None
+    browser_key_record = None
+    if uses_browser_credentials:
+        if payload.existing_browser_key_id is not None or payload.existing_plaintext_key is not None:
+            if payload.existing_browser_key_id is None or payload.existing_plaintext_key is None:
+                raise APIError(
+                    "Reusing a browser key requires both the existing key id and plaintext key.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code="sdk_bootstrap_existing_browser_key_incomplete",
+                )
+            browser_key_record = await repository.get_project_browser_key(payload.existing_browser_key_id)
+            if (
+                browser_key_record is None
+                or browser_key_record.project_id != project_id
+                or browser_key_record.status is not ProjectBrowserKeyStatus.ACTIVE
+            ):
+                raise APIError(
+                    "The selected browser key is no longer active, so it cannot be reused for this PR.",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="sdk_bootstrap_existing_browser_key_invalid",
+                )
+            plaintext_key = payload.existing_plaintext_key
+            if browser_key_record.key_hash != hash_api_key(plaintext_key):
+                raise APIError(
+                    "The saved plaintext browser key no longer matches the active key record.",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="sdk_bootstrap_existing_browser_key_mismatch",
+                )
+            if browser_key_record.allowed_origins != payload.allowed_origins:
+                browser_key_record = await repository.update_project_browser_key(
+                    payload.existing_browser_key_id,
+                    allowed_origins=payload.allowed_origins,
+                )
+                _invalidate_telemetry_origin_registry(request)
+        else:
+            plaintext_key, key_prefix = build_project_browser_key()
+            browser_key_record = await repository.create_project_browser_key(
+                project_id=project_id,
+                name=payload.api_key_name,
+                key_prefix=key_prefix,
+                key_hash=hash_api_key(plaintext_key),
+                allowed_origins=payload.allowed_origins,
+            )
+            _invalidate_telemetry_origin_registry(request)
+    else:
+        if payload.existing_api_key_id is not None or payload.existing_plaintext_key is not None:
+            if payload.existing_api_key_id is None or payload.existing_plaintext_key is None:
+                raise APIError(
+                    "Reusing an API key requires both the existing key id and plaintext key.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code="sdk_bootstrap_existing_api_key_incomplete",
+                )
+            api_key_record = await repository.get_project_api_key(payload.existing_api_key_id)
+            if (
+                api_key_record is None
+                or api_key_record.project_id != project_id
+                or api_key_record.status is not ProjectApiKeyStatus.ACTIVE
+            ):
+                raise APIError(
+                    "The selected API key is no longer active, so it cannot be reused for this PR.",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="sdk_bootstrap_existing_api_key_invalid",
+                )
+            plaintext_key = payload.existing_plaintext_key
+            if api_key_record.key_hash != hash_api_key(plaintext_key):
+                raise APIError(
+                    "The saved plaintext API key no longer matches the active key record.",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="sdk_bootstrap_existing_api_key_mismatch",
+                )
+        else:
+            plaintext_key, key_prefix = build_project_api_key()
+            api_key_record = await repository.create_project_api_key(
+                project_id=project_id,
+                name=payload.api_key_name,
+                key_prefix=key_prefix,
+                key_hash=hash_api_key(plaintext_key),
+            )
     bootstrap_patch = build_sdk_bootstrap_patch_from_clone(
         clone_url=clone_url,
         default_branch=provider_repository.default_branch,
@@ -1116,24 +1223,6 @@ async def create_project_sdk_bootstrap_change_request(
         bootstrap_patch.attempt.apply_duration_ms if bootstrap_patch.attempt is not None else None,
         bootstrap_patch.attempt.verification_duration_ms if bootstrap_patch.attempt is not None else None,
     )
-    api_key_record = None
-    browser_key_record = None
-    if uses_browser_credentials:
-        browser_key_record = await repository.create_project_browser_key(
-            project_id=project_id,
-            name=payload.api_key_name,
-            key_prefix=key_prefix,
-            key_hash=hash_api_key(plaintext_key),
-            allowed_origins=payload.allowed_origins,
-        )
-        _invalidate_telemetry_origin_registry(request)
-    else:
-        api_key_record = await repository.create_project_api_key(
-            project_id=project_id,
-            name=payload.api_key_name,
-            key_prefix=key_prefix,
-            key_hash=hash_api_key(plaintext_key),
-        )
     pr_metadata = _build_sdk_bootstrap_pr_metadata(strategy=prepared_preview.strategy, branch_name=payload.branch_name)
     writeback = await service.propose_patch_writeback(
         provider_repository_id=payload.provider_repository_id,

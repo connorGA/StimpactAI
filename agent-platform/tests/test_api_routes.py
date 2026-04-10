@@ -1427,6 +1427,110 @@ def test_browser_telemetry_token_rejects_wrong_origin() -> None:
     assert response.json()["error"]["code"] == "browser_origin_not_allowed"
 
 
+def test_browser_telemetry_token_rejects_unconfigured_browser_key() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Browser telemetry",
+            key_prefix="stimp_browser_demo",
+            key_hash=hash_api_key("stimp_browser_secret"),
+            allowed_origins=[],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.post(
+        "/telemetry/browser-token",
+        headers={"Origin": "https://app.example.com"},
+        json={
+            "project_id": "project-1",
+            "browser_key": "stimp_browser_secret",
+            "service": "billing-web",
+            "environment": "production",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "browser_origin_not_configured"
+
+
+def test_browser_telemetry_ingest_rechecks_live_browser_key_origin() -> None:
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Browser telemetry",
+            key_prefix="stimp_browser_demo",
+            key_hash=hash_api_key("stimp_browser_secret"),
+            allowed_origins=["https://app.example.com"],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    telemetry_repository = RecordingTelemetryRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_repository] = lambda: telemetry_repository
+    app.dependency_overrides[get_incident_event_publisher] = IncidentEventPublisher
+    app.dependency_overrides[get_outbox_signaler] = RecordingOutboxSignaler
+
+    client = TestClient(app)
+    token_response = client.post(
+        "/telemetry/browser-token",
+        headers={"Origin": "https://app.example.com"},
+        json={
+            "project_id": "project-1",
+            "browser_key": "stimp_browser_secret",
+            "service": "billing-web",
+            "environment": "production",
+        },
+    )
+
+    assert token_response.status_code == 200
+    token = token_response.json()["token"]
+    repository.project_browser_keys[0] = repository.project_browser_keys[0].model_copy(
+        update={"allowed_origins": ["https://admin.example.com"]}
+    )
+
+    ingest_response = client.post(
+        "/telemetry/error",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "https://app.example.com",
+        },
+        json={
+            "project_id": "project-1",
+            "environment": "production",
+            "service": "billing-web",
+            "error_message": "Browser crash",
+            "stacktrace": "Error: boom",
+            "timestamp": "2026-03-16T12:00:00Z",
+        },
+    )
+
+    assert ingest_response.status_code == 401
+    assert ingest_response.json()["error"]["code"] == "browser_ingest_token_origin_mismatch"
+    assert len(telemetry_repository.calls) == 0
+
+
 def test_browser_telemetry_token_preflight_returns_cors_headers(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ALLOW_LEGACY_BROWSER_TOKEN_EXCHANGE", "true")
     monkeypatch.setenv("CLIENT_UI_BASE_URL", "https://app.example.com")
@@ -2509,6 +2613,45 @@ def test_project_browser_keys_can_be_created_updated_listed_and_revoked(monkeypa
     assert revoked.json()["status"] == "revoked"
 
 
+def test_project_browser_keys_require_allowed_origins(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    created = client.post(
+        "/control-plane/projects/project-1/browser-keys",
+        json={"name": "Browser telemetry", "allowed_origins": []},
+        headers=headers,
+    )
+    assert created.status_code == 422
+
+    seeded = ProjectBrowserKeyRecord(
+        id="browser-key-1",
+        project_id="project-1",
+        name="Browser telemetry",
+        key_prefix="stimp_browser_demo",
+        key_hash=hash_api_key("stimp_browser_secret"),
+        allowed_origins=["https://app.example.com"],
+        status=ProjectBrowserKeyStatus.ACTIVE,
+        last_used_at=None,
+        last_issued_at=None,
+        revoked_at=None,
+        created_at=repository.secret_ref.created_at,
+        updated_at=repository.secret_ref.updated_at,
+    )
+    repository.project_browser_keys.append(seeded)
+
+    updated = client.patch(
+        "/control-plane/projects/project-1/browser-keys/browser-key-1",
+        json={"allowed_origins": []},
+        headers=headers,
+    )
+    assert updated.status_code == 422
+
+
 def test_updating_project_policy_marks_onboarding_policy_reviewed(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
     app = build_test_app()
@@ -2722,6 +2865,308 @@ def test_sdk_bootstrap_change_request_creates_key_and_updates_onboarding_state(m
     assert body["change_request_url"] == "https://github.com/acme/billing-api/pull/42"
     assert body["final_attempt"]["verification"]["status"] == "passed"
     assert repository.project_onboarding_state.sdk_setup_status is ProjectSdkSetupStatus.CHANGE_REQUEST
+
+
+def test_sdk_bootstrap_change_request_reuses_existing_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
+        SdkBootstrapStrategy,
+        SdkBootstrapVerification,
+    )
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    existing_plaintext_key = "stimp_live_existing_secret"
+    repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Telemetry bootstrap",
+            key_prefix="stimp_live_existing",
+            key_hash=hash_api_key(existing_plaintext_key),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="python",
+                warnings=[],
+                recommended_strategy_id="python-fastapi:.:main.py",
+                requires_confirmation=False,
+                strategies=[
+                    SdkBootstrapStrategy(
+                        id="python-fastapi:.:main.py",
+                        language="python",
+                        framework="FastAPI",
+                        summary="Install telemetry middleware.",
+                        confidence="high",
+                        pr_supported=True,
+                        target_subpath=".",
+                        entrypoints=["main.py"],
+                        assumptions=["main.py is the ASGI entrypoint."],
+                        blockers=[],
+                        planned_files=[
+                            SdkBootstrapPlannedFile(
+                                path="main.py",
+                                action="update",
+                                reason="Install middleware hook.",
+                            )
+                        ],
+                        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run pip install stimpact-sdk")],
+                    )
+                ],
+            ),
+            selected_strategy_id="python-fastapi:.:main.py",
+            strategy=SdkBootstrapStrategy(
+                id="python-fastapi:.:main.py",
+                language="python",
+                framework="FastAPI",
+                summary="Install telemetry middleware.",
+                confidence="high",
+                pr_supported=True,
+                target_subpath=".",
+                entrypoints=["main.py"],
+                assumptions=["main.py is the ASGI entrypoint."],
+                blockers=[],
+                planned_files=[
+                    SdkBootstrapPlannedFile(
+                        path="main.py",
+                        action="update",
+                        reason="Install middleware hook.",
+                    )
+                ],
+                manual_steps=[SdkBootstrapManualStep(title="Install", content="Run pip install stimpact-sdk")],
+            ),
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/main.py b/main.py\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id="python-fastapi:.:main.py",
+                    patch_source="deterministic",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                    preview_available=True,
+                    change_request_allowed=True,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        control_plane_module,
+        "build_sdk_bootstrap_patch_from_clone",
+        lambda **_: SdkBootstrapPatch(
+            patch_diff="diff --git a/main.py b/main.py\n",
+            attempt=SdkBootstrapPatchAttempt(
+                strategy_id="python-fastapi:.:main.py",
+                patch_source="deterministic",
+                patch_generated=True,
+                patch_applied=True,
+                verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                preview_available=True,
+                change_request_allowed=True,
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/change-request",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "api_key_name": "Telemetry bootstrap",
+            "existing_api_key_id": "api-key-1",
+            "existing_plaintext_key": existing_plaintext_key,
+            "service_name": "billing-api",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "branch_name": "stimpact/sdk-bootstrap-preview-existing-api",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["api_key"]["id"] == "api-key-1"
+    assert body["plaintext_key"] == existing_plaintext_key
+    assert len(repository.project_api_keys) == 1
+
+
+def test_sdk_bootstrap_change_request_reuses_existing_browser_key(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    from services.sdk_bootstrap import (
+        SdkBootstrapManualStep,
+        SdkBootstrapPatch,
+        SdkBootstrapPatchAttempt,
+        SdkBootstrapPlan,
+        SdkBootstrapPlannedFile,
+        SdkBootstrapPreparedPreview,
+        SdkBootstrapStrategy,
+        SdkBootstrapVerification,
+    )
+    from services.sdk_catalog import SdkEnvVarSpec
+    import api.routes.control_plane as control_plane_module
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    provider_service = StubProviderIntegrationService()
+    existing_plaintext_key = "stimp_browser_existing_secret"
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Telemetry bootstrap",
+            key_prefix="stimp_browser_existing",
+            key_hash=hash_api_key(existing_plaintext_key),
+            allowed_origins=["https://old.example.com"],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_provider_integration_service] = lambda: provider_service
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer super-admin-token"}
+    browser_env_vars = [
+        SdkEnvVarSpec(
+            name="NEXT_PUBLIC_STIMPACT_PROJECT_ID",
+            example_value="project-1",
+            description="Browser SDK project id.",
+        )
+    ]
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "prepare_sdk_bootstrap_preview_from_clone",
+        lambda **_: SdkBootstrapPreparedPreview(
+            plan=SdkBootstrapPlan(
+                runtime="javascript",
+                warnings=[],
+                recommended_strategy_id="javascript-next:.:src/app/layout.tsx",
+                requires_confirmation=False,
+                strategies=[
+                    SdkBootstrapStrategy(
+                        id="javascript-next:.:src/app/layout.tsx",
+                        language="javascript",
+                        framework="Next.js",
+                        summary="Inject browser auto-capture.",
+                        confidence="high",
+                        pr_supported=True,
+                        target_subpath=".",
+                        entrypoints=["src/app/layout.tsx"],
+                        assumptions=["src/app/layout.tsx is the main browser shell."],
+                        blockers=[],
+                        planned_files=[
+                            SdkBootstrapPlannedFile(
+                                path="package.json",
+                                action="update",
+                                reason="Add dependency.",
+                            )
+                        ],
+                        env_vars=browser_env_vars,
+                        manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+                    )
+                ],
+            ),
+            selected_strategy_id="javascript-next:.:src/app/layout.tsx",
+            strategy=SdkBootstrapStrategy(
+                id="javascript-next:.:src/app/layout.tsx",
+                language="javascript",
+                framework="Next.js",
+                summary="Inject browser auto-capture into the app shell.",
+                confidence="high",
+                pr_supported=True,
+                target_subpath=".",
+                entrypoints=["src/app/layout.tsx"],
+                assumptions=["src/app/layout.tsx is the main browser shell."],
+                blockers=[],
+                planned_files=[
+                    SdkBootstrapPlannedFile(
+                        path="package.json",
+                        action="update",
+                        reason="Add dependency.",
+                    )
+                ],
+                env_vars=browser_env_vars,
+                manual_steps=[SdkBootstrapManualStep(title="Install", content="Run npm install @stimpact/sdk")],
+            ),
+            patch=SdkBootstrapPatch(
+                patch_diff="diff --git a/package.json b/package.json\n",
+                attempt=SdkBootstrapPatchAttempt(
+                    strategy_id="javascript-next:.:src/app/layout.tsx",
+                    patch_source="deterministic",
+                    patch_generated=True,
+                    patch_applied=True,
+                    verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                    preview_available=True,
+                    change_request_allowed=True,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        control_plane_module,
+        "build_sdk_bootstrap_patch_from_clone",
+        lambda **_: SdkBootstrapPatch(
+            patch_diff="diff --git a/package.json b/package.json\n",
+            attempt=SdkBootstrapPatchAttempt(
+                strategy_id="javascript-next:.:src/app/layout.tsx",
+                patch_source="deterministic",
+                patch_generated=True,
+                patch_applied=True,
+                verification=SdkBootstrapVerification(status="passed", summary="ok"),
+                preview_available=True,
+                change_request_allowed=True,
+            ),
+        ),
+    )
+
+    response = client.post(
+        "/control-plane/projects/project-1/sdk-bootstrap/change-request",
+        json={
+            "project_id": "project-1",
+            "provider_repository_id": "provider-repo-1",
+            "api_key_name": "Telemetry bootstrap",
+            "allowed_origins": ["https://app.example.com"],
+            "existing_browser_key_id": "browser-key-1",
+            "existing_plaintext_key": existing_plaintext_key,
+            "service_name": "billing-web",
+            "environment": "production",
+            "base_url": "https://stimpact.example.com",
+            "branch_name": "stimpact/sdk-bootstrap-preview-existing-browser",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["browser_key"]["id"] == "browser-key-1"
+    assert body["plaintext_key"] == existing_plaintext_key
+    assert len(repository.project_browser_keys) == 1
+    assert repository.project_browser_keys[0].allowed_origins == ["https://app.example.com"]
 
 
 def test_sdk_bootstrap_preview_returns_patch_and_pr_metadata(monkeypatch) -> None:

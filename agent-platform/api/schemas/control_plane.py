@@ -121,7 +121,7 @@ class CreateProjectBrowserKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
-    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+    allowed_origins: list[str] = Field(min_length=1, max_length=20)
 
     @field_validator("name")
     @classmethod
@@ -135,6 +135,8 @@ class CreateProjectBrowserKeyRequest(BaseModel):
     @classmethod
     def validate_allowed_origins(cls, values: list[str]) -> list[str]:
         normalized = normalize_origin_list(values)
+        if len(normalized) == 0:
+            raise ValueError("allowed origins must include at least one absolute http or https origin")
         for candidate in normalized:
             if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
                 raise ValueError("allowed origins must be absolute http or https origins")
@@ -144,12 +146,14 @@ class CreateProjectBrowserKeyRequest(BaseModel):
 class UpdateProjectBrowserKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+    allowed_origins: list[str] = Field(min_length=1, max_length=20)
 
     @field_validator("allowed_origins")
     @classmethod
     def validate_allowed_origins(cls, values: list[str]) -> list[str]:
         normalized = normalize_origin_list(values)
+        if len(normalized) == 0:
+            raise ValueError("allowed origins must include at least one absolute http or https origin")
         for candidate in normalized:
             if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
                 raise ValueError("allowed origins must be absolute http or https origins")
@@ -437,6 +441,9 @@ class CreateSdkBootstrapChangeRequestRequest(BaseModel):
     provider_repository_id: str = Field(min_length=1, max_length=256)
     api_key_name: str = Field(min_length=1, max_length=200)
     allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+    existing_api_key_id: str | None = Field(default=None, max_length=128)
+    existing_browser_key_id: str | None = Field(default=None, max_length=128)
+    existing_plaintext_key: str | None = Field(default=None, max_length=500)
     service_name: str = Field(min_length=1, max_length=200)
     environment: str = Field(default="production", min_length=1, max_length=64)
     base_url: str = Field(min_length=1, max_length=1000)
@@ -447,6 +454,9 @@ class CreateSdkBootstrapChangeRequestRequest(BaseModel):
         "project_id",
         "provider_repository_id",
         "api_key_name",
+        "existing_api_key_id",
+        "existing_browser_key_id",
+        "existing_plaintext_key",
         "service_name",
         "environment",
         "base_url",

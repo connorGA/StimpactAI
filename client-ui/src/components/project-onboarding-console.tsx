@@ -2,16 +2,18 @@
 
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Wrench } from "lucide-react";
+import { Eye, EyeOff, Wrench } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 
 import { useAppShellSession } from "@/components/app-shell";
 import type {
   GitHubAppInstallStartResponse,
+  ProjectApiKey,
   GitLabOAuthStartResponse,
   ProjectApiKeyCreateResponse,
   ProjectBrowserKey,
+  ProjectBrowserKeyCreateResponse,
   ProjectOnboarding,
   ProjectPolicy,
   ProjectSummary,
@@ -40,6 +42,8 @@ const SDK_AUTOMATIC_ACTION_PHRASES = [
   "Tracing the cleanest entrypoint.",
   "Polishing the review flow.",
 ] as const;
+const BROWSER_KEY_ALLOWED_ORIGIN_LIMIT = 20;
+const BROWSER_FACING_SERVICE_TYPES = new Set(["frontend", "fullstack"]);
 
 type SecretDraft = {
   id: string;
@@ -96,9 +100,14 @@ type OnboardingEditorSnapshot = {
   repoProfileInference: RepoProfileInference | null;
   repoProfileInferenceError: string | null;
   telemetryKeyName: string;
-  telemetryAllowedOriginsInput: string;
+  telemetryCreateOriginDraft: string;
+  telemetryCreateAllowedOriginsInput: string;
   telemetryKeyPlaintext: string | null;
+  telemetryGeneratedApiKeyId: string | null;
+  telemetryGeneratedBrowserKeyId: string | null;
+  showTelemetryKeyDialog: boolean;
   editingBrowserKeyId: string | null;
+  editingBrowserKeyOriginsInput: string;
   sdkEnvironment: string;
   sdkSetupMode: "automatic" | "manual";
   sdkBootstrapPlan: SdkBootstrapPlanPreview | null;
@@ -447,9 +456,15 @@ export function ProjectOnboardingConsole() {
   const [repoProfileInference, setRepoProfileInference] = useState<RepoProfileInference | null>(null);
   const [repoProfileInferenceError, setRepoProfileInferenceError] = useState<string | null>(null);
   const [telemetryKeyName, setTelemetryKeyName] = useState("");
-  const [telemetryAllowedOriginsInput, setTelemetryAllowedOriginsInput] = useState("");
+  const [telemetryCreateOriginDraft, setTelemetryCreateOriginDraft] = useState("");
+  const [telemetryCreateAllowedOriginsInput, setTelemetryCreateAllowedOriginsInput] = useState("");
   const [telemetryKeyPlaintext, setTelemetryKeyPlaintext] = useState<string | null>(null);
+  const [telemetryGeneratedApiKeyId, setTelemetryGeneratedApiKeyId] = useState<string | null>(null);
+  const [telemetryGeneratedBrowserKeyId, setTelemetryGeneratedBrowserKeyId] = useState<string | null>(null);
+  const [showTelemetryKeyDialog, setShowTelemetryKeyDialog] = useState(false);
+  const [showTelemetryKeyPlaintext, setShowTelemetryKeyPlaintext] = useState(false);
   const [editingBrowserKeyId, setEditingBrowserKeyId] = useState<string | null>(null);
+  const [editingBrowserKeyOriginsInput, setEditingBrowserKeyOriginsInput] = useState("");
   const [copiedTelemetryKey, setCopiedTelemetryKey] = useState(false);
   const [sdkEnvironment, setSdkEnvironment] = useState("production");
   const [sdkSetupMode, setSdkSetupMode] = useState<"automatic" | "manual">("automatic");
@@ -811,17 +826,18 @@ export function ProjectOnboardingConsole() {
   }, [currentProject, telemetryKeyName]);
 
   useEffect(() => {
-    if (editingBrowserKeyId || telemetryAllowedOriginsInput.trim()) {
+    if (editingBrowserKeyId || telemetryCreateAllowedOriginsInput.trim()) {
       return;
     }
     const firstActiveBrowserKey = state?.browser_keys.find((item) => item.status === "active");
     if (firstActiveBrowserKey?.allowed_origins.length) {
-      setTelemetryAllowedOriginsInput(formatOriginInput(firstActiveBrowserKey.allowed_origins));
+      setTelemetryCreateAllowedOriginsInput(formatOriginInput(firstActiveBrowserKey.allowed_origins));
     }
-  }, [editingBrowserKeyId, state, telemetryAllowedOriginsInput]);
+  }, [editingBrowserKeyId, state, telemetryCreateAllowedOriginsInput]);
 
   useEffect(() => {
     setCopiedTelemetryKey(false);
+    setShowTelemetryKeyPlaintext(false);
   }, [telemetryKeyPlaintext]);
 
   useEffect(() => {
@@ -1050,7 +1066,8 @@ export function ProjectOnboardingConsole() {
     shouldRunAutomaticSdkWorkflow,
   ]);
 
-  const loadTelemetryVerification = useCallback(async () => {
+  const loadTelemetryVerification = useCallback(async (options?: { force?: boolean }) => {
+    const force = options?.force ?? false;
     if (!projectId.trim() || !effectiveSdkServiceName.trim()) {
       setTelemetryVerification(null);
       setLoadingTelemetryVerification(false);
@@ -1066,7 +1083,7 @@ export function ProjectOnboardingConsole() {
       effectiveSdkServiceName.trim(),
       sdkEnvironment.trim() || "production",
     ].join("|");
-    if (telemetryVerificationKeyRef.current === requestKey && telemetryVerification) {
+    if (!force && telemetryVerificationKeyRef.current === requestKey && telemetryVerification) {
       setLoadingTelemetryVerification(false);
       return;
     }
@@ -1280,9 +1297,14 @@ export function ProjectOnboardingConsole() {
       stepFivePreviewMode,
       showStepFiveAdvanced,
       telemetryKeyName,
-      telemetryAllowedOriginsInput,
+      telemetryCreateOriginDraft,
+      telemetryCreateAllowedOriginsInput,
       telemetryKeyPlaintext,
+      telemetryGeneratedApiKeyId,
+      telemetryGeneratedBrowserKeyId,
+      showTelemetryKeyDialog,
       editingBrowserKeyId,
+      editingBrowserKeyOriginsInput,
       sdkEnvironment,
       sdkSetupMode,
       sdkBootstrapPlan: sdkBootstrapPlan
@@ -1361,9 +1383,14 @@ export function ProjectOnboardingConsole() {
     setStepFivePreviewMode(snapshot.stepFivePreviewMode);
     setShowStepFiveAdvanced(snapshot.showStepFiveAdvanced);
     setTelemetryKeyName(snapshot.telemetryKeyName);
-    setTelemetryAllowedOriginsInput(snapshot.telemetryAllowedOriginsInput);
+    setTelemetryCreateOriginDraft(snapshot.telemetryCreateOriginDraft);
+    setTelemetryCreateAllowedOriginsInput(snapshot.telemetryCreateAllowedOriginsInput);
     setTelemetryKeyPlaintext(snapshot.telemetryKeyPlaintext);
+    setTelemetryGeneratedApiKeyId(snapshot.telemetryGeneratedApiKeyId);
+    setTelemetryGeneratedBrowserKeyId(snapshot.telemetryGeneratedBrowserKeyId);
+    setShowTelemetryKeyDialog(snapshot.showTelemetryKeyDialog);
     setEditingBrowserKeyId(snapshot.editingBrowserKeyId);
+    setEditingBrowserKeyOriginsInput(snapshot.editingBrowserKeyOriginsInput);
     setSdkEnvironment(snapshot.sdkEnvironment);
     setSdkSetupMode(snapshot.sdkSetupMode);
     setSdkBootstrapPlan(
@@ -1836,8 +1863,8 @@ export function ProjectOnboardingConsole() {
     }, "Single-repo setup completed.");
   }
 
-  function getValidatedBrowserOrigins(): string[] | null {
-    const parsedOrigins = parseOriginInput(telemetryAllowedOriginsInput);
+  function getValidatedBrowserOrigins(inputValue: string, emptyMessage: string): string[] | null {
+    const parsedOrigins = parseOriginInput(inputValue);
     if (parsedOrigins.invalid.length > 0) {
       setErrorMessage(
         `Each allowed origin must be a bare http or https origin. Fix: ${parsedOrigins.invalid.join(", ")}`,
@@ -1845,16 +1872,79 @@ export function ProjectOnboardingConsole() {
       return null;
     }
     if (parsedOrigins.origins.length === 0) {
-      setErrorMessage("Add at least one deployed app origin before creating a browser key.");
+      setErrorMessage(emptyMessage);
+      return null;
+    }
+    if (parsedOrigins.origins.length > BROWSER_KEY_ALLOWED_ORIGIN_LIMIT) {
+      setErrorMessage(
+        `Use at most ${BROWSER_KEY_ALLOWED_ORIGIN_LIMIT} allowed origins per browser key.`,
+      );
       return null;
     }
     return parsedOrigins.origins;
   }
 
+  function addTelemetryCreateOrigin() {
+    const draft = telemetryCreateOriginDraft.trim();
+    if (!draft) {
+      setErrorMessage("Enter an origin before adding it.");
+      return;
+    }
+    const currentOrigins = parseOriginInput(telemetryCreateAllowedOriginsInput).origins;
+    const nextOrigins = parseOriginInput(formatOriginInput([...currentOrigins, draft]));
+    if (nextOrigins.invalid.length > 0) {
+      setErrorMessage(
+        `Each allowed origin must be a bare http or https origin. Fix: ${nextOrigins.invalid.join(", ")}`,
+      );
+      return;
+    }
+    if (nextOrigins.origins.length > BROWSER_KEY_ALLOWED_ORIGIN_LIMIT) {
+      setErrorMessage(`Use at most ${BROWSER_KEY_ALLOWED_ORIGIN_LIMIT} allowed origins per browser key.`);
+      return;
+    }
+    setTelemetryCreateAllowedOriginsInput(formatOriginInput(nextOrigins.origins));
+    setTelemetryCreateOriginDraft("");
+    setErrorMessage(null);
+  }
+
+  function removeTelemetryCreateOrigin(originToRemove: string) {
+    const nextOrigins = parseOriginInput(telemetryCreateAllowedOriginsInput).origins.filter(
+      (origin) => origin !== originToRemove,
+    );
+    setTelemetryCreateAllowedOriginsInput(formatOriginInput(nextOrigins));
+    setErrorMessage(null);
+  }
+
+  async function revokeTelemetryKey(kind: "api" | "browser", keyId: string) {
+    await withFeedback(async () => {
+      await requestJson(
+        `projects/${encodeURIComponent(projectId.trim())}/${kind === "browser" ? "browser-keys" : "api-keys"}/${encodeURIComponent(keyId)}/revoke`,
+        {
+          method: "POST",
+        },
+      );
+      if (kind === "browser" && editingBrowserKeyId === keyId) {
+        setEditingBrowserKeyId(null);
+        setEditingBrowserKeyOriginsInput("");
+      }
+      if (kind === "api" && telemetryGeneratedApiKeyId === keyId) {
+        setTelemetryGeneratedApiKeyId(null);
+        setTelemetryKeyPlaintext(null);
+      }
+      if (kind === "browser" && telemetryGeneratedBrowserKeyId === keyId) {
+        setTelemetryGeneratedBrowserKeyId(null);
+        setTelemetryKeyPlaintext(null);
+      }
+      await loadOnboardingState(false);
+    }, kind === "browser" ? "Browser key revoked." : "API key revoked.");
+  }
+
   function beginEditingBrowserKeyOrigins(key: ProjectBrowserKey) {
     setEditingBrowserKeyId(key.id);
-    setTelemetryAllowedOriginsInput(formatOriginInput(key.allowed_origins));
+    setEditingBrowserKeyOriginsInput(formatOriginInput(key.allowed_origins));
     setTelemetryKeyPlaintext(null);
+    setTelemetryGeneratedApiKeyId(null);
+    setTelemetryGeneratedBrowserKeyId(null);
     setErrorMessage(null);
   }
 
@@ -1862,7 +1952,10 @@ export function ProjectOnboardingConsole() {
     if (!editingBrowserKeyId) {
       return;
     }
-    const allowedOrigins = getValidatedBrowserOrigins();
+    const allowedOrigins = getValidatedBrowserOrigins(
+      editingBrowserKeyOriginsInput,
+      "Add at least one deployed app origin before saving this browser key.",
+    );
     if (!allowedOrigins) {
       return;
     }
@@ -1877,18 +1970,24 @@ export function ProjectOnboardingConsole() {
         },
       );
       setEditingBrowserKeyId(null);
+      setEditingBrowserKeyOriginsInput("");
       await loadOnboardingState(false);
     }, "Browser key origins updated.");
   }
 
   async function createTelemetryApiKey() {
-    const browserAllowedOrigins = sdkUsesBrowserCredential ? getValidatedBrowserOrigins() : null;
-    if (sdkUsesBrowserCredential && !browserAllowedOrigins) {
+    const browserAllowedOrigins = telemetryUsesBrowserCredential
+      ? getValidatedBrowserOrigins(
+          telemetryCreateAllowedOriginsInput,
+          "Add at least one deployed app origin before creating a browser key.",
+        )
+      : null;
+    if (telemetryUsesBrowserCredential && !browserAllowedOrigins) {
       return;
     }
     await withFeedback(async () => {
-      const created = sdkUsesBrowserCredential
-        ? await requestJson<{ plaintext_key: string }>(
+      const created = telemetryUsesBrowserCredential
+        ? await requestJson<ProjectBrowserKeyCreateResponse>(
             `projects/${encodeURIComponent(projectId.trim())}/browser-keys`,
             {
               method: "POST",
@@ -1907,10 +2006,23 @@ export function ProjectOnboardingConsole() {
               }),
             },
           );
+      if (telemetryUsesBrowserCredential && browserAllowedOrigins) {
+        setTelemetryCreateAllowedOriginsInput(formatOriginInput(browserAllowedOrigins));
+      }
+      setTelemetryCreateOriginDraft("");
       setTelemetryKeyPlaintext(created.plaintext_key);
+      if (telemetryUsesBrowserCredential) {
+        setTelemetryGeneratedBrowserKeyId(created.browser_key.id);
+        setTelemetryGeneratedApiKeyId(null);
+      } else {
+        setTelemetryGeneratedApiKeyId(created.api_key.id);
+        setTelemetryGeneratedBrowserKeyId(null);
+      }
+      setShowTelemetryKeyDialog(true);
       setEditingBrowserKeyId(null);
+      setEditingBrowserKeyOriginsInput("");
       await loadOnboardingState(false);
-    }, sdkUsesBrowserCredential ? "Telemetry browser key created." : "Telemetry API key created.");
+    }, telemetryUsesBrowserCredential ? "Telemetry browser key created." : "Telemetry API key created.");
   }
 
   async function copyTelemetryKeyToClipboard() {
@@ -1924,7 +2036,7 @@ export function ProjectOnboardingConsole() {
         setCopiedTelemetryKey(false);
       }, 1800);
     } catch {
-      setErrorMessage(`Unable to copy the ${sdkCredentialLabel} to your clipboard.`);
+      setErrorMessage(`Unable to copy the ${telemetryCredentialLabel} to your clipboard.`);
     }
   }
 
@@ -1977,10 +2089,17 @@ export function ProjectOnboardingConsole() {
       setErrorMessage("A public Stimpact platform URL is required before generating an SDK bootstrap PR.");
       return;
     }
-    const browserAllowedOrigins = sdkUsesBrowserCredential ? getValidatedBrowserOrigins() : null;
+    const browserAllowedOrigins = sdkUsesBrowserCredential
+      ? getValidatedBrowserOrigins(
+          telemetryCreateAllowedOriginsInput,
+          "Add at least one deployed app origin before generating a browser-key PR.",
+        )
+      : null;
     if (sdkUsesBrowserCredential && !browserAllowedOrigins) {
       return;
     }
+    const reusableApiKeyId = !sdkUsesBrowserCredential ? telemetryGeneratedApiKeyId : null;
+    const reusableBrowserKeyId = sdkUsesBrowserCredential ? telemetryGeneratedBrowserKeyId : null;
     setCreatingSdkChangeRequest(true);
     setLoading(true);
     setErrorMessage(null);
@@ -1994,6 +2113,10 @@ export function ProjectOnboardingConsole() {
             provider_repository_id: sdkTargetRepositoryId,
             api_key_name: telemetryKeyName.trim() || "Project telemetry key",
             allowed_origins: browserAllowedOrigins ?? [],
+            existing_api_key_id: reusableApiKeyId,
+            existing_browser_key_id: reusableBrowserKeyId,
+            existing_plaintext_key:
+              reusableApiKeyId || reusableBrowserKeyId ? telemetryKeyPlaintext : null,
             service_name: effectiveSdkServiceName.trim(),
             environment: sdkEnvironment.trim() || "production",
             base_url: platformBaseUrl,
@@ -2003,6 +2126,9 @@ export function ProjectOnboardingConsole() {
         },
       );
       setTelemetryKeyPlaintext(response.plaintext_key);
+      setTelemetryGeneratedApiKeyId(response.api_key?.id ?? null);
+      setTelemetryGeneratedBrowserKeyId(response.browser_key?.id ?? null);
+      setShowTelemetryKeyDialog(true);
       setSdkBootstrapPreview(null);
       await loadOnboardingState(false);
       finishStepEditing();
@@ -2137,13 +2263,24 @@ export function ProjectOnboardingConsole() {
   const hasHealthyHeartbeat = telemetryVerification?.status === "healthy";
   const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
   const activeBrowserKeys = state?.browser_keys.filter((item) => item.status === "active") ?? [];
-  const parsedTelemetryOrigins = parseOriginInput(telemetryAllowedOriginsInput);
-  const browserOriginValidationMessage =
-    parsedTelemetryOrigins.invalid.length > 0
-      ? `Fix invalid origins: ${parsedTelemetryOrigins.invalid.join(", ")}`
-      : parsedTelemetryOrigins.origins.length === 0
+  const parsedCreateTelemetryOrigins = parseOriginInput(telemetryCreateAllowedOriginsInput);
+  const createBrowserOriginValidationMessage =
+    parsedCreateTelemetryOrigins.invalid.length > 0
+      ? `Fix invalid origins: ${parsedCreateTelemetryOrigins.invalid.join(", ")}`
+      : parsedCreateTelemetryOrigins.origins.length === 0
         ? "Add at least one deployed app origin for browser telemetry."
-        : null;
+        : parsedCreateTelemetryOrigins.origins.length > BROWSER_KEY_ALLOWED_ORIGIN_LIMIT
+          ? `Use at most ${BROWSER_KEY_ALLOWED_ORIGIN_LIMIT} allowed origins per browser key.`
+          : null;
+  const parsedEditingBrowserOrigins = parseOriginInput(editingBrowserKeyOriginsInput);
+  const editingBrowserOriginValidationMessage =
+    parsedEditingBrowserOrigins.invalid.length > 0
+      ? `Fix invalid origins: ${parsedEditingBrowserOrigins.invalid.join(", ")}`
+      : parsedEditingBrowserOrigins.origins.length === 0
+        ? "Add at least one deployed app origin before saving this browser key."
+        : parsedEditingBrowserOrigins.origins.length > BROWSER_KEY_ALLOWED_ORIGIN_LIMIT
+          ? `Use at most ${BROWSER_KEY_ALLOWED_ORIGIN_LIMIT} allowed origins per browser key.`
+          : null;
   const hasAnyActiveTelemetryKeys = hasActiveApiKeys || hasActiveBrowserKeys;
   const sdkStatusLabel =
     onboardingState?.sdk_setup_status === "change_request"
@@ -2173,6 +2310,7 @@ export function ProjectOnboardingConsole() {
     sdkBootstrapPlan?.strategies.find((item) => item.id === sdkBootstrapPlan.recommended_strategy_id) ??
     sdkBootstrapPlan?.strategies[0] ??
     null;
+  const effectiveSdkBootstrapPreview = sdkBootstrapPreview ?? sdkLatestBootstrapPreview;
   const sdkPreviewAttempts =
     sdkBootstrapPreview?.attempts ??
     sdkLatestBootstrapPreview?.attempts ??
@@ -2432,6 +2570,12 @@ export function ProjectOnboardingConsole() {
     null;
   const sdkUsesBrowserCredential =
     selectedSdkStrategy?.env_vars.some((item) => item.name.includes("BROWSER_KEY")) ?? false;
+  const telemetryUsesBrowserCredential =
+    sdkUsesBrowserCredential ||
+    activeBrowserKeys.length > 0 ||
+    (effectiveProjectService
+      ? BROWSER_FACING_SERVICE_TYPES.has(effectiveProjectService.service_type)
+      : false);
   const sdkCredentialEnvVarName =
     selectedSdkStrategy?.env_vars.find(
       (item) => item.name.includes("BROWSER_KEY") || item.name.includes("API_KEY"),
@@ -2440,6 +2584,7 @@ export function ProjectOnboardingConsole() {
     ? "stimp_browser_replace_me"
     : "stimp_live_replace_me";
   const sdkCredentialLabel = sdkUsesBrowserCredential ? "browser key" : "API key";
+  const telemetryCredentialLabel = telemetryUsesBrowserCredential ? "browser key" : "API key";
   const sdkHelperPlannedFile =
     selectedSdkStrategy?.planned_files.find(
       (item) =>
@@ -2471,22 +2616,22 @@ export function ProjectOnboardingConsole() {
     sdkAttemptWarnings[0] ??
     null;
   const sdkPreviewDiffFiles = useMemo(
-    () => parseUnifiedDiff(sdkBootstrapPreview?.patch_diff),
-    [sdkBootstrapPreview?.patch_diff],
+    () => parseUnifiedDiff(effectiveSdkBootstrapPreview?.patch_diff),
+    [effectiveSdkBootstrapPreview?.patch_diff],
   );
-  const sdkPreviewEnvVarNames = sdkBootstrapPreview?.strategy.env_vars.map((item) => item.name) ?? [];
+  const sdkPreviewEnvVarNames = effectiveSdkBootstrapPreview?.strategy.env_vars.map((item) => item.name) ?? [];
   const sdkPreviewEnvVarSummary = sdkPreviewEnvVarNames.length
     ? sdkPreviewEnvVarNames.join(", ")
     : "the required Stimpact runtime variables";
-  const sdkPreviewNextSteps = sdkBootstrapPreview
+  const sdkPreviewNextSteps = effectiveSdkBootstrapPreview
     ? [
         {
-          title: sdkBootstrapPreview.attempt.change_request_allowed
+          title: effectiveSdkBootstrapPreview.attempt.change_request_allowed
             ? "Approve and create the PR"
             : "Review the preview before opening a PR",
-          detail: sdkBootstrapPreview.attempt.change_request_allowed
+          detail: effectiveSdkBootstrapPreview.attempt.change_request_allowed
             ? `If the diff looks right, open the PR from this screen. Stimpact will generate the required ${sdkCredentialLabel} during PR creation.`
-            : sdkBootstrapPreview.attempt.verification.summary ??
+            : effectiveSdkBootstrapPreview.attempt.verification.summary ??
               "This preview still needs human review before the PR should be created.",
         },
         {
@@ -2759,10 +2904,10 @@ export function ProjectOnboardingConsole() {
             </div>
 
             {selectedProviderIntegration ? (
-              <div className="overflow-hidden rounded-[24px] border border-[rgba(22,101,52,0.18)] bg-white shadow-[0_18px_36px_rgba(34,197,94,0.08)]">
-                <div className="flex items-center justify-between gap-4 border-b border-[rgba(22,101,52,0.14)] bg-[linear-gradient(180deg,rgba(240,253,244,0.98),rgba(231,248,237,0.98))] px-5 py-4">
+              <div className="border-t border-[rgba(29,26,24,0.08)] pt-4">
+                <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-[16px] border border-[rgba(22,101,52,0.2)] bg-[linear-gradient(180deg,#f0fdf4,#dcfce7)] text-[#15803d]">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-[16px] border border-[rgba(22,101,52,0.16)] bg-[rgba(240,253,244,0.9)] text-[#15803d]">
                       {selectedProvider === "github" ? <GitHubGlyph /> : <GitLabGlyph />}
                     </div>
                     <div>
@@ -2780,7 +2925,7 @@ export function ProjectOnboardingConsole() {
                     Connected
                   </span>
                 </div>
-                <div className="grid gap-5 px-5 py-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <div className="mt-4 grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                   <div className="grid gap-4 sm:grid-cols-3">
                     <ConnectionDetail
                       label="Account"
@@ -3008,8 +3153,7 @@ export function ProjectOnboardingConsole() {
             </div>
 
             {secretDrafts.length ? (
-              <div className="rounded-[24px] border border-[rgba(29,26,24,0.08)] bg-[rgba(255,255,255,0.82)] p-5 shadow-[0_12px_28px_rgba(15,23,42,0.04)]">
-              <div className="space-y-5">
+              <div className="space-y-5 border-t border-[rgba(29,26,24,0.08)] pt-4">
                   {secretDrafts.map((draft, index) => (
                     <div
                       key={draft.id}
@@ -3059,12 +3203,11 @@ export function ProjectOnboardingConsole() {
                       </div>
                     </div>
                   ))}
-                </div>
               </div>
             ) : null}
 
             {state?.secret_refs.length ? (
-              <div className="overflow-visible rounded-[24px] border border-[rgba(29,26,24,0.08)] bg-[rgba(255,255,255,0.8)]">
+              <div className="overflow-visible border-t border-[rgba(29,26,24,0.08)] pt-4">
                 {state.secret_refs.map((secretRef, index) => (
                   <SecretManagerRow
                     key={secretRef.id}
@@ -3127,7 +3270,7 @@ export function ProjectOnboardingConsole() {
             stepRefs.current["5"] = node;
           }}
         >
-          <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.72)] p-4">
+          <div className="border-b border-[rgba(17,24,39,0.08)] pb-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="space-y-1">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8178]">
@@ -3170,20 +3313,20 @@ export function ProjectOnboardingConsole() {
           </div>
 
           {loadingRepoProfileInference ? (
-            <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[#746d66]">
+            <div className="mt-4 border-t border-[rgba(17,24,39,0.08)] pt-4 text-sm text-[#746d66]">
               Inspecting the connected repo for install and verify commands...
             </div>
           ) : null}
 
           {!loadingRepoProfileInference && repoProfileInferenceError ? (
-            <div className="mt-4 rounded-[20px] border border-[rgba(255,106,61,0.16)] bg-[rgba(255,106,61,0.08)] p-4">
+            <div className="mt-4 border-t border-[rgba(255,106,61,0.16)] pt-4">
               <p className="text-sm font-semibold text-[#8f4b31]">Repo inspection needs review</p>
               <p className="mt-1 text-sm leading-6 text-[#8f4b31]">{repoProfileInferenceError}</p>
             </div>
           ) : null}
 
           {!loadingRepoProfileInference && repoProfileInference ? (
-            <div className="mt-4 rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-4">
+            <div className="mt-4 border-t border-[rgba(17,24,39,0.08)] pt-4">
               <p className="text-sm font-semibold text-[#171717]">Detected from the connected repo</p>
               <p className="mt-1 text-sm leading-6 text-[#746d66]">
                 {effectiveServiceRepoProfile
@@ -3208,7 +3351,7 @@ export function ProjectOnboardingConsole() {
           ) : null}
 
           {effectiveStepFiveMode === "single" ? (
-            <div className="mt-4 rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+            <div className="mt-4 border-t border-[rgba(17,24,39,0.08)] pt-4">
               <div className="flex flex-col gap-2">
                 <p className="text-sm font-semibold text-[#171717]">Single repo setup</p>
                 <p className="text-sm leading-6 text-[#746d66]">
@@ -3350,7 +3493,7 @@ export function ProjectOnboardingConsole() {
             </div>
           ) : (
             <div className="mt-4 space-y-4">
-              <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+              <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
                 <div className="flex flex-col gap-2">
                   <p className="text-sm font-semibold text-[#171717]">Repo profiles</p>
                   <p className="text-sm leading-6 text-[#746d66]">
@@ -3419,7 +3562,7 @@ export function ProjectOnboardingConsole() {
                 </div>
               </div>
 
-              <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.82)] p-5">
+              <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
                 <div className="flex flex-col gap-2">
                   <p className="text-sm font-semibold text-[#171717]">Map deployable services</p>
                   <p className="text-sm leading-6 text-[#746d66]">
@@ -3497,7 +3640,7 @@ export function ProjectOnboardingConsole() {
           )}
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-5">
+            <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
               <p className="text-sm font-semibold text-[#171717]">Configured repo profiles</p>
               {state?.repo_profiles.length ? (
                 <ul className="mt-4 grid gap-2 text-sm text-[#35547d]">
@@ -3515,7 +3658,7 @@ export function ProjectOnboardingConsole() {
               )}
             </div>
 
-            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.78)] p-5">
+            <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
               <p className="text-sm font-semibold text-[#171717]">Mapped project services</p>
               {state?.project_services.length ? (
                 <div className="mt-4 grid gap-3">
@@ -3583,213 +3726,8 @@ export function ProjectOnboardingConsole() {
             stepRefs.current["6"] = node;
           }}
         >
-          <div className="rounded-[28px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] overflow-hidden">
-            <div className="px-6 py-5">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-[#171717]">Telemetry key</p>
-                  <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
-                    Create the project-scoped telemetry credential first. Your app will use it for telemetry
-                    delivery and heartbeat verification after the SDK is deployed.
-                    {sdkUsesBrowserCredential
-                      ? " Browser keys should only allow the deployed origins you trust."
-                      : ""}
-                  </p>
-                </div>
-                <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f655d]">
-                  {sdkStatusLabel}
-                </span>
-              </div>
-              <div
-                className={`mt-4 grid gap-3 ${
-                  sdkUsesBrowserCredential
-                    ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
-                    : "md:grid-cols-[minmax(0,1fr)_auto] md:items-end"
-                }`}
-              >
-                <label className="block">
-                  <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
-                    {sdkUsesBrowserCredential ? "Browser key name" : "API key name"}
-                  </span>
-                  <input
-                    type="text"
-                    value={telemetryKeyName}
-                    onChange={(event) => setTelemetryKeyName(event.target.value)}
-                    placeholder="Production telemetry key"
-                    className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
-                  />
-                </label>
-                {sdkUsesBrowserCredential ? (
-                  <label className="block">
-                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
-                      Allowed origins
-                    </span>
-                    <textarea
-                      value={telemetryAllowedOriginsInput}
-                      onChange={(event) => setTelemetryAllowedOriginsInput(event.target.value)}
-                      placeholder={"https://app.example.com\nhttps://admin.example.com"}
-                      rows={3}
-                      className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm leading-6 text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
-                    />
-                    <span className="mt-2 block text-xs leading-5 text-[#746d66]">
-                      Enter one deployed browser origin per line or separated by commas.
-                    </span>
-                    {browserOriginValidationMessage ? (
-                      <span className="mt-2 block text-xs font-medium text-[#b45309]">
-                        {browserOriginValidationMessage}
-                      </span>
-                    ) : (
-                      <span className="mt-2 block text-xs font-medium text-[#166534]">
-                        {parsedTelemetryOrigins.origins.length} allowed origin
-                        {parsedTelemetryOrigins.origins.length === 1 ? "" : "s"} ready.
-                      </span>
-                    )}
-                  </label>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={createTelemetryApiKey}
-                  disabled={
-                    loading ||
-                    !telemetryKeyName.trim() ||
-                    (sdkUsesBrowserCredential &&
-                      (!!browserOriginValidationMessage || parsedTelemetryOrigins.origins.length === 0))
-                  }
-                  className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[14px] border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                    activeApiKeys.length || activeBrowserKeys.length
-                      ? "border-[rgba(23,56,93,0.16)] bg-white text-[#17385d] shadow-[0_10px_22px_rgba(15,23,42,0.08)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.26)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
-                      : "border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
-                  }`}
-                >
-                  {activeApiKeys.length || activeBrowserKeys.length ? <PlusMiniGlyph /> : null}
-                  <span>
-                    {activeApiKeys.length || activeBrowserKeys.length
-                      ? `Generate another ${sdkCredentialLabel}`
-                      : `Create telemetry ${sdkCredentialLabel}`}
-                  </span>
-                </button>
-              </div>
-              {sdkUsesBrowserCredential && activeBrowserKeys.length ? (
-                <div className="mt-4 grid gap-3">
-                  {activeBrowserKeys.map((key) => {
-                    const isEditingKey = editingBrowserKeyId === key.id;
-                    return (
-                      <div
-                        key={key.id}
-                        className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.92)] px-4 py-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-[#171717]">{key.name}</p>
-                            <p className="mt-1 text-xs font-mono text-[#6f7b90]">{key.key_prefix}</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => beginEditingBrowserKeyOrigins(key)}
-                            className="inline-flex items-center gap-2 rounded-full border border-[rgba(23,56,93,0.12)] bg-white px-3 py-1.5 text-xs font-semibold text-[#17385d] transition hover:border-[rgba(255,106,61,0.24)]"
-                          >
-                            Edit origins
-                          </button>
-                        </div>
-                        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
-                          Allowed origins
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {key.allowed_origins.length ? (
-                            key.allowed_origins.map((origin) => (
-                              <span
-                                key={`${key.id}-${origin}`}
-                                className="rounded-full bg-[rgba(23,56,93,0.08)] px-3 py-1 text-xs font-medium text-[#17385d]"
-                              >
-                                {origin}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-xs text-[#746d66]">No origins configured.</span>
-                          )}
-                        </div>
-                        {isEditingKey ? (
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void saveBrowserKeyOrigins();
-                              }}
-                              disabled={loading || !!browserOriginValidationMessage}
-                              className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] transition disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              Save origins
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingBrowserKeyId(null);
-                                setTelemetryAllowedOriginsInput("");
-                              }}
-                              className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-[rgba(23,56,93,0.12)] bg-white px-4 py-2 text-sm font-semibold text-[#17385d] transition"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[#4c5c72]">
-                <p>
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
-                    Active keys
-                  </span>{" "}
-                  <span className="font-semibold text-[#171717]">
-                    {activeApiKeys.length + activeBrowserKeys.length}
-                  </span>
-                </p>
-                <p>
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
-                    Target service
-                  </span>{" "}
-                  <span className="font-semibold text-[#171717]">{effectiveSdkServiceName}</span>
-                </p>
-                <p>
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
-                    Environment
-                  </span>{" "}
-                  <span className="font-semibold text-[#171717]">
-                    {sdkEnvironment.trim() || "production"}
-                  </span>
-                </p>
-              </div>
-              {telemetryKeyPlaintext ? (
-                <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-[rgba(240,253,244,0.92)] px-4 py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <p className="text-sm font-semibold text-[#166534]">
-                      {`New plaintext ${sdkCredentialLabel}`}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void copyTelemetryKeyToClipboard();
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-[rgba(22,101,52,0.16)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#166534] transition hover:border-[rgba(22,101,52,0.24)] hover:bg-white"
-                    >
-                      <CopyMiniGlyph />
-                      {copiedTelemetryKey ? "Copied" : "Copy key"}
-                    </button>
-                  </div>
-                  <p className="mt-1 break-all font-mono text-xs leading-6 text-[#166534]">
-                    {telemetryKeyPlaintext}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-[#4d7c0f]">
-                    This plaintext value is only shown here right after creation. Save it in your
-                    deployment environment before leaving the page.
-                  </p>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+          <div className="space-y-6">
+            <div className="border-t border-[rgba(17,24,39,0.08)] pt-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-[#171717]">Choose setup mode</p>
@@ -4328,64 +4266,69 @@ export function ProjectOnboardingConsole() {
                     <p className="py-1 text-sm text-[#4c5c72]">
                       Building the exact bootstrap PR preview for the selected strategy and verifying it in a temp checkout...
                     </p>
-                  ) : sdkBootstrapPreview ? (
+                  ) : effectiveSdkBootstrapPreview ? (
                     <>
                       <div className="space-y-5 py-1">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div className="max-w-3xl">
                             <p className="text-sm font-semibold text-[#171717]">Review generated SDK patch</p>
+                            {!sdkBootstrapPreview && sdkLatestBootstrapPreview ? (
+                              <p className="mt-2 text-xs font-medium uppercase tracking-[0.14em] text-[#6f7b90]">
+                                Showing the last generated preview from this session.
+                              </p>
+                            ) : null}
                             <div className="mt-2 flex flex-wrap gap-2">
                               <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
-                                {sdkBootstrapPreview.strategy.framework}
+                                {effectiveSdkBootstrapPreview.strategy.framework}
                               </span>
-                              {sdkBootstrapPreview.strategy.source === "llm" ? (
+                              {effectiveSdkBootstrapPreview.strategy.source === "llm" ? (
                                 <span className="rounded-full bg-[rgba(255,106,61,0.12)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#a54d2f]">
                                   Model-assisted
                                 </span>
                               ) : null}
                               <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
-                                {sdkBootstrapPreview.strategy.confidence} confidence
+                                {effectiveSdkBootstrapPreview.strategy.confidence} confidence
                               </span>
                               <span
                                 className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                  sdkBootstrapPreview.attempt.verification.status === "passed"
+                                  effectiveSdkBootstrapPreview.attempt.verification.status === "passed"
                                     ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                                    : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                    : effectiveSdkBootstrapPreview.attempt.verification.status === "needs_review"
                                       ? "bg-[rgba(45,127,249,0.12)] text-[#173fbe]"
                                       : "bg-[rgba(255,106,61,0.12)] text-[#a54d2f]"
                                 }`}
                               >
-                                {sdkBootstrapPreview.attempt.verification.status === "passed"
+                                {effectiveSdkBootstrapPreview.attempt.verification.status === "passed"
                                   ? "Verification passed"
-                                  : sdkBootstrapPreview.attempt.verification.status === "needs_review"
+                                  : effectiveSdkBootstrapPreview.attempt.verification.status === "needs_review"
                                     ? "Needs review"
                                     : "Verification failed"}
                               </span>
                             </div>
                             <p className="mt-3 text-sm leading-6 text-[#3f5168]">
-                              {sdkBootstrapPreview.strategy.summary}
+                              {effectiveSdkBootstrapPreview.strategy.summary}
                             </p>
-                            {sdkBootstrapPreview.attempt.verification.summary ? (
+                            {effectiveSdkBootstrapPreview.attempt.verification.summary ? (
                               <p className="mt-2 text-sm leading-6 text-[#3f5168]">
                                 <span className="font-semibold text-[#171717]">Verification:</span>{" "}
-                                {sdkBootstrapPreview.attempt.verification.summary}
+                                {effectiveSdkBootstrapPreview.attempt.verification.summary}
                               </p>
                             ) : null}
-                            {sdkBootstrapPreview.strategy.confidence_reason ? (
+                            {effectiveSdkBootstrapPreview.strategy.confidence_reason ? (
                               <p className="mt-2 text-sm leading-6 text-[#3f5168]">
                                 <span className="font-semibold text-[#171717]">Why this surface:</span>{" "}
-                                {sdkBootstrapPreview.strategy.confidence_reason}
+                                {effectiveSdkBootstrapPreview.strategy.confidence_reason}
                               </p>
                             ) : null}
                           </div>
                           <div className="min-w-[16rem] space-y-2 text-sm text-[#3f5168]">
                             <p>
                               <span className="font-semibold text-[#171717]">Branch:</span>{" "}
-                              {sdkBootstrapPreview.pull_request.branch_name}
+                              {effectiveSdkBootstrapPreview.pull_request.branch_name}
                             </p>
                             <p>
                               <span className="font-semibold text-[#171717]">PR title:</span>{" "}
-                              {sdkBootstrapPreview.pull_request.title}
+                              {effectiveSdkBootstrapPreview.pull_request.title}
                             </p>
                             <p>
                               <span className="font-semibold text-[#171717]">Entrypoint:</span>{" "}
@@ -4396,7 +4339,7 @@ export function ProjectOnboardingConsole() {
 
                         <div className="mt-4 flex flex-wrap gap-2">
                           <span className="rounded-full bg-[rgba(45,127,249,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#173fbe]">
-                            {sdkBootstrapPreview.strategy.planned_files.length} files to update
+                            {effectiveSdkBootstrapPreview.strategy.planned_files.length} files to update
                           </span>
                           <span className="rounded-full bg-[rgba(45,127,249,0.10)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#173fbe]">
                             {sdkPreviewDiffFiles.reduce((total, file) => total + file.additions, 0)} additions
@@ -4405,7 +4348,7 @@ export function ProjectOnboardingConsole() {
                             {sdkPreviewDiffFiles.reduce((total, file) => total + file.deletions, 0)} removals
                           </span>
                           <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5f564f]">
-                            Failure stage: {sdkBootstrapPreview.attempt.failure_stage ?? "none"}
+                            Failure stage: {effectiveSdkBootstrapPreview.attempt.failure_stage ?? "none"}
                           </span>
                         </div>
 
@@ -4415,18 +4358,18 @@ export function ProjectOnboardingConsole() {
                             the agent is showing you the chosen target before PR creation.
                           </p>
                         ) : null}
-                        {sdkBootstrapPreview.attempt.warnings.length ? (
+                        {effectiveSdkBootstrapPreview.attempt.warnings.length ? (
                           <div className="mt-4 space-y-2 text-sm leading-6 text-[#8f4b31]">
-                            {sdkBootstrapPreview.attempt.warnings.map((item) => (
+                            {effectiveSdkBootstrapPreview.attempt.warnings.map((item) => (
                               <p key={item}>
                                 <span className="font-semibold text-[#171717]">Warning:</span> {item}
                               </p>
                             ))}
                           </div>
                         ) : null}
-                        {sdkBootstrapPreview.strategy.blockers.length ? (
+                        {effectiveSdkBootstrapPreview.strategy.blockers.length ? (
                           <div className="mt-4 space-y-2 text-sm leading-6 text-[#8f4b31]">
-                            {sdkBootstrapPreview.strategy.blockers.map((item) => (
+                            {effectiveSdkBootstrapPreview.strategy.blockers.map((item) => (
                               <p key={item}>
                                 <span className="font-semibold text-[#171717]">Guardrail:</span> {item}
                               </p>
@@ -4475,28 +4418,28 @@ export function ProjectOnboardingConsole() {
                         ) : null}
                       </div>
 
-                      {(sdkBootstrapPreview.attempt.verification.command ||
-                        sdkBootstrapPreview.attempt.verification.output ||
-                        sdkBootstrapPreview.pull_request.description) && (
+                      {(effectiveSdkBootstrapPreview.attempt.verification.command ||
+                        effectiveSdkBootstrapPreview.attempt.verification.output ||
+                        effectiveSdkBootstrapPreview.pull_request.description) && (
                         <div className="flex flex-wrap gap-4">
-                          {sdkBootstrapPreview.attempt.verification.command ? (
+                          {effectiveSdkBootstrapPreview.attempt.verification.command ? (
                             <div className="min-w-[22rem] flex-1">
                               <CodePanel
                                 title="Verification command"
-                                code={sdkBootstrapPreview.attempt.verification.command}
+                                code={effectiveSdkBootstrapPreview.attempt.verification.command}
                               />
                             </div>
                           ) : null}
-                          {sdkBootstrapPreview.attempt.verification.output ? (
+                          {effectiveSdkBootstrapPreview.attempt.verification.output ? (
                             <div className="min-w-[22rem] flex-1">
                               <CodePanel
                                 title="Verification output"
-                                code={sdkBootstrapPreview.attempt.verification.output}
+                                code={effectiveSdkBootstrapPreview.attempt.verification.output}
                               />
                             </div>
                           ) : null}
                           <div className="min-w-[22rem] flex-1">
-                            <CodePanel title="Draft PR body" code={sdkBootstrapPreview.pull_request.description} />
+                            <CodePanel title="Draft PR body" code={effectiveSdkBootstrapPreview.pull_request.description} />
                           </div>
                         </div>
                       )}
@@ -4504,8 +4447,8 @@ export function ProjectOnboardingConsole() {
                       <DiffReviewPanel
                         title="Patch review"
                         files={sdkPreviewDiffFiles}
-                        plannedFiles={sdkBootstrapPreview.strategy.planned_files}
-                        rawDiff={sdkBootstrapPreview.patch_diff}
+                        plannedFiles={effectiveSdkBootstrapPreview.strategy.planned_files}
+                        rawDiff={effectiveSdkBootstrapPreview.patch_diff}
                       />
                     </>
                   ) : automaticSdkAvailable ? (
@@ -4691,6 +4634,297 @@ export function ProjectOnboardingConsole() {
             <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
+                  <p className="text-sm font-semibold text-[#171717]">Telemetry credentials</p>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
+                    {sdkSetupMode === "automatic"
+                      ? "Automatic mode will create the telemetry credential during PR approval using the details below."
+                      : "Manual mode lets you create the telemetry credential here so you can copy it into your deployment environment yourself."}
+                  </p>
+                </div>
+                <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f655d]">
+                  {sdkStatusLabel}
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                    {telemetryUsesBrowserCredential ? "Browser key name" : "API key name"}
+                  </span>
+                  <input
+                    type="text"
+                    value={telemetryKeyName}
+                    onChange={(event) => setTelemetryKeyName(event.target.value)}
+                    placeholder="Production telemetry key"
+                    className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
+                  />
+                </label>
+
+                {telemetryUsesBrowserCredential ? (
+                  <div className="border-t border-[rgba(255,106,61,0.14)] pt-4">
+                    <p className="text-sm font-semibold text-[#171717]">Allowed origins</p>
+                    <p className="mt-1 text-sm leading-6 text-[#746d66]">
+                      {sdkSetupMode === "automatic"
+                        ? "These origins will be attached to the browser key created during PR approval."
+                        : "Scope this browser key to the deployed app origins that should be allowed to mint browser ingest tokens."}
+                    </p>
+                    <label className="mt-3 block">
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          type="text"
+                          value={telemetryCreateOriginDraft}
+                          onChange={(event) => setTelemetryCreateOriginDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              addTelemetryCreateOrigin();
+                            }
+                          }}
+                          placeholder="https://app.example.com"
+                          className="min-w-0 flex-1 rounded-[12px] border border-[rgba(20,24,33,0.12)] bg-white px-3 py-2 text-sm text-[#171717] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={addTelemetryCreateOrigin}
+                          disabled={loading || !telemetryCreateOriginDraft.trim()}
+                          className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-[rgba(23,56,93,0.12)] bg-white px-3 py-2 text-sm font-semibold text-[#17385d] transition disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Add origin
+                        </button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                        <span className="text-[#746d66]">
+                          One origin per line or comma-separated. Max {BROWSER_KEY_ALLOWED_ORIGIN_LIMIT}.
+                        </span>
+                        {createBrowserOriginValidationMessage ? (
+                          <span className="font-medium text-[#b45309]">
+                            {createBrowserOriginValidationMessage}
+                          </span>
+                        ) : (
+                          <span className="font-medium text-[#166534]">
+                            {parsedCreateTelemetryOrigins.origins.length} ready
+                          </span>
+                        )}
+                      </div>
+                      {parsedCreateTelemetryOrigins.origins.length ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {parsedCreateTelemetryOrigins.origins.map((origin) => (
+                            <span
+                              key={origin}
+                              className="inline-flex items-center gap-2 rounded-full bg-[rgba(23,56,93,0.08)] px-3 py-1 text-xs font-medium text-[#17385d]"
+                            >
+                              {origin}
+                              <button
+                                type="button"
+                                onClick={() => removeTelemetryCreateOrigin(origin)}
+                                className="text-[#17385d]/70 transition hover:text-[#17385d]"
+                                aria-label={`Remove ${origin}`}
+                              >
+                                x
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-xs text-[#746d66]">No origins added yet.</p>
+                      )}
+                    </label>
+                  </div>
+                ) : null}
+
+                {sdkSetupMode === "manual" ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={createTelemetryApiKey}
+                      disabled={
+                        loading ||
+                        !telemetryKeyName.trim() ||
+                        (telemetryUsesBrowserCredential &&
+                          (!!createBrowserOriginValidationMessage || parsedCreateTelemetryOrigins.origins.length === 0))
+                      }
+                      className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[14px] border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        activeApiKeys.length || activeBrowserKeys.length
+                          ? "border-[rgba(23,56,93,0.16)] bg-white text-[#17385d] shadow-[0_10px_22px_rgba(15,23,42,0.08)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.26)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
+                          : "border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(255,106,61,0.26)]"
+                      }`}
+                    >
+                      {activeApiKeys.length || activeBrowserKeys.length ? <PlusMiniGlyph /> : null}
+                      <span>
+                        {activeApiKeys.length || activeBrowserKeys.length
+                          ? `Generate another ${telemetryCredentialLabel}`
+                          : `Create telemetry ${telemetryCredentialLabel}`}
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              {telemetryUsesBrowserCredential && activeBrowserKeys.length ? (
+                <div className="mt-4 grid gap-3 border-t border-[rgba(17,24,39,0.08)] pt-4">
+                  {activeBrowserKeys.map((key) => {
+                    const isEditingKey = editingBrowserKeyId === key.id;
+                    return (
+                      <div
+                        key={key.id}
+                        className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.92)] px-4 py-4"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-[#171717]">{key.name}</p>
+                            <p className="mt-1 text-xs font-mono text-[#6f7b90]">{maskKeyPreview(key.key_prefix)}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => beginEditingBrowserKeyOrigins(key)}
+                              className="inline-flex items-center gap-2 rounded-full border border-[rgba(23,56,93,0.12)] bg-white px-3 py-1.5 text-xs font-semibold text-[#17385d] transition hover:border-[rgba(255,106,61,0.24)]"
+                            >
+                              Edit origins
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void revokeTelemetryKey("browser", key.id);
+                              }}
+                              disabled={loading}
+                              className="inline-flex items-center gap-2 rounded-full border border-[rgba(185,28,28,0.12)] bg-white px-3 py-1.5 text-xs font-semibold text-[#991b1b] transition hover:border-[rgba(220,38,38,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Revoke key
+                            </button>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                          Allowed origins
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {key.allowed_origins.length ? (
+                            key.allowed_origins.map((origin) => (
+                              <span
+                                key={`${key.id}-${origin}`}
+                                className="rounded-full bg-[rgba(23,56,93,0.08)] px-3 py-1 text-xs font-medium text-[#17385d]"
+                              >
+                                {origin}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-[#746d66]">No origins configured.</span>
+                          )}
+                        </div>
+                        {isEditingKey ? (
+                          <div className="mt-4 space-y-3">
+                            <label className="block">
+                              <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                                Edit allowed origins
+                              </span>
+                              <textarea
+                                value={editingBrowserKeyOriginsInput}
+                                onChange={(event) => setEditingBrowserKeyOriginsInput(event.target.value)}
+                                placeholder={"https://app.example.com\nhttps://admin.example.com"}
+                                rows={3}
+                                className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm leading-6 text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
+                              />
+                              <span className="mt-2 block text-xs leading-5 text-[#746d66]">
+                                Keep this browser key scoped to the deployed origins that should be allowed to mint browser ingest tokens.
+                              </span>
+                              {editingBrowserOriginValidationMessage ? (
+                                <span className="mt-2 block text-xs font-medium text-[#b45309]">
+                                  {editingBrowserOriginValidationMessage}
+                                </span>
+                              ) : (
+                                <span className="mt-2 block text-xs font-medium text-[#166534]">
+                                  {parsedEditingBrowserOrigins.origins.length} allowed origin
+                                  {parsedEditingBrowserOrigins.origins.length === 1 ? "" : "s"} ready.
+                                </span>
+                              )}
+                            </label>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void saveBrowserKeyOrigins();
+                                }}
+                                disabled={loading || !!editingBrowserOriginValidationMessage}
+                                className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] transition disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Save origins
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingBrowserKeyId(null);
+                                  setEditingBrowserKeyOriginsInput("");
+                                }}
+                                className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-[rgba(23,56,93,0.12)] bg-white px-4 py-2 text-sm font-semibold text-[#17385d] transition"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {activeApiKeys.length ? (
+                <div className="mt-4 grid gap-3 border-t border-[rgba(17,24,39,0.08)] pt-4">
+                  {activeApiKeys.map((key: ProjectApiKey) => (
+                    <div
+                      key={key.id}
+                      className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.92)] px-4 py-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-[#171717]">{key.name}</p>
+                          <p className="mt-1 text-xs font-mono text-[#6f7b90]">{maskKeyPreview(key.key_prefix)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void revokeTelemetryKey("api", key.id);
+                          }}
+                          disabled={loading}
+                          className="inline-flex items-center gap-2 rounded-full border border-[rgba(185,28,28,0.12)] bg-white px-3 py-1.5 text-xs font-semibold text-[#991b1b] transition hover:border-[rgba(220,38,38,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Revoke key
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[#4c5c72]">
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                    Active keys
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">
+                    {activeApiKeys.length + activeBrowserKeys.length}
+                  </span>
+                </p>
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                    Target service
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">{effectiveSdkServiceName}</span>
+                </p>
+                <p>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                    Environment
+                  </span>{" "}
+                  <span className="font-semibold text-[#171717]">
+                    {sdkEnvironment.trim() || "production"}
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-[rgba(17,24,39,0.08)] px-6 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
                   <p className="text-sm font-semibold text-[#171717]">Heartbeat verification</p>
                   <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
                     This is the final check after setup and redeploy. Stimpact waits for a heartbeat
@@ -4700,7 +4934,7 @@ export function ProjectOnboardingConsole() {
                 <ActionButton
                   label="Check heartbeat status"
                   onClick={() => {
-                    void loadTelemetryVerification();
+                    void loadTelemetryVerification({ force: true });
                   }}
                   disabled={loading || loadingTelemetryVerification || !effectiveSdkServiceName.trim()}
                   variant="secondary"
@@ -4766,7 +5000,7 @@ export function ProjectOnboardingConsole() {
           }}
         >
           {policyDraft ? (
-            <div className="rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.84)] p-5">
+            <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <SelectField
                   label="Autonomy mode"
@@ -4870,6 +5104,18 @@ export function ProjectOnboardingConsole() {
           onConfirm={() => {
             openManualSdkMode();
           }}
+        />
+        <TelemetryKeyDialog
+          open={showTelemetryKeyDialog && Boolean(telemetryKeyPlaintext)}
+          credentialLabel={telemetryCredentialLabel}
+          plaintextKey={telemetryKeyPlaintext}
+          showPlaintext={showTelemetryKeyPlaintext}
+          copied={copiedTelemetryKey}
+          onToggleVisibility={() => setShowTelemetryKeyPlaintext((current) => !current)}
+          onCopy={() => {
+            void copyTelemetryKeyToClipboard();
+          }}
+          onClose={() => setShowTelemetryKeyDialog(false)}
         />
       </div>
     </div>
@@ -5011,10 +5257,10 @@ function SubStepCard({
 }) {
   return (
     <div
-      className={`space-y-4 rounded-[22px] border p-5 ${
+      className={`space-y-4 border-t pt-4 ${
         tone === "warm"
-          ? "border-[rgba(255,178,83,0.14)] bg-[linear-gradient(180deg,rgba(245,236,227,0.98),rgba(239,229,220,0.98))]"
-          : "border-[rgba(29,26,24,0.08)] bg-[linear-gradient(180deg,rgba(244,239,232,0.98),rgba(238,232,225,0.98))]"
+          ? "border-[rgba(255,178,83,0.18)]"
+          : "border-[rgba(29,26,24,0.08)]"
       }`}
     >
       <p className="text-sm font-semibold text-[#171717]">{title}</p>
@@ -6195,6 +6441,86 @@ function ManualFallbackDialog({
   );
 }
 
+function TelemetryKeyDialog({
+  open,
+  credentialLabel,
+  plaintextKey,
+  showPlaintext,
+  copied,
+  onToggleVisibility,
+  onCopy,
+  onClose,
+}: {
+  open: boolean;
+  credentialLabel: string;
+  plaintextKey: string | null;
+  showPlaintext: boolean;
+  copied: boolean;
+  onToggleVisibility: () => void;
+  onCopy: () => void;
+  onClose: () => void;
+}) {
+  if (!open || !plaintextKey || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-[rgba(15,23,42,0.42)] px-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-[rgba(22,101,52,0.10)] bg-[linear-gradient(180deg,#f7fff9,#eefbf2)] p-6 shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#15803d]">
+              Key created
+            </p>
+            <h3 className="mt-2 text-xl font-semibold text-[#171717]">
+              {`Copy your new ${credentialLabel}`}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-[rgba(29,26,24,0.08)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#6f655d] transition hover:border-[rgba(255,106,61,0.2)] hover:bg-white"
+          >
+            Close
+          </button>
+        </div>
+
+        <p className="mt-4 text-sm leading-6 text-[#4d7c0f]">
+          This plaintext value is only shown here right after creation. Save it in your deployment environment before leaving the page.
+        </p>
+
+        <div className="mt-4 rounded-[18px] border border-[rgba(34,197,94,0.16)] bg-white/80 px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-[#166534]">{`New plaintext ${credentialLabel}`}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onToggleVisibility}
+                className="inline-flex items-center gap-2 rounded-full border border-[rgba(22,101,52,0.16)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#166534] transition hover:border-[rgba(22,101,52,0.24)] hover:bg-white"
+              >
+                {showPlaintext ? <EyeOff size={14} /> : <Eye size={14} />}
+                {showPlaintext ? "Hide key" : "Show key"}
+              </button>
+              <button
+                type="button"
+                onClick={onCopy}
+                className="inline-flex items-center gap-2 rounded-full border border-[rgba(22,101,52,0.16)] bg-white/80 px-3 py-1.5 text-xs font-semibold text-[#166534] transition hover:border-[rgba(22,101,52,0.24)] hover:bg-white"
+              >
+                <CopyMiniGlyph />
+                {copied ? "Copied" : "Copy key"}
+              </button>
+            </div>
+          </div>
+          <p className="mt-3 break-all font-mono text-xs leading-6 text-[#166534]">
+            {showPlaintext ? plaintextKey : maskCredentialValue(plaintextKey)}
+          </p>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function Banner({
   tone,
   message,
@@ -6213,4 +6539,27 @@ function Banner({
       {message}
     </div>
   );
+}
+
+function maskCredentialValue(value: string): string {
+  if (value.length <= 10) {
+    return "*".repeat(value.length);
+  }
+  const visiblePrefix = value.slice(0, 8);
+  const visibleSuffix = value.slice(-4);
+  return `${visiblePrefix}${"*".repeat(Math.max(6, value.length - 12))}${visibleSuffix}`;
+}
+
+function maskKeyPreview(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("stimp_browser_")) {
+    return `stimp_br${"*".repeat(34)}`;
+  }
+  if (normalized.startsWith("stimp_live_")) {
+    return `stimp_li${"*".repeat(34)}`;
+  }
+  return `${normalized.slice(0, Math.min(8, normalized.length))}${"*".repeat(24)}`;
 }

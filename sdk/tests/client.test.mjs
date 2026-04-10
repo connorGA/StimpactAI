@@ -56,6 +56,43 @@ test("captureError exchanges a browser key for a short-lived bearer token", asyn
   assert.equal(calls[1][1].headers["X-Stimpact-Project-Key"], undefined);
 });
 
+test("browser token failures are cooled down after a non-retryable auth error", async () => {
+  let attempts = 0;
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    browserKey: "stimp_browser_public",
+    service: "billing-web",
+    retryAttempts: 0,
+    browserTokenFailureCooldownMs: 60_000,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/telemetry/browser-token")) {
+        attempts += 1;
+        return new Response(JSON.stringify({ error: "forbidden" }), { status: 403 });
+      }
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  await assert.rejects(
+    client.captureError({ error: new Error("boom-1") }),
+    (error) =>
+      error instanceof StimpactRequestError &&
+      error.status === 403 &&
+      error.retryable === false,
+  );
+
+  await assert.rejects(
+    client.captureError({ error: new Error("boom-2") }),
+    (error) =>
+      error instanceof StimpactRequestError &&
+      error.status === 403 &&
+      error.retryable === false,
+  );
+
+  assert.equal(attempts, 1);
+});
+
 test("captureError retries transient failures and throws on repeated non-2xx", async () => {
   let attempts = 0;
   const client = new StimpactClient({
@@ -164,6 +201,49 @@ test("sendHeartbeat posts to the heartbeat endpoint", async () => {
   assert.equal(payload.project_id, "project-1");
   assert.equal(payload.service, "billing-web");
   assert.equal(payload.commit_sha, "abc123");
+});
+
+test("heartbeat scheduler supports pause, resume, and manual trigger", async () => {
+  const calls = [];
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-web",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  const subscription = client.startHeartbeat({
+    intervalMs: 50,
+    immediate: false,
+    jitterRatio: 0,
+  });
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(calls.length, 1);
+    assert.equal(subscription.isRunning(), true);
+
+    subscription.pause();
+    assert.equal(subscription.isRunning(), false);
+    const pausedCount = calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(calls.length, pausedCount);
+
+    await subscription.triggerNow({ commitSha: "manual-check" });
+    assert.equal(calls.length, pausedCount + 1);
+    assert.equal(JSON.parse(calls.at(-1)[1].body).commit_sha, "manual-check");
+
+    subscription.resume();
+    assert.equal(subscription.isRunning(), true);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(calls.length >= pausedCount + 2);
+  } finally {
+    subscription.dispose();
+  }
 });
 
 test("request and response context are redacted and omitted by default", async () => {

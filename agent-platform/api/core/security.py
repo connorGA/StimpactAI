@@ -35,6 +35,7 @@ from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.identity_repository import IdentityRepository
 from api.schemas.telemetry import TelemetryErrorRequest, TelemetryHeartbeatRequest
 from models.auth import OrganizationMembershipRole
+from models.control_plane import ProjectBrowserKeyStatus
 
 PROJECT_API_KEY_HEADER = "X-Stimpact-Project-Key"
 BEARER_PREFIX = "Bearer "
@@ -283,7 +284,11 @@ def _extract_request_origin(request: Request) -> str | None:
 
 def _assert_origin_allowed(*, allowed_origins: list[str], request_origin: str | None) -> None:
     if not allowed_origins:
-        return
+        raise APIError(
+            "This browser telemetry credential has no allowed origins configured.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="browser_origin_not_configured",
+        )
     normalized_allowed = {_normalize_origin(item) for item in allowed_origins}
     if request_origin is None or request_origin not in normalized_allowed:
         raise APIError(
@@ -620,6 +625,36 @@ async def authorize_telemetry_ingest_payload(
         if token_context.origin is not None and request_origin != token_context.origin:
             raise APIError(
                 "The browser ingest token is not valid for this request origin.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_origin_mismatch",
+            )
+        browser_key_record = await repository.get_project_browser_key(token_context.browser_key_id)
+        if (
+            browser_key_record is None
+            or browser_key_record.project_id != payload.project_id
+            or browser_key_record.status is not ProjectBrowserKeyStatus.ACTIVE
+        ):
+            raise APIError(
+                "The browser ingest token is no longer tied to an active browser telemetry key.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_key_invalid",
+            )
+        if not browser_key_record.allowed_origins:
+            raise APIError(
+                "The browser telemetry key no longer has any allowed origins configured.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_key_unconfigured",
+            )
+        if request_origin is None:
+            raise APIError(
+                "The browser ingest token request origin is missing.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                code="browser_ingest_token_origin_missing",
+            )
+        normalized_allowed_origins = {_normalize_origin(item) for item in browser_key_record.allowed_origins}
+        if request_origin not in normalized_allowed_origins:
+            raise APIError(
+                "The browser ingest token is no longer valid for this request origin.",
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 code="browser_ingest_token_origin_mismatch",
             )

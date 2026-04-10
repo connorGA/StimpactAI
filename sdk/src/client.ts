@@ -3,6 +3,7 @@ import type {
   BrowserCaptureSubscription,
   CaptureErrorInput,
   HeartbeatInput,
+  HeartbeatScheduleOptions,
   HeartbeatSubscription,
   StimpactClientOptions,
   StimpactEnvironment,
@@ -72,6 +73,7 @@ export class StimpactClient {
       | "timeoutMs"
       | "retryAttempts"
       | "retryDelayMs"
+      | "browserTokenFailureCooldownMs"
       | "captureRequestContext"
       | "captureResponseContext"
       | "includeBodies"
@@ -92,6 +94,8 @@ export class StimpactClient {
   private cachedBrowserToken: string | null = null;
   private cachedBrowserTokenExpiresAtMs = 0;
   private browserTokenPromise: Promise<string> | null = null;
+  private browserTokenFailure: StimpactRequestError | null = null;
+  private browserTokenFailureBlockedUntilMs = 0;
 
   constructor(options: StimpactClientOptions) {
     if (!options.apiKey && !options.browserKey && !options.browserTokenEndpoint && !options.tokenProvider) {
@@ -108,6 +112,7 @@ export class StimpactClient {
       timeoutMs: options.timeoutMs ?? 5_000,
       retryAttempts: options.retryAttempts ?? 2,
       retryDelayMs: options.retryDelayMs ?? 250,
+      browserTokenFailureCooldownMs: options.browserTokenFailureCooldownMs ?? 60_000,
       captureRequestContext: options.captureRequestContext ?? false,
       captureResponseContext: options.captureResponseContext ?? false,
       includeBodies: options.includeBodies ?? false,
@@ -148,21 +153,134 @@ export class StimpactClient {
     await this.sendHeartbeatPayload(payload);
   }
 
-  startHeartbeat(options: HeartbeatInput & { intervalMs?: number } = {}): HeartbeatSubscription {
+  async ping(input: HeartbeatInput = {}): Promise<void> {
+    await this.sendHeartbeat(input);
+  }
+
+  startHeartbeat(options: HeartbeatScheduleOptions = {}): HeartbeatSubscription {
     const intervalMs = options.intervalMs ?? 300_000;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    void this.sendHeartbeat(options);
-    if (typeof setInterval !== "undefined") {
-      intervalId = setInterval(() => {
-        void this.sendHeartbeat(options);
-      }, intervalMs);
+    const jitterRatio = clampNumber(options.jitterRatio ?? 0.1, 0, 0.5);
+    const immediate = options.immediate ?? true;
+    const pauseWhenHidden = options.pauseWhenHidden ?? false;
+    const skipWhenOffline = options.skipWhenOffline ?? true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+    let paused = false;
+
+    const clearScheduledHeartbeat = () => {
+      if (timeoutId !== null && typeof clearTimeout !== "undefined") {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = null;
+    };
+
+    const isDocumentHidden = () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden";
+    const isNavigatorOffline = () =>
+      typeof navigator !== "undefined" &&
+      "onLine" in navigator &&
+      navigator.onLine === false;
+
+    const shouldSkipHeartbeat = () =>
+      (pauseWhenHidden && isDocumentHidden()) || (skipWhenOffline && isNavigatorOffline());
+
+    const scheduleNextHeartbeat = () => {
+      if (disposed || paused || typeof setTimeout === "undefined") {
+        return;
+      }
+      clearScheduledHeartbeat();
+      const jitterWindowMs = Math.round(intervalMs * jitterRatio);
+      const delayMs =
+        jitterWindowMs > 0 ? intervalMs - jitterWindowMs + Math.round(Math.random() * jitterWindowMs * 2) : intervalMs;
+      timeoutId = setTimeout(() => {
+        void triggerHeartbeat().catch(() => undefined);
+      }, delayMs);
+    };
+
+    const triggerHeartbeat = async (input: HeartbeatInput = options) => {
+      if (disposed) {
+        return;
+      }
+      if (shouldSkipHeartbeat()) {
+        scheduleNextHeartbeat();
+        return;
+      }
+      try {
+        await this.sendHeartbeat(input);
+      } finally {
+        scheduleNextHeartbeat();
+      }
+    };
+
+    const resume = () => {
+      if (disposed) {
+        return;
+      }
+      paused = false;
+      scheduleNextHeartbeat();
+    };
+
+    const pause = () => {
+      paused = true;
+      clearScheduledHeartbeat();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!pauseWhenHidden || disposed) {
+        return;
+      }
+      if (isDocumentHidden()) {
+        pause();
+        return;
+      }
+      resume();
+    };
+
+    const handleOnline = () => {
+      if (!skipWhenOffline || disposed) {
+        return;
+      }
+      resume();
+      void triggerHeartbeat().catch(() => undefined);
+    };
+
+    const handleOffline = () => {
+      if (!skipWhenOffline || disposed) {
+        return;
+      }
+      pause();
+    };
+
+    if (pauseWhenHidden && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
     }
+    if (skipWhenOffline && typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+      window.addEventListener("offline", handleOffline);
+    }
+
+    if (immediate) {
+      void triggerHeartbeat().catch(() => undefined);
+    } else {
+      scheduleNextHeartbeat();
+    }
+
     return {
       dispose: () => {
-        if (intervalId !== null && typeof clearInterval !== "undefined") {
-          clearInterval(intervalId);
+        disposed = true;
+        clearScheduledHeartbeat();
+        if (pauseWhenHidden && typeof document !== "undefined") {
+          document.removeEventListener("visibilitychange", handleVisibilityChange);
+        }
+        if (skipWhenOffline && typeof window !== "undefined") {
+          window.removeEventListener("online", handleOnline);
+          window.removeEventListener("offline", handleOffline);
         }
       },
+      pause,
+      resume,
+      triggerNow: (input: HeartbeatInput = options) => triggerHeartbeat(input),
+      isRunning: () => !disposed && !paused,
     };
   }
 
@@ -363,6 +481,12 @@ export class StimpactClient {
     ) {
       return this.cachedBrowserToken;
     }
+    if (
+      this.browserTokenFailure &&
+      Date.now() < this.browserTokenFailureBlockedUntilMs
+    ) {
+      throw this.browserTokenFailure;
+    }
     if (this.browserTokenPromise) {
       return this.browserTokenPromise;
     }
@@ -384,18 +508,27 @@ export class StimpactClient {
       service: payload.service,
       environment: payload.environment,
     };
-    const response = await this.performJsonRequest(endpoint, body);
-    const parsed = (await safeReadResponseJson(response)) as BrowserTokenResponse | null;
-    const token = typeof parsed?.token === "string" ? parsed.token : null;
-    if (!token) {
-      throw new StimpactRequestError(
-        "Browser token request succeeded without a token payload.",
-      );
+    try {
+      const response = await this.performJsonRequest(endpoint, body);
+      const parsed = (await safeReadResponseJson(response)) as BrowserTokenResponse | null;
+      const token = typeof parsed?.token === "string" ? parsed.token : null;
+      if (!token) {
+        throw new StimpactRequestError(
+          "Browser token request succeeded without a token payload.",
+        );
+      }
+      const expiresAtMs = resolveTokenExpiryMs(parsed);
+      this.cachedBrowserToken = token;
+      this.cachedBrowserTokenExpiresAtMs = expiresAtMs;
+      this.browserTokenFailure = null;
+      this.browserTokenFailureBlockedUntilMs = 0;
+      return token;
+    } catch (error) {
+      if (error instanceof StimpactRequestError) {
+        this.rememberBrowserTokenFailure(error);
+      }
+      throw error;
     }
-    const expiresAtMs = resolveTokenExpiryMs(parsed);
-    this.cachedBrowserToken = token;
-    this.cachedBrowserTokenExpiresAtMs = expiresAtMs;
-    return token;
   }
 
   private async performJsonRequest(
@@ -445,6 +578,17 @@ export class StimpactClient {
         clearTimeout(timeout);
       }
     }
+  }
+
+  private rememberBrowserTokenFailure(error: StimpactRequestError): void {
+    if (error.retryable) {
+      return;
+    }
+    this.cachedBrowserToken = null;
+    this.cachedBrowserTokenExpiresAtMs = 0;
+    this.browserTokenFailure = error;
+    this.browserTokenFailureBlockedUntilMs =
+      Date.now() + this.options.browserTokenFailureCooldownMs;
   }
 }
 
@@ -655,4 +799,11 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
 }
