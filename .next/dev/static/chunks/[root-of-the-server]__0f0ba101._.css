@@ -988,6 +988,10 @@
     min-height: calc(var(--spacing) * 28);
   }
 
+  .min-h-\[40px\] {
+    min-height: 40px;
+  }
+
   .min-h-\[44px\] {
     min-height: 44px;
   }
@@ -1731,6 +1735,10 @@
 
   .border-\[rgba\(23\,23\,23\,0\.22\)\] {
     border-color: #17171738;
+  }
+
+  .border-\[rgba\(23\,56\,93\,0\.12\)\] {
+    border-color: #17385d1f;
   }
 
   .border-\[rgba\(23\,56\,93\,0\.14\)\] {
@@ -3428,6 +3436,10 @@
     color: #b42318;
   }
 
+  .text-\[\#b45309\] {
+    color: #b45309;
+  }
+
   .text-\[\#b63412\] {
     color: #b63412;
   }
@@ -4783,6 +4795,12 @@
   @media (min-width: 48rem) {
     .md\:grid-cols-\[minmax\(0\,1fr\)_auto\] {
       grid-template-columns: minmax(0, 1fr) auto;
+    }
+  }
+
+  @media (min-width: 48rem) {
+    .md\:grid-cols-\[minmax\(0\,1fr\)_minmax\(0\,1fr\)_auto\] {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     }
   }
 

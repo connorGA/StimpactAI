@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.core.origins import normalize_origin_list
 from models.control_plane import (
     AutonomyMode,
     ProjectServiceDependencyKind,
@@ -133,19 +134,25 @@ class CreateProjectBrowserKeyRequest(BaseModel):
     @field_validator("allowed_origins")
     @classmethod
     def validate_allowed_origins(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            candidate = value.strip().rstrip("/")
-            if not candidate:
-                continue
+        normalized = normalize_origin_list(values)
+        for candidate in normalized:
             if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
                 raise ValueError("allowed origins must be absolute http or https origins")
-            lowered = candidate.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            normalized.append(candidate)
+        return normalized
+
+
+class UpdateProjectBrowserKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def validate_allowed_origins(cls, values: list[str]) -> list[str]:
+        normalized = normalize_origin_list(values)
+        for candidate in normalized:
+            if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
+                raise ValueError("allowed origins must be absolute http or https origins")
         return normalized
 
 
@@ -429,6 +436,7 @@ class CreateSdkBootstrapChangeRequestRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=128)
     provider_repository_id: str = Field(min_length=1, max_length=256)
     api_key_name: str = Field(min_length=1, max_length=200)
+    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
     service_name: str = Field(min_length=1, max_length=200)
     environment: str = Field(default="production", min_length=1, max_length=64)
     base_url: str = Field(min_length=1, max_length=1000)
@@ -460,6 +468,15 @@ class CreateSdkBootstrapChangeRequestRequest(BaseModel):
         if not (value.startswith("http://") or value.startswith("https://")):
             raise ValueError("base_url must be an absolute http or https URL")
         return value
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def validate_allowed_origins(cls, values: list[str]) -> list[str]:
+        normalized = normalize_origin_list(values)
+        for candidate in normalized:
+            if not re.match(r"^https?://[^/\s]+(?::\d+)?$", candidate):
+                raise ValueError("allowed origins must be absolute http or https origins")
+        return normalized
 
 
 class SdkBootstrapChangeRequestResponse(BaseModel):

@@ -96,3 +96,10 @@ export async function DELETE(
 ) {
   return proxyOnboardingRequest(request, context);
 }
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxyOnboardingRequest(request, context);
+}

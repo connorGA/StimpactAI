@@ -103,6 +103,46 @@ test("wrapAsync preserves the original error when telemetry capture fails", asyn
   assert.ok(original.captureFailure instanceof Error);
 });
 
+test("browser auto-capture ignores SDK transport errors", async () => {
+  const listeners = new Map();
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type) {
+      listeners.delete(type);
+    },
+  };
+
+  let attempts = 0;
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-api",
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  try {
+    const subscription = client.registerBrowserAutoCapture();
+    listeners.get("unhandledrejection")?.({
+      reason: new StimpactRequestError("Request failed before the platform acknowledged it.", {
+        retryable: true,
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    subscription.dispose();
+  } finally {
+    globalThis.window = originalWindow;
+  }
+
+  assert.equal(attempts, 0);
+});
+
 test("sendHeartbeat posts to the heartbeat endpoint", async () => {
   const calls = [];
   const client = new StimpactClient({

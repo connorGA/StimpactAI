@@ -59,6 +59,8 @@ stimpact.startHeartbeat();
 stimpact.registerBrowserAutoCapture();
 ```
 
+When you use `browserKey`, configure the deployed app origins that are allowed to exchange that key for a short-lived browser token. Stimpact checks both CORS and the browser key's `allowed_origins`, then binds the issued ingest token to the request origin.
+
 For the strongest separation, use `browserTokenEndpoint` or `tokenProvider` so your app backend can mint short-lived ingest tokens without exposing any long-lived server credential to the browser.
 
 ## Browser autocapture
@@ -69,6 +71,8 @@ const subscription = stimpact.registerBrowserAutoCapture();
 // Later, if needed:
 subscription.dispose();
 ```
+
+The SDK ignores its own transport errors during browser auto-capture so a failed telemetry request does not recursively report itself as another browser error.
 
 ## Wrapped async flows
 

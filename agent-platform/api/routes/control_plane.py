@@ -76,6 +76,7 @@ from api.schemas.control_plane import (
     SdkBootstrapStrategyResponse,
     SdkBootstrapVerificationResponse,
     UpdateProjectPolicyRequest,
+    UpdateProjectBrowserKeyRequest,
     UpdateProjectOnboardingStateRequest,
     UpdateProjectServiceRequest,
 )
@@ -97,6 +98,7 @@ from services.sdk_bootstrap import (
     prepare_sdk_bootstrap_preview_from_clone,
 )
 from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner
+from services.telemetry_origin_registry import TelemetryOriginRegistry
 
 router = APIRouter(
     prefix="/control-plane",
@@ -156,6 +158,12 @@ def _assert_project_matches(path_project_id: str, payload_project_id: str) -> No
             status_code=status.HTTP_400_BAD_REQUEST,
             code="project_mismatch",
         )
+
+
+def _invalidate_telemetry_origin_registry(request: Request) -> None:
+    registry = getattr(request.app.state, "telemetry_origin_registry", None)
+    if isinstance(registry, TelemetryOriginRegistry):
+        registry.invalidate_cache()
 
 
 async def _require_project_integration(
@@ -759,6 +767,7 @@ async def revoke_project_api_key(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_project_browser_key(
+    request: Request,
     project_id: str,
     payload: CreateProjectBrowserKeyRequest,
     repository: ControlPlaneRepository = Depends(get_control_plane_repository),
@@ -771,6 +780,7 @@ async def create_project_browser_key(
         key_hash=hash_api_key(plaintext_key),
         allowed_origins=payload.allowed_origins,
     )
+    _invalidate_telemetry_origin_registry(request)
     return ProjectBrowserKeyCreateResponse(
         browser_key=ProjectBrowserKeyResponse.from_record(record),
         plaintext_key=plaintext_key,
@@ -796,6 +806,7 @@ async def list_project_browser_keys(
     status_code=status.HTTP_200_OK,
 )
 async def revoke_project_browser_key(
+    request: Request,
     project_id: str,
     key_id: str,
     repository: ControlPlaneRepository = Depends(get_control_plane_repository),
@@ -808,7 +819,35 @@ async def revoke_project_browser_key(
             code="project_browser_key_not_found",
         )
     revoked = await repository.revoke_project_browser_key(key_id)
+    _invalidate_telemetry_origin_registry(request)
     return ProjectBrowserKeyResponse.from_record(revoked)
+
+
+@router.patch(
+    "/projects/{project_id}/browser-keys/{key_id}",
+    response_model=ProjectBrowserKeyResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_project_browser_key(
+    request: Request,
+    project_id: str,
+    key_id: str,
+    payload: UpdateProjectBrowserKeyRequest,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectBrowserKeyResponse:
+    record = await repository.get_project_browser_key(key_id)
+    if record is None or record.project_id != project_id:
+        raise APIError(
+            f"Project browser key {key_id} was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="project_browser_key_not_found",
+        )
+    updated = await repository.update_project_browser_key(
+        key_id,
+        allowed_origins=payload.allowed_origins,
+    )
+    _invalidate_telemetry_origin_registry(request)
+    return ProjectBrowserKeyResponse.from_record(updated)
 
 
 @router.get(
@@ -1003,6 +1042,7 @@ async def preview_project_sdk_bootstrap_change_request(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_project_sdk_bootstrap_change_request(
+    request: Request,
     project_id: str,
     payload: CreateSdkBootstrapChangeRequestRequest,
     repository: ControlPlaneRepository = Depends(get_control_plane_repository),
@@ -1084,8 +1124,9 @@ async def create_project_sdk_bootstrap_change_request(
             name=payload.api_key_name,
             key_prefix=key_prefix,
             key_hash=hash_api_key(plaintext_key),
-            allowed_origins=[],
+            allowed_origins=payload.allowed_origins,
         )
+        _invalidate_telemetry_origin_registry(request)
     else:
         api_key_record = await repository.create_project_api_key(
             project_id=project_id,

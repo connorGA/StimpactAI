@@ -420,6 +420,20 @@ export async function createProjectBrowserKey(
   );
 }
 
+export async function updateProjectBrowserKey(
+  projectId: string,
+  keyId: string,
+  body: { allowed_origins: string[] },
+): Promise<ProjectBrowserKey> {
+  return fetchFromControlPlane<ProjectBrowserKey>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/browser-keys/${encodeURIComponent(keyId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export async function revokeProjectBrowserKey(
   projectId: string,
   keyId: string,

@@ -202,17 +202,23 @@ export class StimpactClient {
       options.captureUnhandledRejections ?? true;
 
     const errorListener = (event: ErrorEvent) => {
+      if (this.shouldIgnoreAutoCapturedError(event.error)) {
+        return;
+      }
       void this.captureError({
         error: event.error ?? event.message,
         service: this.options.service,
-      });
+      }).catch(() => undefined);
     };
 
     const rejectionListener = (event: PromiseRejectionEvent) => {
+      if (this.shouldIgnoreAutoCapturedError(event.reason)) {
+        return;
+      }
       void this.captureError({
         error: event.reason ?? "Unhandled promise rejection",
         service: this.options.service,
-      });
+      }).catch(() => undefined);
     };
 
     if (captureWindowErrors) {
@@ -232,6 +238,10 @@ export class StimpactClient {
         }
       },
     };
+  }
+
+  private shouldIgnoreAutoCapturedError(error: unknown): boolean {
+    return error instanceof StimpactRequestError;
   }
 
   private async sendTelemetry(payload: TelemetryPayload): Promise<void> {

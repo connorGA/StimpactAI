@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.core.errors import APIError, register_exception_handlers
+from api.middleware.telemetry_cors import install_telemetry_cors_middleware
 from api.core.security import (
     build_browser_ingest_token,
     get_security_control_plane_repository,
@@ -99,6 +100,7 @@ from services.provider_integration_service import (
     ProviderWritebackResult,
 )
 from services.repo_profile_inference import RepoProfileInferenceResult
+from services.telemetry_origin_registry import TelemetryOriginRegistry
 
 
 def build_test_app() -> FastAPI:
@@ -112,6 +114,7 @@ def build_test_app() -> FastAPI:
     app = FastAPI()
     app.state.postgres = StubPostgresManager()
     register_exception_handlers(app)
+    install_telemetry_cors_middleware(app)
     app.include_router(health_router)
     app.include_router(telemetry_router)
     app.include_router(incident_chat_router)
@@ -447,6 +450,20 @@ class StubControlPlaneRepository:
             for record in self.project_browser_keys
         )
 
+    async def list_active_project_browser_key_origins(self) -> list[str]:
+        origins: list[str] = []
+        seen: set[str] = set()
+        for record in self.project_browser_keys:
+            if record.status is not ProjectBrowserKeyStatus.ACTIVE:
+                continue
+            for origin in record.allowed_origins:
+                normalized = origin.lower()
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                origins.append(normalized)
+        return origins
+
     async def mark_project_api_key_used(self, key_id: str) -> ProjectApiKeyRecord:
         for index, record in enumerate(self.project_api_keys):
             if record.id == key_id:
@@ -491,6 +508,24 @@ class StubControlPlaneRepository:
                     update={
                         "status": ProjectBrowserKeyStatus.REVOKED,
                         "revoked_at": datetime.now(tz=UTC),
+                    }
+                )
+                self.project_browser_keys[index] = updated
+                return updated
+        raise AssertionError(f"unknown project browser key {key_id}")
+
+    async def update_project_browser_key(
+        self,
+        key_id: str,
+        *,
+        allowed_origins: list[str],
+    ) -> ProjectBrowserKeyRecord:
+        for index, record in enumerate(self.project_browser_keys):
+            if record.id == key_id:
+                updated = record.model_copy(
+                    update={
+                        "allowed_origins": list(allowed_origins),
+                        "updated_at": datetime.now(tz=UTC),
                     }
                 )
                 self.project_browser_keys[index] = updated
@@ -1374,6 +1409,7 @@ def test_browser_telemetry_token_rejects_wrong_origin() -> None:
         )
     )
     app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_telemetry_control_plane_repository] = lambda: repository
 
     client = TestClient(app)
     response = client.post(
@@ -1389,6 +1425,70 @@ def test_browser_telemetry_token_rejects_wrong_origin() -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "browser_origin_not_allowed"
+
+
+def test_browser_telemetry_token_preflight_returns_cors_headers(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ALLOW_LEGACY_BROWSER_TOKEN_EXCHANGE", "true")
+    monkeypatch.setenv("CLIENT_UI_BASE_URL", "https://app.example.com")
+
+    app = build_test_app()
+    client = TestClient(app)
+    response = client.options(
+        "/telemetry/browser-token",
+        headers={
+            "Origin": "https://app.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == "https://app.example.com"
+    assert response.headers["Access-Control-Allow-Methods"] == "OPTIONS, POST"
+    assert response.headers["Access-Control-Allow-Headers"] == "authorization, content-type, x-stimpact-project-key"
+    assert response.headers["Access-Control-Max-Age"] == "600"
+    assert response.headers["Vary"] == "Origin"
+
+
+def test_browser_telemetry_token_preflight_uses_active_browser_key_origins(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ALLOW_LEGACY_BROWSER_TOKEN_EXCHANGE", "true")
+
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_browser_keys.append(
+        ProjectBrowserKeyRecord(
+            id="browser-key-1",
+            project_id="project-1",
+            name="Browser telemetry",
+            key_prefix="stimp_browser_demo",
+            key_hash=hash_api_key("stimp_browser_secret"),
+            allowed_origins=["https://syntheticsoulsongs.com"],
+            status=ProjectBrowserKeyStatus.ACTIVE,
+            last_used_at=None,
+            last_issued_at=None,
+            revoked_at=None,
+            created_at=repository.secret_ref.created_at,
+            updated_at=repository.secret_ref.updated_at,
+        )
+    )
+    app.state.telemetry_origin_registry = TelemetryOriginRegistry(
+        pool_getter=lambda: None,
+        fallback_origins=[],
+        lookup_override=repository.list_active_project_browser_key_origins,
+    )
+
+    client = TestClient(app)
+    response = client.options(
+        "/telemetry/browser-token",
+        headers={
+            "Origin": "https://syntheticsoulsongs.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == "https://syntheticsoulsongs.com"
 
 
 def test_browser_telemetry_token_cannot_access_project_routes() -> None:
@@ -2364,10 +2464,15 @@ def test_project_api_keys_can_be_created_listed_and_revoked(monkeypatch) -> None
     assert revoked.json()["status"] == "revoked"
 
 
-def test_project_browser_keys_can_be_created_listed_and_revoked(monkeypatch) -> None:
+def test_project_browser_keys_can_be_created_updated_listed_and_revoked(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
     app = build_test_app()
     repository = StubControlPlaneRepository()
+    app.state.telemetry_origin_registry = TelemetryOriginRegistry(
+        pool_getter=lambda: None,
+        fallback_origins=[],
+        lookup_override=repository.list_active_project_browser_key_origins,
+    )
     app.dependency_overrides[get_control_plane_repository] = lambda: repository
     client = TestClient(app)
     headers = {"Authorization": "Bearer super-admin-token"}
@@ -2381,10 +2486,20 @@ def test_project_browser_keys_can_be_created_listed_and_revoked(monkeypatch) -> 
     created_body = created.json()
     assert created_body["browser_key"]["project_id"] == "project-1"
     assert created_body["plaintext_key"].startswith("stimp_browser_")
+    assert created_body["browser_key"]["allowed_origins"] == ["https://app.example.com"]
+
+    updated = client.patch(
+        f"/control-plane/projects/project-1/browser-keys/{created_body['browser_key']['id']}",
+        json={"allowed_origins": ["https://syntheticsoulsongs.com"]},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["allowed_origins"] == ["https://syntheticsoulsongs.com"]
 
     listed = client.get("/control-plane/projects/project-1/browser-keys", headers=headers)
     assert listed.status_code == 200
     assert len(listed.json()) == 1
+    assert listed.json()[0]["allowed_origins"] == ["https://syntheticsoulsongs.com"]
 
     revoked = client.post(
         f"/control-plane/projects/project-1/browser-keys/{created_body['browser_key']['id']}/revoke",

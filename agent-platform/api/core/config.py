@@ -6,6 +6,8 @@ from urllib.parse import urljoin, urlparse
 
 from dotenv import load_dotenv
 
+from api.core.origins import normalize_origin
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ENV_PATH = REPO_ROOT / ".env"
@@ -261,6 +263,69 @@ def get_telemetry_rate_limit_per_minute() -> int:
     value = os.getenv("AGENT_PLATFORM_TELEMETRY_RATE_LIMIT_PER_MINUTE", "600").strip()
     try:
         return max(1, int(value))
+    except ValueError:
+        return 600
+
+
+def _get_csv_env(name: str) -> list[str]:
+    value = get_nonempty_env(name)
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def allow_legacy_browser_token_exchange() -> bool:
+    explicit = os.getenv("AGENT_PLATFORM_ALLOW_LEGACY_BROWSER_TOKEN_EXCHANGE")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return is_local_development_environment()
+
+
+def get_telemetry_cors_allowed_origins() -> list[str]:
+    explicit = [origin for origin in (normalize_origin(item) for item in _get_csv_env("AGENT_PLATFORM_TELEMETRY_CORS_ALLOWED_ORIGINS")) if origin is not None]
+    if explicit:
+        return _unique(explicit)
+
+    defaults = [
+        origin
+        for origin in (
+            normalize_origin(get_frontend_base_url()),
+            normalize_origin(get_public_base_url()),
+        )
+        if origin is not None
+    ]
+    return _unique(defaults)
+
+
+def get_telemetry_cors_allowed_methods() -> list[str]:
+    explicit = [method.upper() for method in _get_csv_env("AGENT_PLATFORM_TELEMETRY_CORS_ALLOWED_METHODS")]
+    if explicit:
+        return _unique(explicit)
+    return ["OPTIONS", "POST"]
+
+
+def get_telemetry_cors_allowed_headers() -> list[str]:
+    explicit = _get_csv_env("AGENT_PLATFORM_TELEMETRY_CORS_ALLOWED_HEADERS")
+    if explicit:
+        return _unique(explicit)
+    return ["Authorization", "Content-Type", "X-Stimpact-Project-Key"]
+
+
+def get_telemetry_cors_max_age_seconds() -> int:
+    value = os.getenv("AGENT_PLATFORM_TELEMETRY_CORS_MAX_AGE_SECONDS", "600").strip()
+    try:
+        return max(0, int(value))
     except ValueError:
         return 600
 

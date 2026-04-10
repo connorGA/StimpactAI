@@ -11,6 +11,7 @@ import type {
   GitHubAppInstallStartResponse,
   GitLabOAuthStartResponse,
   ProjectApiKeyCreateResponse,
+  ProjectBrowserKey,
   ProjectOnboarding,
   ProjectPolicy,
   ProjectSummary,
@@ -95,7 +96,9 @@ type OnboardingEditorSnapshot = {
   repoProfileInference: RepoProfileInference | null;
   repoProfileInferenceError: string | null;
   telemetryKeyName: string;
+  telemetryAllowedOriginsInput: string;
   telemetryKeyPlaintext: string | null;
+  editingBrowserKeyId: string | null;
   sdkEnvironment: string;
   sdkSetupMode: "automatic" | "manual";
   sdkBootstrapPlan: SdkBootstrapPlanPreview | null;
@@ -137,6 +140,38 @@ function createRepoSecretMountDraft(secretRefId = "", mountAs = ""): RepoSecretM
     secretRefId,
     mountAs,
   };
+}
+
+function formatOriginInput(origins: string[]): string {
+  return origins.join("\n");
+}
+
+function parseOriginInput(value: string): { origins: string[]; invalid: string[] } {
+  const origins: string[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const rawValue of value.split(/[\n,]+/)) {
+    const candidate = rawValue.trim();
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const parsed = new URL(candidate);
+      if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.host) {
+        invalid.push(candidate);
+        continue;
+      }
+      const normalized = `${parsed.protocol}//${parsed.host}`.toLowerCase();
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      origins.push(normalized);
+    } catch {
+      invalid.push(candidate);
+    }
+  }
+  return { origins, invalid };
 }
 
 function normalizeDiffPath(rawPath: string | null | undefined): string | null {
@@ -412,7 +447,9 @@ export function ProjectOnboardingConsole() {
   const [repoProfileInference, setRepoProfileInference] = useState<RepoProfileInference | null>(null);
   const [repoProfileInferenceError, setRepoProfileInferenceError] = useState<string | null>(null);
   const [telemetryKeyName, setTelemetryKeyName] = useState("");
+  const [telemetryAllowedOriginsInput, setTelemetryAllowedOriginsInput] = useState("");
   const [telemetryKeyPlaintext, setTelemetryKeyPlaintext] = useState<string | null>(null);
+  const [editingBrowserKeyId, setEditingBrowserKeyId] = useState<string | null>(null);
   const [copiedTelemetryKey, setCopiedTelemetryKey] = useState(false);
   const [sdkEnvironment, setSdkEnvironment] = useState("production");
   const [sdkSetupMode, setSdkSetupMode] = useState<"automatic" | "manual">("automatic");
@@ -772,6 +809,16 @@ export function ProjectOnboardingConsole() {
       );
     }
   }, [currentProject, telemetryKeyName]);
+
+  useEffect(() => {
+    if (editingBrowserKeyId || telemetryAllowedOriginsInput.trim()) {
+      return;
+    }
+    const firstActiveBrowserKey = state?.browser_keys.find((item) => item.status === "active");
+    if (firstActiveBrowserKey?.allowed_origins.length) {
+      setTelemetryAllowedOriginsInput(formatOriginInput(firstActiveBrowserKey.allowed_origins));
+    }
+  }, [editingBrowserKeyId, state, telemetryAllowedOriginsInput]);
 
   useEffect(() => {
     setCopiedTelemetryKey(false);
@@ -1233,7 +1280,9 @@ export function ProjectOnboardingConsole() {
       stepFivePreviewMode,
       showStepFiveAdvanced,
       telemetryKeyName,
+      telemetryAllowedOriginsInput,
       telemetryKeyPlaintext,
+      editingBrowserKeyId,
       sdkEnvironment,
       sdkSetupMode,
       sdkBootstrapPlan: sdkBootstrapPlan
@@ -1312,7 +1361,9 @@ export function ProjectOnboardingConsole() {
     setStepFivePreviewMode(snapshot.stepFivePreviewMode);
     setShowStepFiveAdvanced(snapshot.showStepFiveAdvanced);
     setTelemetryKeyName(snapshot.telemetryKeyName);
+    setTelemetryAllowedOriginsInput(snapshot.telemetryAllowedOriginsInput);
     setTelemetryKeyPlaintext(snapshot.telemetryKeyPlaintext);
+    setEditingBrowserKeyId(snapshot.editingBrowserKeyId);
     setSdkEnvironment(snapshot.sdkEnvironment);
     setSdkSetupMode(snapshot.sdkSetupMode);
     setSdkBootstrapPlan(
@@ -1785,7 +1836,56 @@ export function ProjectOnboardingConsole() {
     }, "Single-repo setup completed.");
   }
 
+  function getValidatedBrowserOrigins(): string[] | null {
+    const parsedOrigins = parseOriginInput(telemetryAllowedOriginsInput);
+    if (parsedOrigins.invalid.length > 0) {
+      setErrorMessage(
+        `Each allowed origin must be a bare http or https origin. Fix: ${parsedOrigins.invalid.join(", ")}`,
+      );
+      return null;
+    }
+    if (parsedOrigins.origins.length === 0) {
+      setErrorMessage("Add at least one deployed app origin before creating a browser key.");
+      return null;
+    }
+    return parsedOrigins.origins;
+  }
+
+  function beginEditingBrowserKeyOrigins(key: ProjectBrowserKey) {
+    setEditingBrowserKeyId(key.id);
+    setTelemetryAllowedOriginsInput(formatOriginInput(key.allowed_origins));
+    setTelemetryKeyPlaintext(null);
+    setErrorMessage(null);
+  }
+
+  async function saveBrowserKeyOrigins() {
+    if (!editingBrowserKeyId) {
+      return;
+    }
+    const allowedOrigins = getValidatedBrowserOrigins();
+    if (!allowedOrigins) {
+      return;
+    }
+    await withFeedback(async () => {
+      await requestJson(
+        `projects/${encodeURIComponent(projectId.trim())}/browser-keys/${encodeURIComponent(editingBrowserKeyId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            allowed_origins: allowedOrigins,
+          }),
+        },
+      );
+      setEditingBrowserKeyId(null);
+      await loadOnboardingState(false);
+    }, "Browser key origins updated.");
+  }
+
   async function createTelemetryApiKey() {
+    const browserAllowedOrigins = sdkUsesBrowserCredential ? getValidatedBrowserOrigins() : null;
+    if (sdkUsesBrowserCredential && !browserAllowedOrigins) {
+      return;
+    }
     await withFeedback(async () => {
       const created = sdkUsesBrowserCredential
         ? await requestJson<{ plaintext_key: string }>(
@@ -1794,7 +1894,7 @@ export function ProjectOnboardingConsole() {
               method: "POST",
               body: JSON.stringify({
                 name: telemetryKeyName.trim() || "Browser telemetry key",
-                allowed_origins: [],
+                allowed_origins: browserAllowedOrigins ?? [],
               }),
             },
           )
@@ -1808,6 +1908,7 @@ export function ProjectOnboardingConsole() {
             },
           );
       setTelemetryKeyPlaintext(created.plaintext_key);
+      setEditingBrowserKeyId(null);
       await loadOnboardingState(false);
     }, sdkUsesBrowserCredential ? "Telemetry browser key created." : "Telemetry API key created.");
   }
@@ -1876,6 +1977,10 @@ export function ProjectOnboardingConsole() {
       setErrorMessage("A public Stimpact platform URL is required before generating an SDK bootstrap PR.");
       return;
     }
+    const browserAllowedOrigins = sdkUsesBrowserCredential ? getValidatedBrowserOrigins() : null;
+    if (sdkUsesBrowserCredential && !browserAllowedOrigins) {
+      return;
+    }
     setCreatingSdkChangeRequest(true);
     setLoading(true);
     setErrorMessage(null);
@@ -1888,6 +1993,7 @@ export function ProjectOnboardingConsole() {
             project_id: projectId.trim(),
             provider_repository_id: sdkTargetRepositoryId,
             api_key_name: telemetryKeyName.trim() || "Project telemetry key",
+            allowed_origins: browserAllowedOrigins ?? [],
             service_name: effectiveSdkServiceName.trim(),
             environment: sdkEnvironment.trim() || "production",
             base_url: platformBaseUrl,
@@ -2031,6 +2137,13 @@ export function ProjectOnboardingConsole() {
   const hasHealthyHeartbeat = telemetryVerification?.status === "healthy";
   const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
   const activeBrowserKeys = state?.browser_keys.filter((item) => item.status === "active") ?? [];
+  const parsedTelemetryOrigins = parseOriginInput(telemetryAllowedOriginsInput);
+  const browserOriginValidationMessage =
+    parsedTelemetryOrigins.invalid.length > 0
+      ? `Fix invalid origins: ${parsedTelemetryOrigins.invalid.join(", ")}`
+      : parsedTelemetryOrigins.origins.length === 0
+        ? "Add at least one deployed app origin for browser telemetry."
+        : null;
   const hasAnyActiveTelemetryKeys = hasActiveApiKeys || hasActiveBrowserKeys;
   const sdkStatusLabel =
     onboardingState?.sdk_setup_status === "change_request"
@@ -3459,7 +3572,7 @@ export function ProjectOnboardingConsole() {
           step="06"
           stepKey="6"
           title="Enable telemetry and SDK bootstrap"
-          description="Create the telemetry credential used for ingest, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
+          description="Create the telemetry credential used for ingest, configure any browser app origins that may use it, then choose whether to wire the SDK yourself or let Stimpact open a bootstrap PR against the connected repo."
           complete={hasAnyActiveTelemetryKeys && hasSdkSetup && hasHealthyHeartbeat}
           editable={hasAnyActiveTelemetryKeys || hasSdkSetup || Boolean(telemetryKeyPlaintext)}
           isEditing={editingStepKey === "6"}
@@ -3478,13 +3591,22 @@ export function ProjectOnboardingConsole() {
                   <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
                     Create the project-scoped telemetry credential first. Your app will use it for telemetry
                     delivery and heartbeat verification after the SDK is deployed.
+                    {sdkUsesBrowserCredential
+                      ? " Browser keys should only allow the deployed origins you trust."
+                      : ""}
                   </p>
                 </div>
                 <span className="rounded-full bg-[rgba(29,26,24,0.08)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f655d]">
                   {sdkStatusLabel}
                 </span>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div
+                className={`mt-4 grid gap-3 ${
+                  sdkUsesBrowserCredential
+                    ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
+                    : "md:grid-cols-[minmax(0,1fr)_auto] md:items-end"
+                }`}
+              >
                 <label className="block">
                   <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
                     {sdkUsesBrowserCredential ? "Browser key name" : "API key name"}
@@ -3497,10 +3619,42 @@ export function ProjectOnboardingConsole() {
                     className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
                   />
                 </label>
+                {sdkUsesBrowserCredential ? (
+                  <label className="block">
+                    <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6f7b90]">
+                      Allowed origins
+                    </span>
+                    <textarea
+                      value={telemetryAllowedOriginsInput}
+                      onChange={(event) => setTelemetryAllowedOriginsInput(event.target.value)}
+                      placeholder={"https://app.example.com\nhttps://admin.example.com"}
+                      rows={3}
+                      className="w-full rounded-[14px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-2.5 text-sm leading-6 text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
+                    />
+                    <span className="mt-2 block text-xs leading-5 text-[#746d66]">
+                      Enter one deployed browser origin per line or separated by commas.
+                    </span>
+                    {browserOriginValidationMessage ? (
+                      <span className="mt-2 block text-xs font-medium text-[#b45309]">
+                        {browserOriginValidationMessage}
+                      </span>
+                    ) : (
+                      <span className="mt-2 block text-xs font-medium text-[#166534]">
+                        {parsedTelemetryOrigins.origins.length} allowed origin
+                        {parsedTelemetryOrigins.origins.length === 1 ? "" : "s"} ready.
+                      </span>
+                    )}
+                  </label>
+                ) : null}
                 <button
                   type="button"
                   onClick={createTelemetryApiKey}
-                  disabled={loading || !telemetryKeyName.trim()}
+                  disabled={
+                    loading ||
+                    !telemetryKeyName.trim() ||
+                    (sdkUsesBrowserCredential &&
+                      (!!browserOriginValidationMessage || parsedTelemetryOrigins.origins.length === 0))
+                  }
                   className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[14px] border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                     activeApiKeys.length || activeBrowserKeys.length
                       ? "border-[rgba(23,56,93,0.16)] bg-white text-[#17385d] shadow-[0_10px_22px_rgba(15,23,42,0.08)] hover:-translate-y-0.5 hover:border-[rgba(255,106,61,0.26)] hover:shadow-[0_14px_28px_rgba(15,23,42,0.12)]"
@@ -3515,6 +3669,74 @@ export function ProjectOnboardingConsole() {
                   </span>
                 </button>
               </div>
+              {sdkUsesBrowserCredential && activeBrowserKeys.length ? (
+                <div className="mt-4 grid gap-3">
+                  {activeBrowserKeys.map((key) => {
+                    const isEditingKey = editingBrowserKeyId === key.id;
+                    return (
+                      <div
+                        key={key.id}
+                        className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[rgba(255,255,255,0.92)] px-4 py-4"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-[#171717]">{key.name}</p>
+                            <p className="mt-1 text-xs font-mono text-[#6f7b90]">{key.key_prefix}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => beginEditingBrowserKeyOrigins(key)}
+                            className="inline-flex items-center gap-2 rounded-full border border-[rgba(23,56,93,0.12)] bg-white px-3 py-1.5 text-xs font-semibold text-[#17385d] transition hover:border-[rgba(255,106,61,0.24)]"
+                          >
+                            Edit origins
+                          </button>
+                        </div>
+                        <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                          Allowed origins
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {key.allowed_origins.length ? (
+                            key.allowed_origins.map((origin) => (
+                              <span
+                                key={`${key.id}-${origin}`}
+                                className="rounded-full bg-[rgba(23,56,93,0.08)] px-3 py-1 text-xs font-medium text-[#17385d]"
+                              >
+                                {origin}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-[#746d66]">No origins configured.</span>
+                          )}
+                        </div>
+                        {isEditingKey ? (
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void saveBrowserKeyOrigins();
+                              }}
+                              disabled={loading || !!browserOriginValidationMessage}
+                              className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-transparent bg-[linear-gradient(180deg,#ff754b_0%,#ff5a2a_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(255,106,61,0.2)] transition disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Save origins
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingBrowserKeyId(null);
+                                setTelemetryAllowedOriginsInput("");
+                              }}
+                              className="inline-flex min-h-[40px] items-center justify-center rounded-[12px] border border-[rgba(23,56,93,0.12)] bg-white px-4 py-2 text-sm font-semibold text-[#17385d] transition"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[#4c5c72]">
                 <p>
                   <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">

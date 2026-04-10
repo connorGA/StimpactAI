@@ -4,11 +4,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api.core.config import validate_runtime_configuration
+from api.core.config import get_telemetry_cors_allowed_origins, validate_runtime_configuration
 from api.core.errors import register_exception_handlers
 from api.db.postgres import install_postgres
 from api.events.outbox_signaler import OutboxSignaler
 from api.events.redis_bus import build_outbox_signal_bus
+from api.middleware.telemetry_cors import install_telemetry_cors_middleware
 from api.observability import RequestObservabilityMiddleware, configure_logging
 from api.routes.auth import router as auth_router
 from api.routes.control_plane import public_router as provider_callback_router
@@ -18,6 +19,7 @@ from api.routes.health import router as health_router
 from api.routes.incident_chat import router as incident_chat_router
 from api.routes.incidents import router as incidents_router
 from api.routes.telemetry import router as telemetry_router
+from services.telemetry_origin_registry import TelemetryOriginRegistry
 
 
 @asynccontextmanager
@@ -43,7 +45,12 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    app.state.telemetry_origin_registry = TelemetryOriginRegistry(
+        pool_getter=lambda: getattr(getattr(app.state, "postgres", None), "pool", None),
+        fallback_origins=get_telemetry_cors_allowed_origins(),
+    )
     register_exception_handlers(app)
+    install_telemetry_cors_middleware(app)
     app.add_middleware(RequestObservabilityMiddleware)
     app.include_router(health_router)
     app.include_router(auth_router)

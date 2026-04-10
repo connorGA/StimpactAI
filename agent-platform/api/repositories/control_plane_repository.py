@@ -204,6 +204,15 @@ WHERE project_id = $1
 ORDER BY created_at DESC;
 """
 
+LIST_ACTIVE_PROJECT_BROWSER_KEY_ORIGINS_SQL = """
+SELECT DISTINCT LOWER(origin.value) AS origin
+FROM project_browser_keys
+CROSS JOIN LATERAL jsonb_array_elements_text(allowed_origins) AS origin(value)
+WHERE status = 'active'
+  AND LENGTH(TRIM(origin.value)) > 0
+ORDER BY origin;
+"""
+
 GET_PROJECT_BROWSER_KEY_SQL = """
 SELECT *
 FROM project_browser_keys
@@ -297,6 +306,14 @@ REVOKE_PROJECT_BROWSER_KEY_SQL = """
 UPDATE project_browser_keys
 SET status = $2,
     revoked_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+"""
+
+UPDATE_PROJECT_BROWSER_KEY_SQL = """
+UPDATE project_browser_keys
+SET allowed_origins = $2::jsonb,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -802,6 +819,10 @@ class ControlPlaneRepository:
         rows = await self._fetch(LIST_PROJECT_BROWSER_KEYS_SQL, project_id)
         return [ProjectBrowserKeyRecord.from_db_row(row) for row in rows]
 
+    async def list_active_project_browser_key_origins(self) -> list[str]:
+        rows = await self._fetch(LIST_ACTIVE_PROJECT_BROWSER_KEY_ORIGINS_SQL)
+        return [str(row["origin"]) for row in rows if row["origin"]]
+
     async def get_project_browser_key(self, key_id: str) -> ProjectBrowserKeyRecord | None:
         row = await self._fetchrow(GET_PROJECT_BROWSER_KEY_SQL, key_id, allow_missing=True)
         if row is None:
@@ -859,6 +880,19 @@ class ControlPlaneRepository:
             REVOKE_PROJECT_BROWSER_KEY_SQL,
             key_id,
             ProjectBrowserKeyStatus.REVOKED.value,
+        )
+        return ProjectBrowserKeyRecord.from_db_row(row)
+
+    async def update_project_browser_key(
+        self,
+        key_id: str,
+        *,
+        allowed_origins: list[str],
+    ) -> ProjectBrowserKeyRecord:
+        row = await self._fetchrow(
+            UPDATE_PROJECT_BROWSER_KEY_SQL,
+            key_id,
+            json.dumps(allowed_origins),
         )
         return ProjectBrowserKeyRecord.from_db_row(row)
 

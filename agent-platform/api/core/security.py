@@ -8,7 +8,6 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
-from urllib.parse import urlparse
 from uuid import uuid4
 
 import jwt
@@ -29,6 +28,7 @@ from api.core.config import (
     is_project_api_key_auth_enforced,
 )
 from api.core.errors import APIError
+from api.core.origins import normalize_origin
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.observability import get_metrics_registry
 from api.repositories.control_plane_repository import ControlPlaneRepository
@@ -271,14 +271,7 @@ def _extract_project_api_key(request: Request) -> str | None:
 
 
 def _normalize_origin(value: str | None) -> str | None:
-    if value is None:
-        return None
-    parsed = urlparse(value.strip())
-    if not parsed.scheme or not parsed.netloc:
-        return None
-    if parsed.scheme not in {"http", "https"}:
-        return None
-    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    return normalize_origin(value)
 
 
 def _extract_request_origin(request: Request) -> str | None:
