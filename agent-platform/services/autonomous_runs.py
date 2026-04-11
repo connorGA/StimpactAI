@@ -288,6 +288,7 @@ class AutonomousRunService:
             request.approval_status is AutonomousApprovalStatus.APPROVED
             and updated_run.async_job_id is None
             and self._async_job_repository is not None
+            and updated_run.policy.auto_run_allowed
         ):
             job = await self._async_job_repository.create_job(
                 job_type=AsyncJobType.AUTONOMOUS_REPAIR,

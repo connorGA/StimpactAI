@@ -21,7 +21,14 @@ from harness.schemas.autonomous import (
     AutonomousVerificationEvidence,
 )
 from harness.schemas.verification import VerificationKind
-from models.control_plane import ProviderKind, ProviderRepositoryRecord, RepoProfileRecord, RuntimeKind
+from models.control_plane import (
+    AutonomyMode,
+    ProjectPolicyRecord,
+    ProviderKind,
+    ProviderRepositoryRecord,
+    RepoProfileRecord,
+    RuntimeKind,
+)
 from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from services.autonomous_runs import AutonomousRunService
@@ -246,9 +253,16 @@ class StubRetryRunner:
 
 
 class StubControlPlaneRepository:
-    def __init__(self, repo_profile: RepoProfileRecord, provider_repository: ProviderRepositoryRecord) -> None:
+    def __init__(
+        self,
+        repo_profile: RepoProfileRecord,
+        provider_repository: ProviderRepositoryRecord,
+        *,
+        project_policy: ProjectPolicyRecord | None = None,
+    ) -> None:
         self.repo_profile = repo_profile
         self.provider_repository = provider_repository
+        self.project_policy = project_policy
 
     async def get_active_repo_profile(self, project_id: str):
         if project_id == self.repo_profile.project_id:
@@ -263,6 +277,11 @@ class StubControlPlaneRepository:
     async def get_provider_repository(self, provider_repository_id: str):
         if provider_repository_id == self.provider_repository.id:
             return self.provider_repository
+        return None
+
+    async def get_or_create_project_policy(self, project_id: str):
+        if self.project_policy is not None and project_id == self.project_policy.project_id:
+            return self.project_policy
         return None
 
 
@@ -348,6 +367,34 @@ def _build_incident_and_profile(now: datetime) -> tuple[IncidentRecord, RepoProf
         updated_at=now,
     )
     return incident, repo_profile, provider_repository
+
+
+def _build_project_policy(
+    now: datetime,
+    *,
+    autonomy_mode: AutonomyMode,
+    allow_production_writes: bool = True,
+    approved_services: list[str] | None = None,
+    restrict_to_approved_services: bool = False,
+) -> ProjectPolicyRecord:
+    return ProjectPolicyRecord(
+        project_id="project-1",
+        autonomy_mode=autonomy_mode,
+        require_human_approval=autonomy_mode is not AutonomyMode.AUTONOMOUS,
+        allow_production_writes=allow_production_writes,
+        allow_low_risk_autonomy=autonomy_mode is AutonomyMode.AUTONOMOUS,
+        block_during_active_deploys=False,
+        restrict_to_approved_services=restrict_to_approved_services,
+        require_rollback_plan=False,
+        require_post_action_verification=False,
+        approved_services=approved_services or [],
+        failure_classifier_enabled=True,
+        root_cause_enabled=True,
+        patch_planner_enabled=True,
+        runbook_executor_enabled=True,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 @pytest.mark.asyncio
@@ -484,6 +531,129 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
     assert promoted.run.promotion_url == "https://github.com/acme/billing-api/pull/99"
     assert provider_service.calls[0]["provider_repository_id"] == "provider-repo-1"
     assert "Fix incident incident-1" in str(provider_service.calls[0]["commit_message"])
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_recommend_mode_disables_writeback(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    async_jobs = StubAsyncJobRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(
+            repo_profile,
+            provider_repository,
+            project_policy=_build_project_policy(now, autonomy_mode=AutonomyMode.RECOMMEND),
+        ),
+        repository_root=tmp_path,
+        artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts"),
+        event_stream=PersistentAutonomousRunEventStream(
+            artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-stream")
+        ),
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    assert detail.run.approval_status is AutonomousApprovalStatus.PENDING
+    assert detail.run.async_job_id is None
+    assert detail.run.policy.requires_human_approval is True
+    assert detail.run.policy.allow_writeback is False
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_autonomous_mode_queues_without_manual_approval(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    async_jobs = StubAsyncJobRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(
+            repo_profile,
+            provider_repository,
+            project_policy=_build_project_policy(now, autonomy_mode=AutonomyMode.AUTONOMOUS),
+        ),
+        repository_root=tmp_path,
+        artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts"),
+        event_stream=PersistentAutonomousRunEventStream(
+            artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-stream")
+        ),
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    assert detail.run.approval_status is AutonomousApprovalStatus.NOT_REQUIRED
+    assert detail.run.policy.requires_human_approval is False
+    assert detail.run.async_job_id == "job-1"
+    assert len(async_jobs.jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_observe_mode_stays_non_runnable_after_approval(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    async_jobs = StubAsyncJobRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(
+            repo_profile,
+            provider_repository,
+            project_policy=_build_project_policy(now, autonomy_mode=AutonomyMode.OBSERVE),
+        ),
+        repository_root=tmp_path,
+        artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts"),
+        event_stream=PersistentAutonomousRunEventStream(
+            artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-stream")
+        ),
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    assert detail.run.approval_status is AutonomousApprovalStatus.PENDING
+    assert detail.run.policy.auto_run_allowed is False
+    assert detail.run.async_job_id is None
+
+    approved = await service.approve_run(
+        "incident-1",
+        detail.run.id,
+        AutonomousRunApprovalRequest(approval_status=AutonomousApprovalStatus.APPROVED),
+    )
+
+    assert approved.run.approval_status is AutonomousApprovalStatus.APPROVED
+    assert approved.run.async_job_id is None
+    assert async_jobs.jobs == []
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from harness.schemas.autonomous import (
     AutonomousExecutionMode,
     AutonomousPolicyDecision,
 )
-from models.control_plane import ProjectPolicyRecord, ProjectServiceRecord, RepoProfileRecord
+from models.control_plane import AutonomyMode, ProjectPolicyRecord, ProjectServiceRecord, RepoProfileRecord
 from models.incident import IncidentRecord, IncidentSeverity
 
 
@@ -45,8 +45,20 @@ class AutonomousPolicyService:
             reasons.append("No active repo profile is configured; sandbox-backed verification is unavailable.")
 
         service_allowed = True
+        auto_run_allowed = repo_profile is not None
         if project_policy is not None:
-            requires_human_approval = requires_human_approval or project_policy.require_human_approval
+            if project_policy.autonomy_mode is AutonomyMode.OBSERVE:
+                auto_run_allowed = False
+                allow_writeback = False
+                requires_human_approval = True
+                reasons.append("Observe mode disables autonomous execution.")
+            elif project_policy.autonomy_mode is AutonomyMode.RECOMMEND:
+                allow_writeback = False
+                requires_human_approval = True
+                reasons.append("Recommend mode keeps execution human-approved and write-back disabled.")
+            elif project_policy.autonomy_mode is AutonomyMode.SUPERVISED_EXECUTE:
+                requires_human_approval = True
+                reasons.append("Supervised execute mode requires human approval before execution.")
             if not project_policy.allow_production_writes:
                 allow_writeback = False
                 reasons.append("Project policy currently disables production write-back.")
@@ -61,9 +73,10 @@ class AutonomousPolicyService:
                 service_allowed = bool(service_keys & approved)
                 if not service_allowed:
                     reasons.append("Project policy blocks autonomous actions for this service.")
+        auto_run_allowed = auto_run_allowed and service_allowed
 
         decision = AutonomousPolicyDecision(
-            auto_run_allowed=repo_profile is not None and service_allowed,
+            auto_run_allowed=auto_run_allowed,
             requires_human_approval=requires_human_approval,
             allow_writeback=allow_writeback,
             allowed_execution_backends=[

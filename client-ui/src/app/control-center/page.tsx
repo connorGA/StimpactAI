@@ -25,22 +25,22 @@ const autonomyModes = [
   {
     id: "observe",
     name: "Observe",
-    detail: "Analyze incidents only. No repair recommendations or executions are allowed.",
+    detail: "Surface incidents and supporting context without autonomous execution.",
   },
   {
     id: "recommend",
     name: "Recommend",
-    detail: "Generate grounded remediation guidance while keeping execution manual.",
+    detail: "Prepare grounded remediation guidance while keeping execution human-approved and write-back off.",
   },
   {
     id: "supervised_execute",
     name: "Supervised execute",
-    detail: "Allow low-risk execution paths once an operator approves the action.",
+    detail: "Allow execution after an operator approves the action.",
   },
   {
     id: "autonomous",
     name: "Autonomous",
-    detail: "Permit trusted repair flows to proceed automatically within guardrails.",
+    detail: "Permit trusted repair flows to proceed automatically within service and write-back guardrails.",
   },
 ] as const;
 
@@ -110,14 +110,9 @@ export default async function ControlCenterPage() {
 
   const guardrails = [
     {
-      label: "Require human approval",
-      enabled: policy.require_human_approval,
-      detail: "Human review gates autonomous or production-impacting activity.",
-    },
-    {
-      label: "Block during active deploys",
-      enabled: policy.block_during_active_deploys,
-      detail: "Prevents repair execution while another rollout is already in progress.",
+      label: "Allow production writes",
+      enabled: policy.allow_production_writes,
+      detail: "Controls whether execution-capable modes may create production-targeted write-backs or change proposals.",
     },
     {
       label: "Restrict to approved services",
@@ -128,14 +123,16 @@ export default async function ControlCenterPage() {
           : "No approved service allowlist is currently defined.",
     },
     {
-      label: "Require rollback plan",
-      enabled: policy.require_rollback_plan,
-      detail: "Patch and execution plans must include a rollback path.",
-    },
-    {
-      label: "Require post-action verification",
-      enabled: policy.require_post_action_verification,
-      detail: "Verification remains mandatory after a patch or automation run.",
+      label: "Execution gating",
+      enabled: policy.autonomy_mode !== "autonomous",
+      detail:
+        policy.autonomy_mode === "observe"
+          ? "Observe mode disables autonomous execution."
+          : policy.autonomy_mode === "recommend"
+            ? "Recommend mode keeps execution human-approved and disables write-back."
+            : policy.autonomy_mode === "supervised_execute"
+              ? "Supervised execute requires approval before execution starts."
+              : "Autonomous mode can proceed without per-run human approval.",
     },
   ];
 

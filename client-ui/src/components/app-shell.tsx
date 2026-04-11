@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { AppShellNav } from "@/components/app-shell-nav";
@@ -104,6 +104,29 @@ export function AppShell({ children }: { children: ReactNode }) {
     setPendingNavHref(href);
   }
 
+  const currentProject = useMemo(
+    () =>
+      (selectedProjectId
+        ? session?.projects.find((project) => project.id === selectedProjectId) ?? null
+        : null) ??
+      session?.projects[0] ??
+      null,
+    [selectedProjectId, session?.projects],
+  );
+
+  const refreshSession = useCallback(async () => {
+    setSessionLoading(true);
+    try {
+      const payload = await fetchAuthSessionPayload();
+      setSession({ ...payload, access_token: "" });
+      setSelectedProjectId(readCurrentProjectCookie());
+    } catch {
+      setSession(null);
+    } finally {
+      setSessionLoading(false);
+    }
+  }, []);
+
   async function handleLogout() {
     await fetch("/api/auth/logout", {
       method: "POST",
@@ -125,36 +148,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.refresh();
   }
 
+  const sessionContextValue = useMemo(
+    () =>
+      ({
+        session,
+        sessionLoading,
+        selectedProjectId,
+        currentProject,
+        refreshSession,
+      }) satisfies AppShellSessionContextValue,
+    [currentProject, refreshSession, selectedProjectId, session, sessionLoading],
+  );
+
   if (isPublicRoute) {
     return <>{children}</>;
   }
 
   const sidebarWidthClass = collapsed ? "lg:w-0" : "lg:w-[248px]";
   const contentOffsetClass = collapsed ? "lg:ml-0" : "lg:ml-[248px]";
-  const currentProject =
-    (selectedProjectId
-      ? session?.projects.find((project) => project.id === selectedProjectId) ?? null
-      : null) ??
-    session?.projects[0] ??
-    null;
-  const sessionContextValue = {
-    session,
-    sessionLoading,
-    selectedProjectId,
-    currentProject,
-    refreshSession: async () => {
-      setSessionLoading(true);
-      try {
-        const payload = await fetchAuthSessionPayload();
-        setSession({ ...payload, access_token: "" });
-        setSelectedProjectId(readCurrentProjectCookie());
-      } catch {
-        setSession(null);
-      } finally {
-        setSessionLoading(false);
-      }
-    },
-  } satisfies AppShellSessionContextValue;
 
   return (
     <AppShellSessionContext.Provider value={sessionContextValue}>

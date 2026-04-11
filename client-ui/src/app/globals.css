@@ -38,11 +38,7 @@
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 14% 10%, rgba(var(--vault-blue-rgb), 0.14), transparent 26%),
-    radial-gradient(circle at 84% 12%, rgba(var(--vault-orange-rgb), 0.12), transparent 24%),
-    radial-gradient(circle at 52% 0%, rgba(124, 92, 255, 0.1), transparent 28%),
-    linear-gradient(180deg, #f8faff 0%, #f3f7ff 48%, #eef4ff 100%);
+  background: linear-gradient(180deg, #f8fafc 0%, #f3f6fb 52%, #eef2f7 100%);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
@@ -272,13 +268,9 @@ body:has(.landing-page-canvas) {
 }
 
 .vault-topnav {
-  background:
-    linear-gradient(180deg, rgba(255, 106, 61, 0.12) 0%, rgba(255, 106, 61, 0) 100%),
-    linear-gradient(180deg, #1b2231 0%, #161d2b 100%);
+  background: linear-gradient(180deg, #1b2231 0%, #161d2b 100%);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  box-shadow:
-    inset 0 -1px 0 rgba(255, 106, 61, 0.1),
-    0 8px 18px rgba(9, 13, 22, 0.16);
+  box-shadow: 0 8px 18px rgba(9, 13, 22, 0.16);
 }
 
 .vault-tab-button {

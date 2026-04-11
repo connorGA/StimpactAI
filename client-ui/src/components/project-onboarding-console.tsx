@@ -2,7 +2,7 @@
 
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, Wrench } from "lucide-react";
+import { CircleHelp, Eye, EyeOff, Wrench } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 
@@ -20,6 +20,7 @@ import type {
   ProviderRepository,
   RepoProfileInference,
   RepoProfile,
+  ProjectTelemetryHeartbeat,
   SdkBootstrapChangeRequestResponse,
   SdkBootstrapPlanPreview,
   SdkBootstrapPreview,
@@ -44,6 +45,50 @@ const SDK_AUTOMATIC_ACTION_PHRASES = [
 ] as const;
 const BROWSER_KEY_ALLOWED_ORIGIN_LIMIT = 20;
 const BROWSER_FACING_SERVICE_TYPES = new Set(["frontend", "fullstack"]);
+const TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS = 900;
+const AUTONOMY_MODE_OPTIONS: Array<{
+  value: ProjectPolicy["autonomy_mode"];
+  label: string;
+  detail: string;
+  tooltip: string;
+}> = [
+  {
+    value: "observe",
+    label: "Observe",
+    detail: "Stimpact watches incidents and surfaces context, but it does not run autonomous execution flows.",
+    tooltip:
+      "Observe keeps the platform in a visibility-first role. Incidents and supporting analysis stay visible, but autonomous repair execution remains off.",
+  },
+  {
+    value: "recommend",
+    label: "Recommend",
+    detail: "Stimpact can analyze failures and prepare recommendations, but execution still requires a human and write-back stays off.",
+    tooltip:
+      "Recommend is the best default for most teams. The platform can prepare grounded fixes and response guidance, but it will not execute write-backs from this mode.",
+  },
+  {
+    value: "supervised_execute",
+    label: "Supervised execute",
+    detail: "Stimpact can execute approved actions, but only after an operator explicitly allows them.",
+    tooltip:
+      "Supervised execute speeds up incident handling while preserving a human approval checkpoint before execution or write-back happens.",
+  },
+  {
+    value: "autonomous",
+    label: "Autonomous",
+    detail: "Stimpact can act on its own within the service and write-back guardrails configured below.",
+    tooltip:
+      "Autonomous allows the platform to respond without waiting for a person each time. Service scoping and production write-back settings still apply.",
+  },
+] as const;
+const POLICY_CONTROL_TOOLTIPS = {
+  approvedServices:
+    "Use this only if you want autonomy confined to a known subset of services. When service restriction is off, this list does not block anything by itself.",
+  allowProductionWrites:
+    "Controls whether Stimpact may create write-backs or change proposals for production paths when the selected autonomy mode allows execution.",
+  restrictToApprovedServices:
+    "When enabled, autonomy only applies to the services listed in Approved services above. This is useful if you want to start with a narrow rollout.",
+} as const;
 
 type SecretDraft = {
   id: string;
@@ -181,6 +226,47 @@ function parseOriginInput(value: string): { origins: string[]; invalid: string[]
     }
   }
   return { origins, invalid };
+}
+
+function buildPersistedTelemetryVerification(
+  heartbeats: ProjectTelemetryHeartbeat[],
+  service: string,
+  environment: string,
+  staleAfterSeconds: number,
+): ProjectTelemetryVerification | null {
+  const normalizedService = service.trim().toLowerCase();
+  const normalizedEnvironment = environment.trim().toLowerCase();
+  if (!normalizedService || !normalizedEnvironment) {
+    return null;
+  }
+  const matchingHeartbeat = heartbeats.reduce<ProjectTelemetryHeartbeat | null>((latest, candidate) => {
+    if (
+      candidate.service.trim().toLowerCase() !== normalizedService ||
+      candidate.environment.trim().toLowerCase() !== normalizedEnvironment
+    ) {
+      return latest;
+    }
+    if (!latest) {
+      return candidate;
+    }
+    return Date.parse(candidate.last_seen_at) > Date.parse(latest.last_seen_at) ? candidate : latest;
+  }, null);
+  if (!matchingHeartbeat) {
+    return null;
+  }
+  const lastSeenAt = Date.parse(matchingHeartbeat.last_seen_at);
+  const isHealthy =
+    !Number.isNaN(lastSeenAt) &&
+    lastSeenAt >= Date.now() - staleAfterSeconds * 1000;
+  return {
+    service: matchingHeartbeat.service,
+    environment: matchingHeartbeat.environment,
+    status: isHealthy ? "healthy" : "stale",
+    last_seen_at: matchingHeartbeat.last_seen_at,
+    commit_sha: matchingHeartbeat.commit_sha,
+    stale_after_seconds: staleAfterSeconds,
+    heartbeat: matchingHeartbeat,
+  };
 }
 
 function normalizeDiffPath(rawPath: string | null | undefined): string | null {
@@ -2184,6 +2270,8 @@ export function ProjectOnboardingConsole() {
     if (!policyDraft) {
       return;
     }
+    const requiresHumanApproval = policyDraft.autonomy_mode !== "autonomous";
+    const allowLowRiskAutonomy = policyDraft.autonomy_mode === "autonomous";
     await withFeedback(async () => {
       await requestJson(
         `projects/${encodeURIComponent(projectId.trim())}/policy`,
@@ -2191,9 +2279,9 @@ export function ProjectOnboardingConsole() {
           method: "PUT",
           body: JSON.stringify({
             autonomy_mode: policyDraft.autonomy_mode,
-            require_human_approval: policyDraft.require_human_approval,
+            require_human_approval: requiresHumanApproval,
             allow_production_writes: policyDraft.allow_production_writes,
-            allow_low_risk_autonomy: policyDraft.allow_low_risk_autonomy,
+            allow_low_risk_autonomy: allowLowRiskAutonomy,
             block_during_active_deploys: policyDraft.block_during_active_deploys,
             restrict_to_approved_services: policyDraft.restrict_to_approved_services,
             require_rollback_plan: policyDraft.require_rollback_plan,
@@ -2260,7 +2348,18 @@ export function ProjectOnboardingConsole() {
   const hasActiveBrowserKeys = state?.operational_readiness.has_active_browser_keys ?? false;
   const hasReviewedPolicy = state?.operational_readiness.policy_reviewed ?? false;
   const hasSdkSetup = state?.operational_readiness.sdk_setup_ready ?? false;
-  const hasHealthyHeartbeat = telemetryVerification?.status === "healthy";
+  const persistedTelemetryVerification = useMemo(
+    () =>
+      buildPersistedTelemetryVerification(
+        state?.telemetry_heartbeats ?? [],
+        effectiveSdkServiceName,
+        sdkEnvironment.trim() || "production",
+        telemetryVerification?.stale_after_seconds ?? TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS,
+      ),
+    [effectiveSdkServiceName, sdkEnvironment, state?.telemetry_heartbeats, telemetryVerification?.stale_after_seconds],
+  );
+  const effectiveTelemetryVerification = telemetryVerification ?? persistedTelemetryVerification;
+  const hasHealthyHeartbeat = effectiveTelemetryVerification?.status === "healthy";
   const activeApiKeys = state?.api_keys.filter((item) => item.status === "active") ?? [];
   const activeBrowserKeys = state?.browser_keys.filter((item) => item.status === "active") ?? [];
   const parsedCreateTelemetryOrigins = parseOriginInput(telemetryCreateAllowedOriginsInput);
@@ -2291,9 +2390,9 @@ export function ProjectOnboardingConsole() {
           ? "Deferred"
           : "Pending";
   const telemetryVerificationStatusLabel =
-    telemetryVerification?.status === "healthy"
+    effectiveTelemetryVerification?.status === "healthy"
       ? "Live heartbeat detected"
-      : telemetryVerification?.status === "stale"
+      : effectiveTelemetryVerification?.status === "stale"
         ? "Heartbeat stale"
         : loadingTelemetryVerification
           ? "Checking heartbeat"
@@ -4943,9 +5042,9 @@ export function ProjectOnboardingConsole() {
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <span
                   className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
-                    telemetryVerification?.status === "healthy"
+                    effectiveTelemetryVerification?.status === "healthy"
                       ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
-                      : telemetryVerification?.status === "stale"
+                      : effectiveTelemetryVerification?.status === "stale"
                         ? "bg-[rgba(245,158,11,0.14)] text-[#9a5b14]"
                         : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
                   }`}
@@ -4967,16 +5066,16 @@ export function ProjectOnboardingConsole() {
                     Last heartbeat
                   </p>
                   <p className="mt-1 text-sm font-semibold text-[#171717]">
-                    {telemetryVerification?.last_seen_at
-                      ? formatHeartbeatTimestamp(telemetryVerification.last_seen_at)
+                    {effectiveTelemetryVerification?.last_seen_at
+                      ? formatHeartbeatTimestamp(effectiveTelemetryVerification.last_seen_at)
                       : "Not seen yet"}
                   </p>
                 </div>
               </div>
               <p className="mt-4 text-sm leading-6 text-[#4c5c72]">
-                {telemetryVerification?.status === "healthy"
+                {effectiveTelemetryVerification?.status === "healthy"
                   ? "The deployed SDK is actively reaching Stimpact, so this service is live and ready to send telemetry when a real error occurs."
-                  : telemetryVerification?.status === "stale"
+                  : effectiveTelemetryVerification?.status === "stale"
                     ? "A heartbeat was seen before, but not recently. Redeploy the SDK-enabled service or refresh once the runtime is active again."
                     : "No heartbeat has been seen yet. Finish setup, redeploy the service, then refresh verification here."}
               </p>
@@ -5001,87 +5100,88 @@ export function ProjectOnboardingConsole() {
         >
           {policyDraft ? (
             <div className="border-t border-[rgba(17,24,39,0.08)] pt-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <SelectField
-                  label="Autonomy mode"
-                  value={policyDraft.autonomy_mode}
-                  onChange={(value) =>
-                    setPolicyDraft((current) =>
-                      current
-                        ? {
-                            ...current,
-                            autonomy_mode: value as ProjectPolicy["autonomy_mode"],
-                          }
-                        : current,
-                    )
-                  }
-                  options={[
-                    { value: "observe", label: "Observe" },
-                    { value: "recommend", label: "Recommend" },
-                    { value: "supervised_execute", label: "Supervised execute" },
-                    { value: "autonomous", label: "Autonomous" },
-                  ]}
-                />
-                <Field
-                  label="Approved services"
-                  value={policyDraft.approved_services.join(", ")}
-                  onChange={(value) =>
-                    setPolicyDraft((current) =>
-                      current
-                        ? {
-                            ...current,
-                            approved_services: value
-                              .split(",")
-                              .map((item) => item.trim())
-                              .filter(Boolean),
-                          }
-                        : current,
-                    )
-                  }
-                  placeholder="web-app, billing-api"
-                  helperText="Only needed if you want autonomy restricted to a known subset of services."
-                />
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4">
+                  <SelectField
+                    label="Autonomy mode"
+                    value={policyDraft.autonomy_mode}
+                    onChange={(value) =>
+                      setPolicyDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              autonomy_mode: value as ProjectPolicy["autonomy_mode"],
+                            }
+                          : current,
+                      )
+                    }
+                    options={AUTONOMY_MODE_OPTIONS.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                    }))}
+                    helperText={
+                      AUTONOMY_MODE_OPTIONS.find((option) => option.value === policyDraft.autonomy_mode)?.detail
+                    }
+                    infoTooltip={
+                      AUTONOMY_MODE_OPTIONS.find((option) => option.value === policyDraft.autonomy_mode)?.tooltip
+                    }
+                  />
+                </div>
+                <div className="rounded-[20px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4">
+                  <Field
+                    label="Approved services"
+                    value={policyDraft.approved_services.join(", ")}
+                    onChange={(value) =>
+                      setPolicyDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              approved_services: value
+                                .split(",")
+                                .map((item) => item.trim())
+                                .filter(Boolean),
+                            }
+                          : current,
+                      )
+                    }
+                    placeholder="web-app, billing-api"
+                    helperText={
+                      policyDraft.restrict_to_approved_services
+                        ? "Comma-separated service names. Only listed services can use autonomy."
+                        : "Enable service restriction below to activate this list."
+                    }
+                    helperTextPosition="below"
+                    infoTooltip={POLICY_CONTROL_TOOLTIPS.approvedServices}
+                    disabled={!policyDraft.restrict_to_approved_services}
+                  />
+                </div>
               </div>
-              <div className="mt-5 grid gap-3">
-                <PolicyToggleRow
-                  label="Require human approval"
-                  description="Keep an operator in the loop before Stimpact executes changes."
-                  checked={policyDraft.require_human_approval}
-                  onChange={(checked) =>
-                    setPolicyDraft((current) =>
-                      current ? { ...current, require_human_approval: checked } : current,
-                    )
-                  }
-                />
+              <div className="mt-5 grid gap-4 lg:grid-cols-2">
                 <PolicyToggleRow
                   label="Allow production writes"
-                  description="Permit the platform to write back changes intended for production paths."
+                  description={
+                    policyDraft.autonomy_mode === "observe" || policyDraft.autonomy_mode === "recommend"
+                      ? "Stored for later, but inactive in this mode because Observe and Recommend never execute write-backs."
+                      : "Allow production-targeted write-backs and change proposals when the rest of the policy permits them."
+                  }
                   checked={policyDraft.allow_production_writes}
                   onChange={(checked) =>
                     setPolicyDraft((current) =>
                       current ? { ...current, allow_production_writes: checked } : current,
                     )
                   }
-                />
-                <PolicyToggleRow
-                  label="Allow low-risk autonomy"
-                  description="Let the platform handle lower-risk actions without escalating every time."
-                  checked={policyDraft.allow_low_risk_autonomy}
-                  onChange={(checked) =>
-                    setPolicyDraft((current) =>
-                      current ? { ...current, allow_low_risk_autonomy: checked } : current,
-                    )
-                  }
+                  infoTooltip={POLICY_CONTROL_TOOLTIPS.allowProductionWrites}
                 />
                 <PolicyToggleRow
                   label="Restrict to approved services"
-                  description="Limit autonomy to the services listed above."
+                  description="Limit autonomy to only the services listed in Approved services."
                   checked={policyDraft.restrict_to_approved_services}
                   onChange={(checked) =>
                     setPolicyDraft((current) =>
                       current ? { ...current, restrict_to_approved_services: checked } : current,
                     )
                   }
+                  infoTooltip={POLICY_CONTROL_TOOLTIPS.restrictToApprovedServices}
                 />
               </div>
               <div className="mt-5">
@@ -5243,6 +5343,23 @@ function StepPanel({
         <div className={`mt-6 ${locked ? "pointer-events-none opacity-60 saturate-[0.92]" : ""}`}>{children}</div>
       </div>
     </section>
+  );
+}
+
+function InlineInfoTooltip({ content }: { content: string }) {
+  return (
+    <span className="group relative inline-flex items-center">
+      <button
+        type="button"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[#8a8178] transition hover:bg-[rgba(23,23,23,0.06)] hover:text-[#35547d]"
+        aria-label="More details"
+      >
+        <CircleHelp className="h-4 w-4" strokeWidth={1.8} />
+      </button>
+      <span className="pointer-events-none absolute left-[calc(100%+0.55rem)] top-1/2 z-30 w-72 -translate-y-1/2 rounded-[16px] border border-[rgba(17,24,39,0.10)] bg-[rgba(255,251,247,0.98)] px-3 py-3 text-left text-xs font-medium leading-5 text-[#4c5c72] opacity-0 shadow-[0_18px_34px_rgba(15,23,42,0.12)] transition duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+        {content}
+      </span>
+    </span>
   );
 }
 
@@ -5917,8 +6034,11 @@ function Field({
   className,
   autoComplete,
   helperText,
+  helperTextPosition = "inline",
+  infoTooltip,
   name,
   suppressPasswordManagers = false,
+  disabled = false,
 }: {
   label: string;
   value: string;
@@ -5928,14 +6048,20 @@ function Field({
   className?: string;
   autoComplete?: string;
   helperText?: string;
+  helperTextPosition?: "inline" | "below";
+  infoTooltip?: string;
   name?: string;
   suppressPasswordManagers?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <label className={`block ${className ?? ""}`}>
       <span className="mb-2 flex items-center justify-between gap-3 text-sm">
-        <span className="font-semibold text-[#171717]">{label}</span>
-        {helperText ? (
+        <span className="inline-flex items-center gap-2 font-semibold text-[#171717]">
+          <span>{label}</span>
+          {infoTooltip ? <InlineInfoTooltip content={infoTooltip} /> : null}
+        </span>
+        {helperText && helperTextPosition === "inline" ? (
           <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#66758c]">{helperText}</span>
         ) : null}
       </span>
@@ -5945,6 +6071,7 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
+        disabled={disabled}
         autoComplete={suppressPasswordManagers ? (type === "password" ? "new-password" : "off") : autoComplete}
         spellCheck={suppressPasswordManagers ? false : undefined}
         autoCapitalize={suppressPasswordManagers ? "off" : undefined}
@@ -5955,8 +6082,11 @@ function Field({
         data-bwignore={suppressPasswordManagers ? "true" : undefined}
         data-op-ignore={suppressPasswordManagers ? "true" : undefined}
         data-protonpass-ignore={suppressPasswordManagers ? "true" : undefined}
-        className="w-full rounded-[16px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-3.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)]"
+        className="w-full rounded-[16px] border border-[rgba(20,24,33,0.12)] bg-white px-4 py-3.5 text-sm text-[#171717] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-[#a59b90] focus:border-[rgba(255,106,61,0.42)] focus:shadow-[0_0_0_4px_rgba(255,106,61,0.08),inset_0_1px_0_rgba(255,255,255,0.92)] disabled:cursor-not-allowed disabled:bg-[rgba(247,242,236,0.85)] disabled:text-[#8b8175] disabled:shadow-none"
       />
+      {helperText && helperTextPosition === "below" ? (
+        <p className="mt-2 text-[12px] leading-5 text-[#66758c]">{helperText}</p>
+      ) : null}
     </label>
   );
 }
@@ -5975,27 +6105,20 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatusValueCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,rgba(247,242,236,0.96),rgba(239,232,223,0.96))] px-4 py-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">{label}</p>
-      <p className="mt-3 text-base font-medium text-[#171717]">{value}</p>
-    </div>
-  );
-}
-
 function SelectField({
   label,
   value,
   onChange,
   options,
   helperText,
+  infoTooltip,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
   helperText?: string;
+  infoTooltip?: string;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -6024,7 +6147,10 @@ function SelectField({
 
   return (
     <label className="block">
-      <span className="mb-2 block text-sm font-semibold text-[#171717]">{label}</span>
+      <span className="mb-2 inline-flex items-center gap-2 text-sm font-semibold text-[#171717]">
+        <span>{label}</span>
+        {infoTooltip ? <InlineInfoTooltip content={infoTooltip} /> : null}
+      </span>
       <div ref={containerRef} className="relative">
         <button
           type="button"
@@ -6287,16 +6413,21 @@ function PolicyToggleRow({
   description,
   checked,
   onChange,
+  infoTooltip,
 }: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  infoTooltip?: string;
 }) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4">
-      <div>
-        <p className="text-sm font-semibold text-[#171717]">{label}</p>
+    <label className="flex h-full cursor-pointer items-start justify-between gap-4 rounded-[18px] border border-[rgba(17,24,39,0.08)] bg-white px-4 py-4">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-[#171717]">{label}</p>
+          {infoTooltip ? <InlineInfoTooltip content={infoTooltip} /> : null}
+        </div>
         <p className="mt-1 text-sm leading-6 text-[#746d66]">{description}</p>
       </div>
       <button

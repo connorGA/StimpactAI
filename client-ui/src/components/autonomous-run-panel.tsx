@@ -80,7 +80,6 @@ export function AutonomousRunPanel({
           body: JSON.stringify({
             execution_mode: executionMode,
             allow_writeback: executionMode === "repair_and_propose",
-            require_human_approval: executionMode === "repair_and_propose",
           }),
         },
       );
