@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-04-13T02:53:32.022607Z",
+  "repository_root": "/Users/connor/Desktop/StimpactAi",
+  "features": [
+    {
+      "id": "soul-song-service-cannot-read-properties-of-undefined-reading-requestmetadata",
+      "feature_name": "Soul Song Service: Cannot read properties of undefined (reading 'requestMetadata')",
+      "description": "Sandbox verification exits successfully after the generated patch is applied.",
+      "status": "unverified",
+      "verification_method": "Run the configured verification command.",
+      "reproduction_command": "npm run check",
+      "verification_command": "npm run check",
+      "required_verification": [
+        "integration"
+      ],
+      "verification_state": {
+        "status": "unverified",
+        "attempted": [],
+        "passed": [],
+        "remaining": [
+          "integration"
+        ],
+        "browser_required": false,
+        "can_mark_complete": false,
+        "completion_blockers": [
+          "Verification still required: integration."
+        ]
+      },
+      "last_verified_at": null,
+      "notes": [
+        "Reproduce with: npm run check",
+        "Verify with: npm run check"
+      ]
+    }
+  ]
+}
