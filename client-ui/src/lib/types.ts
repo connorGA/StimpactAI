@@ -320,12 +320,30 @@ export type AutonomousPolicyDecision = {
 export type AutonomousRun = {
   id: string;
   incident_id: string | null;
+  project_id: string | null;
   async_job_id: string | null;
   repo_profile_id: string | null;
   patch_run_id: string | null;
   sandbox_run_id: string | null;
   promotion_branch_name: string | null;
   promotion_url: string | null;
+  incident_title: string | null;
+  incident_fingerprint: string | null;
+  service_name: string | null;
+  environment: string | null;
+  latest_telemetry_id: string | null;
+  latest_telemetry_commit_sha: string | null;
+  latest_telemetry_error_message: string | null;
+  runtime_kind: string | null;
+  provider_repository_owner: string | null;
+  provider_repository_name: string | null;
+  install_command: string | null;
+  reproduce_command: string | null;
+  verify_command: string | null;
+  success_criteria: string | null;
+  network_allowlist: string[];
+  dependency_service_slugs: string[];
+  browser_verification_urls: string[];
   repository_root: string;
   objective: string;
   status: AutonomousRunStatus;
@@ -617,6 +635,49 @@ export type ProjectTelemetryVerification = {
   commit_sha: string | null;
   stale_after_seconds: number;
   heartbeat: ProjectTelemetryHeartbeat | null;
+};
+
+export type ProjectHarnessReadinessCheck = {
+  id: string;
+  label: string;
+  status: "ready" | "warning" | "blocked";
+  summary: string;
+  detail: string | null;
+};
+
+export type ProjectHarnessLaunchContract = {
+  service: string;
+  environment: string;
+  project_service_id: string | null;
+  repo_profile_id: string | null;
+  provider_repository_id: string | null;
+  provider_repository_owner: string | null;
+  provider_repository_name: string | null;
+  runtime_kind: string | null;
+  base_image: string | null;
+  install_command: string | null;
+  startup_commands: string[];
+  reproduce_command: string | null;
+  verify_command: string | null;
+  success_criteria: string | null;
+  network_allowlist: string[];
+  dependency_service_slugs: string[];
+  browser_verification_urls: string[];
+  example_autonomous_run_request: Record<string, unknown>;
+};
+
+export type ProjectHarnessReadiness = {
+  project_id: string;
+  service: string;
+  environment: string;
+  status: "ready" | "warning" | "blocked";
+  telemetry_status: "unseen" | "healthy" | "stale";
+  ready_checks: ProjectHarnessReadinessCheck[];
+  warning_checks: ProjectHarnessReadinessCheck[];
+  blocked_checks: ProjectHarnessReadinessCheck[];
+  missing_items: string[];
+  recommended_next_steps: string[];
+  launch_contract: ProjectHarnessLaunchContract;
 };
 
 export type ProviderIntegration = {

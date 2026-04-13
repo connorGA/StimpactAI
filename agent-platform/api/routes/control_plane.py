@@ -48,6 +48,9 @@ from api.schemas.control_plane import (
     ProjectBrowserKeyResponse,
     ProjectOnboardingResponse,
     ProjectOnboardingStateResponse,
+    ProjectHarnessLaunchContractResponse,
+    ProjectHarnessReadinessCheckResponse,
+    ProjectHarnessReadinessResponse,
     ProjectOperationalReadinessResponse,
     ProjectPolicyResponse,
     ProjectTelemetryHeartbeatResponse,
@@ -484,6 +487,240 @@ def _build_project_telemetry_verification_response(
         commit_sha=heartbeat.commit_sha,
         stale_after_seconds=TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS,
         heartbeat=ProjectTelemetryHeartbeatResponse.from_record(heartbeat),
+    )
+
+
+def _readiness_check(
+    *,
+    check_id: str,
+    label: str,
+    status: str,
+    summary: str,
+    detail: str | None = None,
+) -> ProjectHarnessReadinessCheckResponse:
+    return ProjectHarnessReadinessCheckResponse(
+        id=check_id,
+        label=label,
+        status=status,
+        summary=summary,
+        detail=detail,
+    )
+
+
+async def _build_project_harness_readiness_response(
+    *,
+    project_id: str,
+    service: str,
+    environment: str,
+    repository: ControlPlaneRepository,
+) -> ProjectHarnessReadinessResponse:
+    normalized_service = service.strip()
+    normalized_environment = environment.strip()
+    onboarding_state = await repository.get_or_create_project_onboarding_state(project_id)
+    policy = await repository.get_or_create_project_policy(project_id)
+    telemetry_verification = _build_project_telemetry_verification_response(
+        service=normalized_service,
+        environment=normalized_environment,
+        heartbeat=await repository.get_project_telemetry_heartbeat(
+            project_id=project_id,
+            service=normalized_service,
+            environment=normalized_environment,
+        ),
+    )
+    api_keys = await repository.list_project_api_keys(project_id)
+    browser_keys = await repository.list_project_browser_keys(project_id)
+    integrations = await repository.list_provider_integrations(project_id=project_id)
+    project_service = (
+        await repository.resolve_project_service(project_id=project_id, service_name=normalized_service)
+        if hasattr(repository, "resolve_project_service")
+        else None
+    )
+    repo_profile = None
+    dependency_service_slugs: list[str] = []
+    if project_service is not None and project_service.repo_profile_id is not None and hasattr(repository, "get_repo_profile"):
+        repo_profile = await repository.get_repo_profile(project_service.repo_profile_id)
+        if hasattr(repository, "list_project_service_dependencies") and hasattr(repository, "get_project_service"):
+            dependency_records = await repository.list_project_service_dependencies(project_service.id)
+            for dependency in dependency_records:
+                dependency_service = await repository.get_project_service(dependency.depends_on_service_id)
+                if dependency_service is not None:
+                    dependency_service_slugs.append(dependency_service.slug)
+    if repo_profile is None and hasattr(repository, "get_active_repo_profile"):
+        repo_profile = await repository.get_active_repo_profile(project_id)
+    provider_repository = (
+        await repository.get_provider_repository(repo_profile.provider_repository_id)
+        if repo_profile is not None and hasattr(repository, "get_provider_repository")
+        else None
+    )
+    ready_checks: list[ProjectHarnessReadinessCheckResponse] = []
+    warning_checks: list[ProjectHarnessReadinessCheckResponse] = []
+    blocked_checks: list[ProjectHarnessReadinessCheckResponse] = []
+
+    def append_check(check: ProjectHarnessReadinessCheckResponse) -> None:
+        if check.status == "ready":
+            ready_checks.append(check)
+        elif check.status == "warning":
+            warning_checks.append(check)
+        else:
+            blocked_checks.append(check)
+
+    has_active_credentials = any(item.status is ProjectApiKeyStatus.ACTIVE for item in api_keys) or any(
+        item.status is ProjectBrowserKeyStatus.ACTIVE for item in browser_keys
+    )
+    append_check(
+        _readiness_check(
+            check_id="telemetry-credentials",
+            label="Telemetry credentials",
+            status="ready" if has_active_credentials else "blocked",
+            summary=(
+                "At least one active API key or browser key is available for SDK ingest."
+                if has_active_credentials
+                else "No active telemetry credential is available for this project."
+            ),
+            detail="Create an API key for servers or a browser key for browser token exchange.",
+        )
+    )
+    append_check(
+        _readiness_check(
+            check_id="provider-connection",
+            label="Provider connection",
+            status="ready" if integrations else "blocked",
+            summary=(
+                "A source provider is connected, so the harness can resolve repository metadata."
+                if integrations
+                else "No provider integration is connected to this project yet."
+            ),
+            detail="Connect GitHub or GitLab and sync repositories before launching autonomous runs.",
+        )
+    )
+    append_check(
+        _readiness_check(
+            check_id="service-mapping",
+            label="Service mapping",
+            status="ready" if project_service is not None else "blocked",
+            summary=(
+                f"Service '{project_service.slug}' is mapped for harness execution."
+                if project_service is not None
+                else f"No project service mapping matches '{normalized_service}'."
+            ),
+            detail="Create or update a project service so telemetry can resolve to the correct repo profile.",
+        )
+    )
+    append_check(
+        _readiness_check(
+            check_id="repo-profile",
+            label="Repo profile",
+            status="ready" if repo_profile is not None else "blocked",
+            summary=(
+                "A repo profile is available with sandbox commands for this service."
+                if repo_profile is not None
+                else "No repo profile is available for the selected service."
+            ),
+            detail="Create a repo profile with install, reproduce, and verify commands.",
+        )
+    )
+    has_command_contract = bool(repo_profile and repo_profile.reproduce_command.strip() and repo_profile.verify_command.strip())
+    append_check(
+        _readiness_check(
+            check_id="sandbox-contract",
+            label="Sandbox contract",
+            status="ready" if has_command_contract else "blocked",
+            summary=(
+                "The harness has reproduce and verify commands for iterative repair."
+                if has_command_contract
+                else "The repo profile is missing reproduce or verify commands."
+            ),
+            detail="Autonomous runs rely on these commands to recreate failures and validate candidate fixes.",
+        )
+    )
+    append_check(
+        _readiness_check(
+            check_id="policy-review",
+            label="Policy review",
+            status="ready" if onboarding_state.policy_reviewed else "warning",
+            summary=(
+                "Automation controls were reviewed for this project."
+                if onboarding_state.policy_reviewed
+                else "Automation controls have not been reviewed yet."
+            ),
+            detail="Review the project policy before enabling broader autonomous execution.",
+        )
+    )
+    heartbeat_status = telemetry_verification.status
+    append_check(
+        _readiness_check(
+            check_id="live-telemetry",
+            label="Live telemetry",
+            status="ready" if heartbeat_status == "healthy" else "warning",
+            summary=(
+                "A recent heartbeat confirms the deployed SDK is active."
+                if heartbeat_status == "healthy"
+                else "The harness can be configured without a fresh heartbeat, but live telemetry has not been confirmed recently."
+            ),
+            detail="Use heartbeat verification to confirm the deployed service is reaching Stimpact before a live drill.",
+        )
+    )
+    policy_ready = all(
+        [
+            policy.failure_classifier_enabled,
+            policy.root_cause_enabled,
+            policy.patch_planner_enabled,
+        ]
+    )
+    append_check(
+        _readiness_check(
+            check_id="analysis-stack",
+            label="Analysis stack",
+            status="ready" if policy_ready else "warning",
+            summary=(
+                "Failure classification, root-cause analysis, and patch planning are enabled."
+                if policy_ready
+                else "One or more analysis capabilities are disabled in the project policy."
+            ),
+            detail="These controls improve the evidence available to the agent during repair runs.",
+        )
+    )
+    launch_status = "blocked" if blocked_checks else "warning" if warning_checks else "ready"
+    missing_items = [check.label for check in blocked_checks]
+    recommended_next_steps = [check.detail for check in blocked_checks + warning_checks if check.detail][:6]
+    launch_contract = ProjectHarnessLaunchContractResponse(
+        service=normalized_service,
+        environment=normalized_environment,
+        project_service_id=project_service.id if project_service is not None else None,
+        repo_profile_id=repo_profile.id if repo_profile is not None else None,
+        provider_repository_id=repo_profile.provider_repository_id if repo_profile is not None else None,
+        provider_repository_owner=provider_repository.owner if provider_repository is not None else None,
+        provider_repository_name=provider_repository.name if provider_repository is not None else None,
+        runtime_kind=repo_profile.runtime_kind.value if repo_profile is not None else None,
+        base_image=repo_profile.base_image if repo_profile is not None else None,
+        install_command=repo_profile.install_command if repo_profile is not None else None,
+        startup_commands=list(repo_profile.startup_commands) if repo_profile is not None else [],
+        reproduce_command=repo_profile.reproduce_command if repo_profile is not None else None,
+        verify_command=repo_profile.verify_command if repo_profile is not None else None,
+        success_criteria=repo_profile.success_criteria if repo_profile is not None else None,
+        network_allowlist=list(repo_profile.network_allowlist) if repo_profile is not None else [],
+        dependency_service_slugs=dependency_service_slugs,
+        browser_verification_urls=[],
+        example_autonomous_run_request={
+            "execution_mode": "repair_and_propose",
+            "allow_writeback": False,
+            "max_steps": 12,
+            "benchmark_scenario_id": None,
+            "benchmark_bug_class": None,
+        },
+    )
+    return ProjectHarnessReadinessResponse(
+        project_id=project_id,
+        service=normalized_service,
+        environment=normalized_environment,
+        status=launch_status,
+        telemetry_status=heartbeat_status,
+        ready_checks=ready_checks,
+        warning_checks=warning_checks,
+        blocked_checks=blocked_checks,
+        missing_items=missing_items,
+        recommended_next_steps=recommended_next_steps,
+        launch_contract=launch_contract,
     )
 
 
@@ -964,6 +1201,25 @@ async def get_project_telemetry_verification(
         service=service.strip(),
         environment=environment.strip(),
         heartbeat=heartbeat,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/harness-readiness",
+    response_model=ProjectHarnessReadinessResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_harness_readiness(
+    project_id: str,
+    service: str = Query(min_length=1, max_length=128),
+    environment: str = Query(min_length=1, max_length=32),
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ProjectHarnessReadinessResponse:
+    return await _build_project_harness_readiness_response(
+        project_id=project_id,
+        service=service,
+        environment=environment,
+        repository=repository,
     )
 
 

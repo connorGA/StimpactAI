@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -17,6 +18,7 @@ from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner, SdkBoot
 
 SDK_BOOTSTRAP_API_KEY_PLACEHOLDER = "stimp_live_replace_me"
 SDK_BOOTSTRAP_BROWSER_KEY_PLACEHOLDER = "stimp_browser_replace_me"
+_STIMPACT_HELPER_VERSION = "2"
 logger = logging.getLogger(__name__)
 _ROOT_MANIFEST_DIR_NAMES = (
     "frontend",
@@ -643,6 +645,14 @@ def _build_vite_react_strategy(
             helper_suffix = ".ts" if target_path.suffix in {".ts", ".tsx"} else ".js"
             helper_path = target_path.parent / f"stimpact{helper_suffix}"
             display_subpath = _relative_display_path(repo_dir, package_dir)
+            handled_boundary_files = [
+                SdkBootstrapPlannedFile(
+                    path=_relative_display_path(repo_dir, candidate_path),
+                    action="update",
+                    reason=reason,
+                )
+                for candidate_path, reason in _browser_handled_boundary_candidates(helper_path=helper_path)
+            ]
             return SdkBootstrapStrategy(
                 id=f"javascript-vite-react:{display_subpath}:{relative_path}",
                 language="javascript",
@@ -674,6 +684,7 @@ def _build_vite_react_strategy(
                         action="update",
                         reason="Document the Stimpact Vite environment variables for this app.",
                     ),
+                    *handled_boundary_files,
                 ],
                 env_vars=framework_spec.env_vars,
                 install_command=framework_spec.install_command,
@@ -718,6 +729,14 @@ def _build_react_scripts_strategy(
             helper_suffix = ".ts" if target_path.suffix in {".ts", ".tsx"} else ".js"
             helper_path = package_dir / "src" / f"stimpact{helper_suffix}"
             display_subpath = _relative_display_path(repo_dir, package_dir)
+            handled_boundary_files = [
+                SdkBootstrapPlannedFile(
+                    path=_relative_display_path(repo_dir, candidate_path),
+                    action="update",
+                    reason=reason,
+                )
+                for candidate_path, reason in _browser_handled_boundary_candidates(helper_path=helper_path)
+            ]
             return SdkBootstrapStrategy(
                 id=f"javascript-react-scripts:{display_subpath}:{relative_path}",
                 language="javascript",
@@ -749,6 +768,7 @@ def _build_react_scripts_strategy(
                         action="update",
                         reason="Document the Stimpact browser environment variables for this app.",
                     ),
+                    *handled_boundary_files,
                 ],
                 env_vars=framework_spec.env_vars,
                 install_command=framework_spec.install_command,
@@ -1403,7 +1423,7 @@ def _apply_next_strategy(
 ) -> None:
     package_dir = _resolve_subpath(repo_dir, strategy.target_subpath)
     package_data = _read_json(package_dir / "package.json")
-    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.1.0")
+    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.2.0")
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     target_path = package_dir / entrypoint_relative
     component_path = target_path.parents[1] / "components" / f"stimpact-provider{target_path.suffix}"
@@ -1453,7 +1473,7 @@ def _apply_vite_react_strategy(
 ) -> None:
     package_dir = _resolve_subpath(repo_dir, strategy.target_subpath)
     package_data = _read_json(package_dir / "package.json")
-    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.1.0")
+    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.2.0")
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     entrypoint_path = package_dir / entrypoint_relative
     helper_suffix = ".ts" if entrypoint_path.suffix in {".ts", ".tsx"} else ".js"
@@ -1478,6 +1498,7 @@ def _apply_vite_react_strategy(
             ("VITE_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
+    _apply_browser_handled_boundary_instrumentation(helper_path=helper_path)
 
 
 def _apply_react_scripts_strategy(
@@ -1492,7 +1513,7 @@ def _apply_react_scripts_strategy(
 ) -> None:
     package_dir = _resolve_subpath(repo_dir, strategy.target_subpath)
     package_data = _read_json(package_dir / "package.json")
-    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.1.0")
+    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.2.0")
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     entrypoint_path = package_dir / entrypoint_relative
     helper_suffix = ".ts" if entrypoint_path.suffix in {".ts", ".tsx"} else ".js"
@@ -1518,6 +1539,7 @@ def _apply_react_scripts_strategy(
             ("REACT_APP_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
+    _apply_browser_handled_boundary_instrumentation(helper_path=helper_path)
 
 
 def _apply_python_strategy(
@@ -1593,7 +1615,7 @@ def _apply_generic_javascript_strategy(
 ) -> None:
     package_dir = _resolve_subpath(repo_dir, strategy.target_subpath)
     package_data = _read_json(package_dir / "package.json")
-    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.1.0")
+    _ensure_package_dependency(package_dir / "package.json", package_data, "@stimpact/sdk", "^0.2.0")
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     entrypoint_path = package_dir / entrypoint_relative
     source = entrypoint_path.read_text(encoding="utf-8")
@@ -1968,6 +1990,31 @@ def _inject_import(source: str, import_statement: str) -> str:
     return f"{import_statement}\n{source}"
 
 
+def _ensure_named_imports(source: str, *, module: str, names: list[str]) -> str:
+    pattern = re.compile(
+        rf'import\s*\{{(?P<imports>.*?)\}}\s*from\s*[\'"]{re.escape(module)}[\'"];',
+        flags=re.DOTALL,
+    )
+    match = pattern.search(source)
+    if not match:
+        return source
+    existing = [item.strip() for item in match.group("imports").replace("\n", " ").split(",") if item.strip()]
+    updated = existing[:]
+    for name in names:
+        if name not in updated:
+            updated.append(name)
+    replacement = f'import {{ {", ".join(updated)} }} from "{module}";'
+    return source[: match.start()] + replacement + source[match.end() :]
+
+
+def _inject_after_imports(source: str, snippet: str) -> str:
+    import_matches = list(re.finditer(r"^(?:from .+ import .+|import .+)\n", source, flags=re.MULTILINE))
+    if import_matches:
+        insert_at = import_matches[-1].end()
+        return f"{source[:insert_at]}\n{snippet}{source[insert_at:]}"
+    return f"{snippet}\n{source}"
+
+
 def _write_file(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contents if contents.endswith("\n") else f"{contents}\n", encoding="utf-8")
@@ -1985,13 +2032,219 @@ def _ensure_env_file(path: Path, entries: list[tuple[str, str]]) -> None:
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
+def _helper_module_import_path(*, source_path: Path, helper_path: Path) -> str:
+    relative = os.path.relpath(helper_path.with_suffix(""), start=source_path.parent)
+    normalized = Path(relative).as_posix()
+    return normalized if normalized.startswith(".") else f"./{normalized}"
+
+
+def _browser_handled_boundary_candidates(*, helper_path: Path) -> list[tuple[Path, str]]:
+    lib_dir = helper_path.parent / "lib"
+    candidates: list[tuple[Path, str]] = []
+    for stem, reason in (
+        ("queryClient", "Wire handled error capture into the shared React Query boundary."),
+        ("xanoClient", "Wire handled error capture into the shared request wrapper."),
+    ):
+        for suffix in (".ts", ".tsx", ".js", ".jsx"):
+            candidate = lib_dir / f"{stem}{suffix}"
+            if candidate.exists():
+                candidates.append((candidate, reason))
+                break
+    return candidates
+
+
+def _purge_stale_get_stimpact_client_calls(source: str) -> str:
+    """Remove any remaining getStimpactClient() references from boundary files.
+
+    Previous generator versions injected ``reportHandledError`` implementations
+    that called ``getStimpactClient()`` internally.  When a newer generator
+    rewrites the import to ``captureHandledError`` but skips re-generating
+    ``reportHandledError`` (because one already exists), the body retains the
+    broken ``getStimpactClient()`` call, which produces a ``ReferenceError`` at
+    runtime.  This function detects any such residual calls and replaces them
+    with ``captureHandledError``.
+    """
+    if "getStimpactClient" not in source:
+        return source
+    source = re.sub(
+        r"const\s+client\s*=\s*getStimpactClient\(\);\s*\n"
+        r"\s*if\s*\(\s*client\s*\)\s*\{\s*\n"
+        r"\s*(?:void\s+|await\s+)?client\.captureError\(\{[^}]*\}\);\s*\n"
+        r"\s*\}",
+        "await captureHandledError(input);",
+        source,
+    )
+    source = re.sub(
+        r"getStimpactClient\(\)\?\.captureError\(",
+        "captureHandledError(",
+        source,
+    )
+    source = re.sub(
+        r"getStimpactClient\(\)\?\.captureHandledError\(",
+        "captureHandledError(",
+        source,
+    )
+    return source
+
+
+_REPORT_HANDLED_ERROR_BODY = """async function reportHandledError(input: {
+  error: unknown;
+  request?: { method?: string; url?: string };
+  response?: { status_code?: number };
+}) {
+  await captureHandledError(input);
+}
+"""
+
+
+def _ensure_report_handled_error_helper(source: str) -> str:
+    if "async function reportHandledError(" not in source:
+        return _inject_after_imports(source, _REPORT_HANDLED_ERROR_BODY)
+    if "await captureHandledError(input);" in source:
+        return source
+    source = re.sub(
+        r"async function reportHandledError\(input:[\s\S]*?\n\}\n",
+        _REPORT_HANDLED_ERROR_BODY,
+        source,
+        count=1,
+    )
+    return source
+
+
+def _apply_browser_handled_boundary_instrumentation(*, helper_path: Path) -> None:
+    for boundary_path, _reason in _browser_handled_boundary_candidates(helper_path=helper_path):
+        if boundary_path.stem == "queryClient":
+            _patch_query_client_for_handled_capture(boundary_path, helper_path)
+        elif boundary_path.stem == "xanoClient":
+            _patch_xano_client_for_handled_capture(boundary_path, helper_path)
+
+
+def _patch_query_client_for_handled_capture(path: Path, helper_path: Path) -> None:
+    source = path.read_text(encoding="utf-8")
+    helper_import = f'import {{ captureHandledError }} from "{_helper_module_import_path(source_path=path, helper_path=helper_path)}";\n'
+    if 'import { getStimpactClient } from "' in source:
+        source = re.sub(
+            r'import\s*\{\s*getStimpactClient\s*\}\s*from\s*[\'"].+?[\'"];\n',
+            helper_import,
+            source,
+            count=1,
+        )
+    elif 'import { captureHandledError } from "' not in source:
+        source = _inject_import(source, helper_import)
+    source = _ensure_named_imports(
+        source,
+        module="@tanstack/react-query",
+        names=["MutationCache", "QueryCache"],
+    )
+    source = _ensure_report_handled_error_helper(source)
+    original_throw = """async function throwIfResNotOk(res: Response) {\n  if (!res.ok) {\n    const text = (await res.text()) || res.statusText;\n    throw new Error(`${res.status}: ${text}`);\n  }\n}\n"""
+    updated_throw = """async function throwIfResNotOk(\n  res: Response,\n  request?: { method?: string; url?: string },\n) {\n  if (!res.ok) {\n    const text = (await res.text()) || res.statusText;\n    const error = new Error(`${res.status}: ${text}`);\n    await reportHandledError({\n      error,\n      request,\n      response: { status_code: res.status },\n    });\n    throw error;\n  }\n}\n"""
+    if original_throw in source:
+        source = source.replace(original_throw, updated_throw, 1)
+    source = source.replace("await captureHandledError({", "await reportHandledError({")
+    source = source.replace("void captureHandledError({", "void reportHandledError({")
+    source = source.replace(
+        "  const res = await fetch(url, {\n    method,\n    headers,\n    body: data ? JSON.stringify(data) : undefined,\n    credentials: \"include\",\n  });\n\n  await throwIfResNotOk(res);\n  return res;\n}",
+        "  try {\n    const res = await fetch(url, {\n      method,\n      headers,\n      body: data ? JSON.stringify(data) : undefined,\n      credentials: \"include\",\n    });\n\n    await throwIfResNotOk(res, { method, url });\n    return res;\n  } catch (error) {\n    await reportHandledError({\n      error,\n      request: { method, url },\n    });\n    throw error;\n  }\n}",
+        1,
+    )
+    source = source.replace(
+        "  async ({ queryKey }) => {\n    const res = await fetch(queryKey.join(\"/\") as string, {\n      credentials: \"include\",\n    });\n\n    if (unauthorizedBehavior === \"returnNull\" && res.status === 401) {\n      return null;\n    }\n\n    await throwIfResNotOk(res);\n    return await res.json();\n  };",
+        "  async ({ queryKey }) => {\n    const url = queryKey.join(\"/\") as string;\n    try {\n      const res = await fetch(url, {\n        credentials: \"include\",\n      });\n\n      if (unauthorizedBehavior === \"returnNull\" && res.status === 401) {\n        return null;\n      }\n\n      await throwIfResNotOk(res, { method: \"GET\", url });\n      return await res.json();\n    } catch (error) {\n      await reportHandledError({\n        error,\n        request: { method: \"GET\", url },\n      });\n      throw error;\n    }\n  };",
+        1,
+    )
+    if "const stimpactQueryCache = new QueryCache({" not in source:
+        source = source.replace(
+            'export const queryClient = new QueryClient({',
+            """function describeReactQueryKey(key: readonly unknown[] | undefined): string {
+  if (!key || key.length === 0) {
+    return "react-query";
+  }
+  return key
+    .map((segment) => {
+      if (typeof segment === "string" || typeof segment === "number") {
+        return String(segment);
+      }
+      return "segment";
+    })
+    .join("/");
+}
+
+const stimpactQueryCache = new QueryCache({
+  onError: (error, query) => {
+    void reportHandledError({
+      error,
+      request: {
+        method: "QUERY",
+        url: describeReactQueryKey(query.queryKey),
+      },
+    });
+  },
+});
+
+const stimpactMutationCache = new MutationCache({
+  onError: (error, _variables, _context, mutation) => {
+    const mutationKey = Array.isArray(mutation.options.mutationKey)
+      ? describeReactQueryKey(mutation.options.mutationKey)
+      : mutation.options.meta?.stimpactAction
+        ? String(mutation.options.meta.stimpactAction)
+        : "react-query-mutation";
+    void reportHandledError({
+      error,
+      request: {
+        method: "MUTATION",
+        url: mutationKey,
+      },
+    });
+  },
+});
+
+export const queryClient = new QueryClient({""",
+            1,
+        )
+    if "queryCache: stimpactQueryCache" not in source:
+        source = source.replace(
+            'export const queryClient = new QueryClient({',
+            'export const queryClient = new QueryClient({\n  queryCache: stimpactQueryCache,\n  mutationCache: stimpactMutationCache,',
+            1,
+        )
+    source = _purge_stale_get_stimpact_client_calls(source)
+    path.write_text(source, encoding="utf-8")
+
+
+def _patch_xano_client_for_handled_capture(path: Path, helper_path: Path) -> None:
+    source = path.read_text(encoding="utf-8")
+    helper_import = f'import {{ captureHandledError }} from "{_helper_module_import_path(source_path=path, helper_path=helper_path)}";\n'
+    if 'import { getStimpactClient } from "' in source:
+        source = re.sub(
+            r'import\s*\{\s*getStimpactClient\s*\}\s*from\s*[\'"].+?[\'"];\n',
+            helper_import,
+            source,
+            count=1,
+        )
+    elif 'import { captureHandledError } from "' not in source:
+        source = _inject_import(source, helper_import)
+    source = _ensure_report_handled_error_helper(source)
+    original_function = """export async function xanoRequest<T = any>(\n  endpoint: string,\n  options: RequestInit = {}\n): Promise<T> {\n  const token = getAuthToken();\n  \n  const headers: Record<string, string> = {\n    'Content-Type': 'application/json',\n  };\n\n  // Merge any existing headers\n  if (options.headers) {\n    const existingHeaders = new Headers(options.headers);\n    existingHeaders.forEach((value, key) => {\n      headers[key] = value;\n    });\n  }\n\n  // Add auth token if available\n  if (token) {\n    headers['Authorization'] = `Bearer ${token}`;\n  }\n\n  const url = endpoint.startsWith('http') ? endpoint : `${getBaseUrl(endpoint)}${endpoint}`;\n\n  const response = await fetch(url, {\n    ...options,\n    headers,\n  });\n\n  // Handle unauthorized responses\n  if (response.status === 401) {\n    removeAuthToken();\n    // Optionally redirect to login or dispatch an event\n    window.dispatchEvent(new CustomEvent('auth:unauthorized'));\n    throw new Error('Your session has expired. Please log in again.');\n  }\n\n  if (!response.ok) {\n    const errorText = await response.text();\n    \n    // Try to parse Xano error format: {\"code\":\"ERROR_CODE\",\"message\":\"Human readable message\",\"payload\":\"\"}\n    let errorMessage: string | null = null;\n    try {\n      const errorData = JSON.parse(errorText);\n      if (errorData.message) {\n        // Use the human-readable message from Xano\n        errorMessage = errorData.message;\n      }\n    } catch (parseError) {\n      // If parsing fails, it's not a Xano error format\n    }\n    \n    // If we have a Xano error message, use it; otherwise use status-based fallback\n    if (errorMessage) {\n      throw new Error(errorMessage);\n    }\n    \n    // Fallback to generic error messages based on status code\n    const statusMessages: Record<number, string> = {\n      400: 'Invalid request. Please check your input and try again.',\n      403: 'Access denied. Please check your credentials.',\n      404: 'The requested resource was not found.',\n      409: 'This action conflicts with existing data.',\n      500: 'Server error. Please try again later.',\n      503: 'Service temporarily unavailable. Please try again later.',\n    };\n    \n    const message = statusMessages[response.status] || `An error occurred (${response.status}). Please try again.`;\n    throw new Error(message);\n  }\n\n  // Return response data\n  return await response.json();\n}\n"""
+    updated_function = """export async function xanoRequest<T = any>(\n  endpoint: string,\n  options: RequestInit = {}\n): Promise<T> {\n  const token = getAuthToken();\n\n  const headers: Record<string, string> = {\n    'Content-Type': 'application/json',\n  };\n\n  // Merge any existing headers\n  if (options.headers) {\n    const existingHeaders = new Headers(options.headers);\n    existingHeaders.forEach((value, key) => {\n      headers[key] = value;\n    });\n  }\n\n  // Add auth token if available\n  if (token) {\n    headers['Authorization'] = `Bearer ${token}`;\n  }\n\n  const url = endpoint.startsWith('http') ? endpoint : `${getBaseUrl(endpoint)}${endpoint}`;\n  const method = options.method ?? 'GET';\n\n  try {\n    const response = await fetch(url, {\n      ...options,\n      headers,\n    });\n\n    // Handle unauthorized responses\n    if (response.status === 401) {\n      removeAuthToken();\n      // Optionally redirect to login or dispatch an event\n      window.dispatchEvent(new CustomEvent('auth:unauthorized'));\n      const error = new Error('Your session has expired. Please log in again.');\n      await captureHandledError({\n        error,\n        request: { method, url },\n        response: { status_code: response.status },\n      });\n      throw error;\n    }\n\n    if (!response.ok) {\n      const errorText = await response.text();\n\n      // Try to parse Xano error format: {\"code\":\"ERROR_CODE\",\"message\":\"Human readable message\",\"payload\":\"\"}\n      let errorMessage: string | null = null;\n      try {\n        const errorData = JSON.parse(errorText);\n        if (errorData.message) {\n          // Use the human-readable message from Xano\n          errorMessage = errorData.message;\n        }\n      } catch (_parseError) {\n        // If parsing fails, it's not a Xano error format\n      }\n\n      // If we have a Xano error message, use it; otherwise use status-based fallback\n      if (errorMessage) {\n        const error = new Error(errorMessage);\n        await captureHandledError({\n          error,\n          request: { method, url },\n          response: { status_code: response.status },\n        });\n        throw error;\n      }\n\n      // Fallback to generic error messages based on status code\n      const statusMessages: Record<number, string> = {\n        400: 'Invalid request. Please check your input and try again.',\n        403: 'Access denied. Please check your credentials.',\n        404: 'The requested resource was not found.',\n        409: 'This action conflicts with existing data.',\n        500: 'Server error. Please try again later.',\n        503: 'Service temporarily unavailable. Please try again later.',\n      };\n\n      const message = statusMessages[response.status] || `An error occurred (${response.status}). Please try again.`;\n      const error = new Error(message);\n      await captureHandledError({\n        error,\n        request: { method, url },\n        response: { status_code: response.status },\n      });\n      throw error;\n    }\n\n    // Return response data\n    return await response.json();\n  } catch (error) {\n    await captureHandledError({\n      error,\n      request: { method, url },\n    });\n    throw error;\n  }\n}\n"""
+    if original_function in source:
+        source = source.replace(original_function, updated_function, 1)
+    source = source.replace("await captureHandledError({", "await reportHandledError({")
+    source = _purge_stale_get_stimpact_client_calls(source)
+    path.write_text(source, encoding="utf-8")
+
+
 def _build_next_provider_source(*, service_name: str, environment: str) -> str:
-    return f'''"use client";
+    return f'''// @stimpact-integration v{_STIMPACT_HELPER_VERSION}
+"use client";
 
 import {{ useEffect }} from "react";
 import {{ StimpactClient }} from "@stimpact/sdk";
 
 let stimpactClient: StimpactClient | null = null;
+type HandledErrorInput = Parameters<StimpactClient["captureError"]>[0];
+type HandledErrorContext = Omit<HandledErrorInput, "error">;
+const handledErrors = new WeakSet<object>();
 
 export function getStimpactClient(): StimpactClient | null {{
   return stimpactClient;
@@ -2004,6 +2257,58 @@ export async function pingStimpact(): Promise<void> {{
   await stimpactClient.ping();
 }}
 
+export async function captureHandledError(input: HandledErrorInput): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? (input.error as object)
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    const runtimeClient = stimpactClient as StimpactClient & {{
+      captureHandledError?: (payload: HandledErrorInput) => Promise<void>;
+      captureError: (payload: HandledErrorInput) => Promise<void>;
+    }};
+    if (typeof runtimeClient.captureHandledError === "function") {{
+      await runtimeClient.captureHandledError(input);
+      return;
+    }}
+    await runtimeClient.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+export function wrapStimpact<T>(
+  operation: () => T,
+  context?: HandledErrorContext,
+): T {{
+  if (!stimpactClient) {{
+    return operation();
+  }}
+  return stimpactClient.wrap(operation, context);
+}}
+
+export async function wrapStimpactAsync<T>(
+  operation: () => Promise<T>,
+  context?: HandledErrorContext,
+): Promise<T> {{
+  if (!stimpactClient) {{
+    return await operation();
+  }}
+  return await stimpactClient.wrapAsync(operation, context);
+}}
+
 function syncWindowStimpactControls() {{
   if (typeof window === "undefined") {{
     return;
@@ -2012,6 +2317,7 @@ function syncWindowStimpactControls() {{
     __stimpact?: {{
       ping: typeof pingStimpact;
       getClient: typeof getStimpactClient;
+      captureHandledError: typeof captureHandledError;
     }};
     pingStimpact?: typeof pingStimpact;
   }};
@@ -2020,6 +2326,7 @@ function syncWindowStimpactControls() {{
     scope.__stimpact = {{
       ping: pingStimpact,
       getClient: getStimpactClient,
+      captureHandledError,
     }};
     return;
   }}
@@ -2071,10 +2378,14 @@ export function StimpactProvider() {{
 
 
 def _build_vite_helper_source(*, service_name: str, environment: str) -> str:
-    return f'''import {{ StimpactClient }} from "@stimpact/sdk";
+    return f'''// @stimpact-integration v{_STIMPACT_HELPER_VERSION}
+import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
 let stimpactClient: StimpactClient | null = null;
+type HandledErrorInput = Parameters<StimpactClient["captureError"]>[0];
+type HandledErrorContext = Omit<HandledErrorInput, "error">;
+const handledErrors = new WeakSet<object>();
 
 export function getStimpactClient(): StimpactClient | null {{
   return stimpactClient;
@@ -2087,6 +2398,58 @@ export async function pingStimpact(): Promise<void> {{
   await stimpactClient.ping();
 }}
 
+export async function captureHandledError(input: HandledErrorInput): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? (input.error as object)
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    const runtimeClient = stimpactClient as StimpactClient & {{
+      captureHandledError?: (payload: HandledErrorInput) => Promise<void>;
+      captureError: (payload: HandledErrorInput) => Promise<void>;
+    }};
+    if (typeof runtimeClient.captureHandledError === "function") {{
+      await runtimeClient.captureHandledError(input);
+      return;
+    }}
+    await runtimeClient.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+export function wrapStimpact<T>(
+  operation: () => T,
+  context?: HandledErrorContext,
+): T {{
+  if (!stimpactClient) {{
+    return operation();
+  }}
+  return stimpactClient.wrap(operation, context);
+}}
+
+export async function wrapStimpactAsync<T>(
+  operation: () => Promise<T>,
+  context?: HandledErrorContext,
+): Promise<T> {{
+  if (!stimpactClient) {{
+    return await operation();
+  }}
+  return await stimpactClient.wrapAsync(operation, context);
+}}
+
 function syncWindowStimpactControls() {{
   if (typeof window === "undefined") {{
     return;
@@ -2095,6 +2458,7 @@ function syncWindowStimpactControls() {{
     __stimpact?: {{
       ping: typeof pingStimpact;
       getClient: typeof getStimpactClient;
+      captureHandledError: typeof captureHandledError;
     }};
     pingStimpact?: typeof pingStimpact;
   }};
@@ -2103,6 +2467,7 @@ function syncWindowStimpactControls() {{
     scope.__stimpact = {{
       ping: pingStimpact,
       getClient: getStimpactClient,
+      captureHandledError,
     }};
     return;
   }}
@@ -2147,10 +2512,14 @@ export function installStimpact() {{
 
 
 def _build_react_scripts_helper_source(*, service_name: str, environment: str) -> str:
-    return f'''import {{ StimpactClient }} from "@stimpact/sdk";
+    return f'''// @stimpact-integration v{_STIMPACT_HELPER_VERSION}
+import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
 let stimpactClient: StimpactClient | null = null;
+type HandledErrorInput = Parameters<StimpactClient["captureError"]>[0];
+type HandledErrorContext = Omit<HandledErrorInput, "error">;
+const handledErrors = new WeakSet<object>();
 
 export function getStimpactClient(): StimpactClient | null {{
   return stimpactClient;
@@ -2163,6 +2532,58 @@ export async function pingStimpact(): Promise<void> {{
   await stimpactClient.ping();
 }}
 
+export async function captureHandledError(input: HandledErrorInput): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? (input.error as object)
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    const runtimeClient = stimpactClient as StimpactClient & {{
+      captureHandledError?: (payload: HandledErrorInput) => Promise<void>;
+      captureError: (payload: HandledErrorInput) => Promise<void>;
+    }};
+    if (typeof runtimeClient.captureHandledError === "function") {{
+      await runtimeClient.captureHandledError(input);
+      return;
+    }}
+    await runtimeClient.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+export function wrapStimpact<T>(
+  operation: () => T,
+  context?: HandledErrorContext,
+): T {{
+  if (!stimpactClient) {{
+    return operation();
+  }}
+  return stimpactClient.wrap(operation, context);
+}}
+
+export async function wrapStimpactAsync<T>(
+  operation: () => Promise<T>,
+  context?: HandledErrorContext,
+): Promise<T> {{
+  if (!stimpactClient) {{
+    return await operation();
+  }}
+  return await stimpactClient.wrapAsync(operation, context);
+}}
+
 function syncWindowStimpactControls() {{
   if (typeof window === "undefined") {{
     return;
@@ -2171,6 +2592,7 @@ function syncWindowStimpactControls() {{
     __stimpact?: {{
       ping: typeof pingStimpact;
       getClient: typeof getStimpactClient;
+      captureHandledError: typeof captureHandledError;
     }};
     pingStimpact?: typeof pingStimpact;
   }};
@@ -2179,6 +2601,7 @@ function syncWindowStimpactControls() {{
     scope.__stimpact = {{
       ping: pingStimpact,
       getClient: getStimpactClient,
+      captureHandledError,
     }};
     return;
   }}
@@ -2291,6 +2714,41 @@ const stimpact = new StimpactClient({{
 stimpact.startHeartbeat();
 stimpact.registerBrowserAutoCapture();
 
+const handledErrors = new WeakSet<object>();
+
+export async function captureHandledError(input) {{
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? input.error
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    if (typeof stimpact.captureHandledError === "function") {{
+      await stimpact.captureHandledError(input);
+      return;
+    }}
+    await stimpact.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+export function wrapStimpact(operation, context) {{
+  return stimpact.wrap(operation, context);
+}}
+
+export async function wrapStimpactAsync(operation, context) {{
+  return await stimpact.wrapAsync(operation, context);
+}}
+
 export async function pingStimpact() {{
   await stimpact.ping();
 }}
@@ -2300,6 +2758,7 @@ if (typeof window !== "undefined") {{
     __stimpact?: {{
       ping: typeof pingStimpact;
       getClient: () => StimpactClient;
+      captureHandledError: typeof captureHandledError;
     }};
     pingStimpact?: typeof pingStimpact;
   }};
@@ -2307,6 +2766,7 @@ if (typeof window !== "undefined") {{
   scope.__stimpact = {{
     ping: pingStimpact,
     getClient: () => stimpact,
+    captureHandledError,
   }};
 }}
 '''
@@ -2318,6 +2778,7 @@ def _build_generic_node_helper_source(*, service_name: str, environment: str, mo
 
 let installed = false;
 let stimpactClient = null;
+const handledErrors = new WeakSet();
 
 function getStimpactClient() {{
   return stimpactClient;
@@ -2328,6 +2789,48 @@ async function pingStimpact() {{
     return;
   }}
   await stimpactClient.ping();
+}}
+
+async function captureHandledError(input) {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? input.error
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    if (typeof stimpactClient.captureHandledError === "function") {{
+      await stimpactClient.captureHandledError(input);
+      return;
+    }}
+    await stimpactClient.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+function wrapStimpact(operation, context) {{
+  if (!stimpactClient) {{
+    return operation();
+  }}
+  return stimpactClient.wrap(operation, context);
+}}
+
+async function wrapStimpactAsync(operation, context) {{
+  if (!stimpactClient) {{
+    return await operation();
+  }}
+  return await stimpactClient.wrapAsync(operation, context);
 }}
 
 function installStimpact() {{
@@ -2356,22 +2859,16 @@ function installStimpact() {{
   stimpactClient = client;
 
   client.startHeartbeat();
-
-  const capture = (error) => {{
-    const exception = error instanceof Error ? error : new Error(String(error));
-    void client.captureError({{ error: exception }});
-  }};
-
-  process.on("uncaughtException", capture);
-  process.on("unhandledRejection", capture);
+  client.registerProcessAutoCapture();
 }}
 
-module.exports = {{ installStimpact, getStimpactClient, pingStimpact }};
+module.exports = {{ installStimpact, getStimpactClient, pingStimpact, captureHandledError, wrapStimpact, wrapStimpactAsync }};
 '''
     return f'''import {{ StimpactClient }} from "@stimpact/sdk";
 
 let installed = false;
 let stimpactClient: StimpactClient | null = null;
+const handledErrors = new WeakSet<object>();
 
 export function getStimpactClient(): StimpactClient | null {{
   return stimpactClient;
@@ -2382,6 +2879,58 @@ export async function pingStimpact(): Promise<void> {{
     return;
   }}
   await stimpactClient.ping();
+}}
+
+type HandledErrorInput = Parameters<StimpactClient["captureError"]>[0];
+type HandledErrorContext = Omit<HandledErrorInput, "error">;
+
+export async function captureHandledError(input: HandledErrorInput): Promise<void> {{
+  if (!stimpactClient) {{
+    return;
+  }}
+  const trackedError =
+    (typeof input.error === "object" && input.error !== null) || typeof input.error === "function"
+      ? (input.error as object)
+      : null;
+  if (trackedError && handledErrors.has(trackedError)) {{
+    return;
+  }}
+  if (trackedError) {{
+    handledErrors.add(trackedError);
+  }}
+  try {{
+    const runtimeClient = stimpactClient as StimpactClient & {{
+      captureHandledError?: (payload: HandledErrorInput) => Promise<void>;
+      captureError: (payload: HandledErrorInput) => Promise<void>;
+    }};
+    if (typeof runtimeClient.captureHandledError === "function") {{
+      await runtimeClient.captureHandledError(input);
+      return;
+    }}
+    await runtimeClient.captureError(input);
+  }} catch (error) {{
+    if (trackedError) {{
+      handledErrors.delete(trackedError);
+    }}
+    throw error;
+  }}
+}}
+
+export function wrapStimpact<T>(operation: () => T, context?: HandledErrorContext): T {{
+  if (!stimpactClient) {{
+    return operation();
+  }}
+  return stimpactClient.wrap(operation, context);
+}}
+
+export async function wrapStimpactAsync<T>(
+  operation: () => Promise<T>,
+  context?: HandledErrorContext,
+): Promise<T> {{
+  if (!stimpactClient) {{
+    return await operation();
+  }}
+  return await stimpactClient.wrapAsync(operation, context);
 }}
 
 export function installStimpact() {{
@@ -2410,14 +2959,7 @@ export function installStimpact() {{
   stimpactClient = client;
 
   client.startHeartbeat();
-
-  const capture = (error: unknown) => {{
-    const exception = error instanceof Error ? error : new Error(String(error));
-    void client.captureError({{ error: exception }});
-  }};
-
-  process.on("uncaughtException", capture);
-  process.on("unhandledRejection", capture);
+  client.registerProcessAutoCapture();
 }}
 '''
 
@@ -2431,11 +2973,12 @@ client = StimpactClient.from_env(
 )
 
 client.start_heartbeat()
+client.install_auto_capture()
 
 try:
     do_work()
 except Exception as exc:
-    client.capture_exception(exc)
+    client.capture_handled_exception(exc)
     raise
 '''
 
@@ -2467,7 +3010,7 @@ def _javascript_manual_steps(label: str) -> list[SdkBootstrapManualStep]:
         ),
         SdkBootstrapManualStep(
             title=f"Wire the {label} runtime",
-            content="Initialize `StimpactClient` in the main browser shell, start heartbeats, enable `registerBrowserAutoCapture()`, and keep the exported `pingStimpact()` helper available for future manual live checks.",
+            content="Initialize `StimpactClient` in the main browser shell, start heartbeats, enable `registerBrowserAutoCapture()`, wire handled failures from shared request wrappers and React Query query or mutation boundaries with `captureHandledError()`, `wrap()`, or `wrapAsync()`, and keep the exported `pingStimpact()` helper available for future manual live checks.",
         ),
     ]
 
@@ -2480,7 +3023,7 @@ def _python_manual_steps(label: str) -> list[SdkBootstrapManualStep]:
         ),
         SdkBootstrapManualStep(
             title=f"Wire the {label} app",
-            content="Create a shared Stimpact client, start the background heartbeat, and capture unhandled exceptions in the HTTP request lifecycle for the chosen Python app entrypoint.",
+            content="Create a shared Stimpact client, start the background heartbeat, install uncaught exception hooks with `install_auto_capture()`, and use `capture_handled_exception()` or `wrap_async()` inside handled request and task boundaries.",
         ),
     ]
 

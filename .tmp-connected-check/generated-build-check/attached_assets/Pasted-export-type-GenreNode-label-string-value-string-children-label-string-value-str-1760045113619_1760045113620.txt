@@ -1,0 +1,466 @@
+export type GenreNode = {
+  label: string;
+  value: string;
+  children?: { label: string; value: string }[];
+};
+
+export const GENRES: GenreNode[] = [
+  {
+    label: "Pop",
+    value: "pop",
+    children: [
+      { label: "Adult Contemporary", value: "adult-contemporary" },
+      { label: "Teen Pop", value: "teen-pop" },
+      { label: "Synthpop", value: "synthpop" },
+      { label: "Electropop", value: "electropop" },
+      { label: "Hyperpop", value: "hyperpop" },
+      { label: "Indie Pop", value: "indie-pop" },
+      { label: "Dance Pop", value: "dance-pop" },
+      { label: "K-Pop", value: "k-pop" },
+      { label: "J-Pop", value: "j-pop" },
+      { label: "C-Pop (Mandopop/Cantopop)", value: "c-pop" },
+      { label: "City Pop", value: "city-pop" }
+    ]
+  },
+  {
+    label: "Hip-Hop / Rap",
+    value: "hip-hop",
+    children: [
+      { label: "Boom Bap", value: "boom-bap" },
+      { label: "Trap", value: "trap" },
+      { label: "Drill (NY/UK)", value: "drill" },
+      { label: "Southern Rap", value: "southern-rap" },
+      { label: "West Coast", value: "west-coast-rap" },
+      { label: "East Coast", value: "east-coast-rap" },
+      { label: "Alternative Hip-Hop", value: "alt-hip-hop" },
+      { label: "Lo-Fi Hip-Hop", value: "lofi-hip-hop" },
+      { label: "Conscious Rap", value: "conscious-rap" },
+      { label: "Rage Rap", value: "rage-rap" },
+      { label: "PluggnB", value: "pluggnb" }
+    ]
+  },
+  {
+    label: "R&B / Soul",
+    value: "rnb-soul",
+    children: [
+      { label: "Classic Soul", value: "classic-soul" },
+      { label: "Motown", value: "motown" },
+      { label: "Neo-Soul", value: "neo-soul" },
+      { label: "Contemporary R&B", value: "contemporary-rnb" },
+      { label: "Quiet Storm", value: "quiet-storm" },
+      { label: "Funk", value: "funk" },
+      { label: "Blue-Eyed Soul", value: "blue-eyed-soul" },
+      { label: "Alt R&B", value: "alt-rnb" }
+    ]
+  },
+  {
+    label: "Rock",
+    value: "rock",
+    children: [
+      { label: "Classic Rock", value: "classic-rock" },
+      { label: "Hard Rock", value: "hard-rock" },
+      { label: "Alternative Rock", value: "alt-rock" },
+      { label: "Indie Rock", value: "indie-rock" },
+      { label: "Psychedelic Rock", value: "psychedelic-rock" },
+      { label: "Progressive Rock", value: "prog-rock" },
+      { label: "Garage Rock", value: "garage-rock" },
+      { label: "Grunge", value: "grunge" },
+      { label: "Shoegaze", value: "shoegaze" },
+      { label: "Post-Rock", value: "post-rock" },
+      { label: "Math Rock", value: "math-rock" },
+      { label: "Southern Rock", value: "southern-rock" },
+      { label: "Surf Rock", value: "surf-rock" },
+      { label: "Britpop", value: "britpop" }
+    ]
+  },
+  {
+    label: "Metal",
+    value: "metal",
+    children: [
+      { label: "Heavy Metal", value: "heavy-metal" },
+      { label: "Thrash Metal", value: "thrash-metal" },
+      { label: "Death Metal", value: "death-metal" },
+      { label: "Black Metal", value: "black-metal" },
+      { label: "Doom Metal", value: "doom-metal" },
+      { label: "Power Metal", value: "power-metal" },
+      { label: "Progressive Metal", value: "progressive-metal" },
+      { label: "Symphonic Metal", value: "symphonic-metal" },
+      { label: "Folk Metal", value: "folk-metal" },
+      { label: "Groove Metal", value: "groove-metal" },
+      { label: "Sludge/Stoner", value: "sludge-stoner" },
+      { label: "Metalcore", value: "metalcore" },
+      { label: "Deathcore", value: "deathcore" },
+      { label: "Post-Metal", value: "post-metal" },
+      { label: "Nu Metal", value: "nu-metal" }
+    ]
+  },
+  {
+    label: "Punk / Hardcore",
+    value: "punk-hardcore",
+    children: [
+      { label: "’77 Punk", value: "77-punk" },
+      { label: "Hardcore Punk", value: "hardcore-punk" },
+      { label: "Post-Punk", value: "post-punk" },
+      { label: "Pop Punk", value: "pop-punk" },
+      { label: "Emo", value: "emo" },
+      { label: "Screamo", value: "screamo" },
+      { label: "Crust / D-Beat", value: "crust-dbeat" },
+      { label: "Skate Punk", value: "skate-punk" },
+      { label: "Oi!", value: "oi" },
+      { label: "Post-Hardcore", value: "post-hardcore" }
+    ]
+  },
+  {
+    label: "Electronic / Dance",
+    value: "electronic",
+    children: [
+      { label: "EDM (General)", value: "edm" },
+      { label: "Synthwave/Retrowave", value: "synthwave" },
+      { label: "Vaporwave", value: "vaporwave" },
+      { label: "Chiptune", value: "chiptune" },
+      { label: "Industrial", value: "industrial" },
+      { label: "Electro", value: "electro" },
+      { label: "IDM", value: "idm" },
+      { label: "Glitch", value: "glitch" }
+    ]
+  },
+  {
+    label: "House",
+    value: "house",
+    children: [
+      { label: "Deep House", value: "deep-house" },
+      { label: "Tech House", value: "tech-house" },
+      { label: "Progressive House", value: "progressive-house" },
+      { label: "Electro House", value: "electro-house" },
+      { label: "Funky/Disco House", value: "funky-house" },
+      { label: "Tropical House", value: "tropical-house" },
+      { label: "Chicago House", value: "chicago-house" },
+      { label: "Acid House", value: "acid-house" }
+    ]
+  },
+  {
+    label: "Techno",
+    value: "techno",
+    children: [
+      { label: "Detroit Techno", value: "detroit-techno" },
+      { label: "Minimal Techno", value: "minimal-techno" },
+      { label: "Peak-Time / Driving", value: "peak-time-techno" },
+      { label: "Industrial Techno", value: "industrial-techno" },
+      { label: "Melodic Techno", value: "melodic-techno" },
+      { label: "Acid Techno", value: "acid-techno" }
+    ]
+  },
+  {
+    label: "Trance / Psy",
+    value: "trance",
+    children: [
+      { label: "Progressive Trance", value: "progressive-trance" },
+      { label: "Uplifting Trance", value: "uplifting-trance" },
+      { label: "Tech Trance", value: "tech-trance" },
+      { label: "Psytrance", value: "psytrance" },
+      { label: "Goa Trance", value: "goa-trance" }
+    ]
+  },
+  {
+    label: "Drum & Bass / Jungle",
+    value: "drum-and-bass",
+    children: [
+      { label: "Liquid", value: "liquid-dnb" },
+      { label: "Neurofunk", value: "neurofunk" },
+      { label: "Jump Up", value: "jump-up" },
+      { label: "Jungle", value: "jungle" },
+      { label: "Atmospheric/Intelligent", value: "atmospheric-dnb" }
+    ]
+  },
+  {
+    label: "Dubstep / Bass",
+    value: "dubstep-bass",
+    children: [
+      { label: "Dubstep", value: "dubstep" },
+      { label: "Riddim", value: "riddim" },
+      { label: "Melodic Dubstep", value: "melodic-dubstep" },
+      { label: "UK Bass", value: "uk-bass" },
+      { label: "Bassline", value: "bassline" },
+      { label: "Future Bass", value: "future-bass" },
+      { label: "Moombahton", value: "moombahton" },
+      { label: "Jersey Club", value: "jersey-club" },
+      { label: "Footwork/Juke", value: "footwork-juke" }
+    ]
+  },
+  {
+    label: "Breaks / Downtempo / Ambient",
+    value: "chill-breaks-ambient",
+    children: [
+      { label: "Breakbeat", value: "breakbeat" },
+      { label: "UK Garage / 2-Step", value: "uk-garage" },
+      { label: "Trip-Hop", value: "trip-hop" },
+      { label: "Downtempo / Chillout", value: "downtempo" },
+      { label: "Lo-Fi Beats", value: "lofi-beats" },
+      { label: "Nu Jazz", value: "nu-jazz" },
+      { label: "Ambient", value: "ambient" },
+      { label: "Dark Ambient / Drone", value: "dark-ambient" }
+    ]
+  },
+  {
+    label: "Jazz",
+    value: "jazz",
+    children: [
+      { label: "Traditional / Dixieland", value: "traditional-jazz" },
+      { label: "Swing / Big Band", value: "swing" },
+      { label: "Bebop", value: "bebop" },
+      { label: "Cool Jazz", value: "cool-jazz" },
+      { label: "Hard Bop", value: "hard-bop" },
+      { label: "Modal Jazz", value: "modal-jazz" },
+      { label: "Free Jazz", value: "free-jazz" },
+      { label: "Jazz Fusion", value: "jazz-fusion" },
+      { label: "Smooth Jazz", value: "smooth-jazz" },
+      { label: "Latin Jazz", value: "latin-jazz" },
+      { label: "Bossa Nova", value: "bossa-nova" },
+      { label: "Gypsy Jazz", value: "gypsy-jazz" }
+    ]
+  },
+  {
+    label: "Blues",
+    value: "blues",
+    children: [
+      { label: "Delta Blues", value: "delta-blues" },
+      { label: "Chicago Blues", value: "chicago-blues" },
+      { label: "Electric Blues", value: "electric-blues" },
+      { label: "Country/Piedmont Blues", value: "piedmont-blues" },
+      { label: "Texas Blues", value: "texas-blues" },
+      { label: "Jump Blues", value: "jump-blues" },
+      { label: "Soul Blues", value: "soul-blues" }
+    ]
+  },
+  {
+    label: "Country / Americana",
+    value: "country-americana",
+    children: [
+      { label: "Classic Country", value: "classic-country" },
+      { label: "Outlaw Country", value: "outlaw-country" },
+      { label: "Alt-Country", value: "alt-country" },
+      { label: "Country Pop", value: "country-pop" },
+      { label: "Country Rock", value: "country-rock" },
+      { label: "Bluegrass", value: "bluegrass" },
+      { label: "Americana", value: "americana" },
+      { label: "Honky-Tonk", value: "honky-tonk" },
+      { label: "Western Swing", value: "western-swing" },
+      { label: "Red Dirt", value: "red-dirt" },
+      { label: "Bakersfield Sound", value: "bakersfield" }
+    ]
+  },
+  {
+    label: "Folk / Singer-Songwriter",
+    value: "folk",
+    children: [
+      { label: "Traditional Folk", value: "traditional-folk" },
+      { label: "Contemporary Folk", value: "contemporary-folk" },
+      { label: "Indie Folk", value: "indie-folk" },
+      { label: "Singer-Songwriter", value: "singer-songwriter" },
+      { label: "Celtic Folk", value: "celtic-folk" },
+      { label: "Freak Folk", value: "freak-folk" },
+      { label: "Anti-Folk", value: "anti-folk" },
+      { label: "New Acoustic", value: "new-acoustic" }
+    ]
+  },
+  {
+    label: "Funk / Disco",
+    value: "funk-disco",
+    children: [
+      { label: "Classic Funk", value: "classic-funk" },
+      { label: "P-Funk", value: "p-funk" },
+      { label: "Boogie", value: "boogie" },
+      { label: "Disco", value: "disco" },
+      { label: "Nu-Disco", value: "nu-disco" }
+    ]
+  },
+  {
+    label: "Reggae / Dub / Ska",
+    value: "reggae-dub-ska",
+    children: [
+      { label: "Reggae", value: "reggae" },
+      { label: "Roots Reggae", value: "roots-reggae" },
+      { label: "Dancehall", value: "dancehall" },
+      { label: "Dub", value: "dub" },
+      { label: "Rocksteady", value: "rocksteady" },
+      { label: "Ska", value: "ska" }
+    ]
+  },
+  {
+    label: "Latin",
+    value: "latin",
+    children: [
+      { label: "Latin Pop", value: "latin-pop" },
+      { label: "Reggaetón", value: "reggaeton" },
+      { label: "Latin Trap", value: "latin-trap" },
+      { label: "Salsa", value: "salsa" },
+      { label: "Bachata", value: "bachata" },
+      { label: "Merengue", value: "merengue" },
+      { label: "Cumbia", value: "cumbia" },
+      { label: "Vallenato", value: "vallenato" },
+      { label: "Tango", value: "tango" },
+      { label: "Bolero", value: "bolero" },
+      { label: "MPB (Brazil)", value: "mpb" },
+      { label: "Forró", value: "forro" },
+      { label: "Sertanejo", value: "sertanejo" },
+      { label: "Funk Carioca / Baile Funk", value: "baile-funk" },
+      { label: "Bossa Nova", value: "bossa-nova-latin" }
+    ]
+  },
+  {
+    label: "African",
+    value: "african",
+    children: [
+      { label: "Afrobeats (NG/West Africa)", value: "afrobeats" },
+      { label: "Afrobeat (Fela style)", value: "afrobeat" },
+      { label: "Highlife", value: "highlife" },
+      { label: "Jùjú / Fuji", value: "juju-fuji" },
+      { label: "Soukous", value: "soukous" },
+      { label: "Makossa", value: "makossa" },
+      { label: "Mbalax", value: "mbalax" },
+      { label: "Kizomba", value: "kizomba" },
+      { label: "Coupé-Décalé", value: "coupe-decale" },
+      { label: "Gqom", value: "gqom" },
+      { label: "Amapiano", value: "amapiano" }
+    ]
+  },
+  {
+    label: "Caribbean",
+    value: "caribbean",
+    children: [
+      { label: "Soca", value: "soca" },
+      { label: "Calypso", value: "calypso" },
+      { label: "Zouk", value: "zouk" },
+      { label: "Kompa", value: "kompa" }
+    ]
+  },
+  {
+    label: "Middle East / North Africa",
+    value: "mena",
+    children: [
+      { label: "Arabic Pop", value: "arabic-pop" },
+      { label: "Raï", value: "rai" },
+      { label: "Chaabi/Shaabi", value: "shaabi" },
+      { label: "Dabke", value: "dabke" },
+      { label: "Khaleeji", value: "khaleeji" },
+      { label: "Mizrahi", value: "mizrahi" },
+      { label: "Gnawa", value: "gnawa" },
+      { label: "Persian Pop", value: "persian-pop" },
+      { label: "Persian Traditional", value: "persian-traditional" },
+      { label: "Turkish Pop", value: "turkish-pop" },
+      { label: "Anatolian Rock/Folk", value: "anatolian-rock" }
+    ]
+  },
+  {
+    label: "South Asia",
+    value: "south-asia",
+    children: [
+      { label: "Bollywood / Filmi", value: "bollywood" },
+      { label: "Indian Pop (Indi-pop)", value: "indi-pop" },
+      { label: "Bhangra / Punjabi Pop", value: "bhangra" },
+      { label: "Hindustani Classical", value: "hindustani-classical" },
+      { label: "Carnatic Classical", value: "carnatic-classical" },
+      { label: "Qawwali", value: "qawwali" },
+      { label: "Ghazal", value: "ghazal" },
+      { label: "Tamil/Telugu Pop", value: "south-indian-pop" }
+    ]
+  },
+  {
+    label: "East & Southeast Asia",
+    value: "east-sea-asia",
+    children: [
+      { label: "K-R&B / K-Hip-Hop", value: "k-rnb-hiphop" },
+      { label: "J-Rock", value: "j-rock" },
+      { label: "Enka", value: "enka" },
+      { label: "C-Pop (Mandarin/Cantonese)", value: "mandarin-cantonese-pop" },
+      { label: "Thai Pop (T-Pop)", value: "t-pop" },
+      { label: "V-Pop (Vietnam)", value: "v-pop" },
+      { label: "P-Pop (Philippines)", value: "p-pop" },
+      { label: "Dangdut (Indonesia)", value: "dangdut" },
+      { label: "Luk Thung / Morlam", value: "luk-thung-morlam" }
+    ]
+  },
+  {
+    label: "Classical / Orchestral",
+    value: "classical",
+    children: [
+      { label: "Baroque", value: "baroque" },
+      { label: "Classical Era", value: "classical-era" },
+      { label: "Romantic", value: "romantic" },
+      { label: "Impressionist", value: "impressionist" },
+      { label: "20th-Century", value: "twentieth-century" },
+      { label: "Minimalism", value: "minimalism" },
+      { label: "Contemporary Classical", value: "contemporary-classical" },
+      { label: "Film Score / Orchestral", value: "film-score" }
+    ]
+  },
+  {
+    label: "Opera / Choral",
+    value: "opera-choral",
+    children: [
+      { label: "Opera", value: "opera" },
+      { label: "Operetta", value: "operetta" },
+      { label: "Choral / Sacred", value: "choral" },
+      { label: "Gregorian Chant", value: "gregorian-chant" }
+    ]
+  },
+  {
+    label: "Gospel / Christian",
+    value: "gospel-christian",
+    children: [
+      { label: "Traditional Gospel", value: "traditional-gospel" },
+      { label: "Contemporary Christian (CCM)", value: "ccm" },
+      { label: "Worship", value: "worship" },
+      { label: "Southern Gospel", value: "southern-gospel" }
+    ]
+  },
+  {
+    label: "New Age / Wellness",
+    value: "new-age",
+    children: [
+      { label: "New Age", value: "new-age-core" },
+      { label: "Meditation", value: "meditation" },
+      { label: "Healing / Spa", value: "healing" },
+      { label: "Nature / Soundscapes", value: "nature-soundscapes" }
+    ]
+  },
+  {
+    label: "World / Traditional",
+    value: "world",
+    children: [
+      { label: "Celtic", value: "celtic" },
+      { label: "Flamenco", value: "flamenco" },
+      { label: "Fado", value: "fado" },
+      { label: "Chanson", value: "chanson" },
+      { label: "Schlager", value: "schlager" },
+      { label: "Italo Disco", value: "italo-disco" },
+      { label: "Eurodance", value: "eurodance" },
+      { label: "Tuvan Throat Singing", value: "tuvan" },
+      { label: "Balinese Gamelan", value: "gamelan" },
+      { label: "Tuvan/Khoomei", value: "khoomei" }
+    ]
+  },
+  {
+    label: "Experimental / Avant-Garde",
+    value: "experimental",
+    children: [
+      { label: "Noise", value: "noise" },
+      { label: "Musique Concrète", value: "musique-concrete" },
+      { label: "Electroacoustic", value: "electroacoustic" },
+      { label: "Avant-Prog", value: "avant-prog" },
+      { label: "Math / Experimental", value: "experimental-math" }
+    ]
+  },
+  {
+    label: "Other",
+    value: "other",
+    children: [
+      { label: "Soundtrack / Score", value: "soundtrack" },
+      { label: "Broadway / Show Tunes", value: "show-tunes" },
+      { label: "Spoken Word", value: "spoken-word" },
+      { label: "Comedy", value: "comedy" },
+      { label: "Children’s Music", value: "childrens" },
+      { label: "Holiday", value: "holiday" }
+    ]
+  }
+];

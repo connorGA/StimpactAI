@@ -2,6 +2,15 @@
 
 The Python SDK sends runtime exceptions to the Stimpact agent platform using a project-scoped API key.
 
+## Capture contract
+
+Use Stimpact in two layers:
+
+- auto-capture for uncaught process and thread exceptions with `install_auto_capture()`
+- handled-error capture for exceptions you catch deliberately with `capture_handled_exception()`, `wrap()`, or `wrap_async()`
+
+Transport failures still raise `StimpactRequestError`, but the auto-capture hooks swallow those reporting failures so they do not create recursive exception loops.
+
 ## Install
 
 ```sh
@@ -18,15 +27,36 @@ client = StimpactClient.from_env(
     environment="production",
 )
 
+client.install_auto_capture()
+
 try:
     charge_customer()
 except Exception as exc:
-    client.capture_exception(
+    client.capture_handled_exception(
         exc,
         request={"method": "POST", "url": "/api/charge"},
     )
     raise
 ```
+
+## Wrapped operations
+
+For synchronous work:
+
+```python
+client.wrap(lambda: charge_customer(), request={"method": "POST", "url": "/api/charge"})
+```
+
+For async work:
+
+```python
+await client.wrap_async(
+    lambda: charge_customer_async(),
+    request={"method": "POST", "url": "/api/charge"},
+)
+```
+
+When your framework already catches and renders exceptions, capture them once in the shared request or task boundary rather than in every individual UI or business-logic call site.
 
 ## Environment variables
 

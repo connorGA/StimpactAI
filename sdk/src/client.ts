@@ -2,9 +2,13 @@ import type {
   BrowserAutoCaptureOptions,
   BrowserCaptureSubscription,
   CaptureErrorInput,
+  ErrorCaptureContext,
   HeartbeatInput,
   HeartbeatScheduleOptions,
   HeartbeatSubscription,
+  ProcessAutoCaptureOptions,
+  ProcessCaptureSubscription,
+  ProcessListenerTarget,
   StimpactClientOptions,
   StimpactEnvironment,
 } from "./types.js";
@@ -48,6 +52,8 @@ const DEFAULT_REDACTED_HEADERS = new Set([
   "x-api-key",
   "x-stimpact-project-key",
 ]);
+const CAPTURE_IN_FLIGHT = Symbol("stimpact.captureInFlight");
+const CAPTURE_REPORTED = Symbol("stimpact.captureReported");
 
 export class StimpactRequestError extends Error {
   status: number | null;
@@ -96,6 +102,8 @@ export class StimpactClient {
   private browserTokenPromise: Promise<string> | null = null;
   private browserTokenFailure: StimpactRequestError | null = null;
   private browserTokenFailureBlockedUntilMs = 0;
+  private readonly inFlightErrors = new WeakSet<object>();
+  private readonly reportedErrors = new WeakSet<object>();
 
   constructor(options: StimpactClientOptions) {
     if (!options.apiKey && !options.browserKey && !options.browserTokenEndpoint && !options.tokenProvider) {
@@ -122,6 +130,120 @@ export class StimpactClient {
   }
 
   async captureError(input: CaptureErrorInput): Promise<void> {
+    await this.captureWithState(input);
+  }
+
+  async captureHandledError(input: CaptureErrorInput): Promise<void> {
+    await this.captureWithState(input);
+  }
+
+  async sendHeartbeat(input: HeartbeatInput = {}): Promise<void> {
+    const payload: HeartbeatPayload = {
+      project_id: this.options.projectId,
+      environment: input.environment ?? this.options.environment ?? "production",
+      service: input.service ?? this.options.service,
+      commit_sha: input.commitSha ?? null,
+      timestamp: normalizeTimestamp(input.timestamp),
+    };
+    await this.sendHeartbeatPayload(payload);
+  }
+
+  async ping(input: HeartbeatInput = {}): Promise<void> {
+    await this.sendHeartbeat(input);
+  }
+
+  wrap<T>(
+    operation: () => T,
+    context?: ErrorCaptureContext,
+  ): T {
+    try {
+      return operation();
+    } catch (error) {
+      this.captureSyncFailure(error, context);
+      throw error;
+    }
+  }
+
+  async wrapAsync<T>(
+    operation: () => Promise<T>,
+    context?: ErrorCaptureContext,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      try {
+        await this.captureHandledError({
+          ...context,
+          error,
+        });
+      } catch (captureFailure) {
+        this.attachCaptureFailure(error, captureFailure);
+      }
+      throw error;
+    }
+  }
+
+  registerProcessAutoCapture(
+    options: ProcessAutoCaptureOptions = {},
+  ): ProcessCaptureSubscription {
+    const processTarget = options.processTarget ?? resolveProcessTarget();
+    if (!processTarget) {
+      return { dispose: () => undefined };
+    }
+
+    const captureUncaughtExceptions = options.captureUncaughtExceptions ?? true;
+    const captureUnhandledRejections =
+      options.captureUnhandledRejections ?? true;
+
+    const uncaughtExceptionListener = (error: unknown) => {
+      if (this.shouldIgnoreAutoCapturedError(error)) {
+        return;
+      }
+      void this.captureError({
+        error: toError(error),
+        service: this.options.service,
+      }).catch(() => undefined);
+    };
+
+    const unhandledRejectionListener = (reason: unknown) => {
+      if (this.shouldIgnoreAutoCapturedError(reason)) {
+        return;
+      }
+      void this.captureError({
+        error: toError(reason),
+        service: this.options.service,
+      }).catch(() => undefined);
+    };
+
+    if (captureUncaughtExceptions) {
+      addProcessListener(processTarget, "uncaughtException", uncaughtExceptionListener);
+    }
+    if (captureUnhandledRejections) {
+      addProcessListener(processTarget, "unhandledRejection", unhandledRejectionListener);
+    }
+
+    return {
+      dispose: () => {
+        if (captureUncaughtExceptions) {
+          removeProcessListener(processTarget, "uncaughtException", uncaughtExceptionListener);
+        }
+        if (captureUnhandledRejections) {
+          removeProcessListener(processTarget, "unhandledRejection", unhandledRejectionListener);
+        }
+      },
+    };
+  }
+
+  private async captureWithState(input: CaptureErrorInput): Promise<void> {
+    const trackedError = asTrackableObject(input.error);
+    if (trackedError && (this.inFlightErrors.has(trackedError) || this.reportedErrors.has(trackedError))) {
+      return;
+    }
+    if (trackedError) {
+      this.inFlightErrors.add(trackedError);
+      markCaptureState(trackedError, CAPTURE_IN_FLIGHT);
+    }
+
     const normalized = normalizeError(input.error, this.options.maxValueLength);
     const payload: TelemetryPayload = {
       project_id: this.options.projectId,
@@ -139,22 +261,23 @@ export class StimpactClient {
       timestamp: normalizeTimestamp(input.timestamp),
     };
 
-    await this.sendTelemetry(payload);
-  }
-
-  async sendHeartbeat(input: HeartbeatInput = {}): Promise<void> {
-    const payload: HeartbeatPayload = {
-      project_id: this.options.projectId,
-      environment: input.environment ?? this.options.environment ?? "production",
-      service: input.service ?? this.options.service,
-      commit_sha: input.commitSha ?? null,
-      timestamp: normalizeTimestamp(input.timestamp),
-    };
-    await this.sendHeartbeatPayload(payload);
-  }
-
-  async ping(input: HeartbeatInput = {}): Promise<void> {
-    await this.sendHeartbeat(input);
+    try {
+      await this.sendTelemetry(payload);
+      if (trackedError) {
+        this.reportedErrors.add(trackedError);
+        markCaptureState(trackedError, CAPTURE_REPORTED);
+      }
+    } catch (error) {
+      if (trackedError) {
+        clearCaptureState(trackedError, CAPTURE_REPORTED);
+      }
+      throw error;
+    } finally {
+      if (trackedError) {
+        this.inFlightErrors.delete(trackedError);
+        clearCaptureState(trackedError, CAPTURE_IN_FLIGHT);
+      }
+    }
   }
 
   startHeartbeat(options: HeartbeatScheduleOptions = {}): HeartbeatSubscription {
@@ -284,30 +407,6 @@ export class StimpactClient {
     };
   }
 
-  async wrapAsync<T>(
-    operation: () => Promise<T>,
-    context?: Omit<CaptureErrorInput, "error">,
-  ): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      try {
-        await this.captureError({
-          ...context,
-          error,
-        });
-      } catch (captureFailure) {
-        if (error instanceof Error) {
-          Object.defineProperty(error, "captureFailure", {
-            value: captureFailure,
-            configurable: true,
-          });
-        }
-      }
-      throw error;
-    }
-  }
-
   registerBrowserAutoCapture(
     options: BrowserAutoCaptureOptions = {},
   ): BrowserCaptureSubscription {
@@ -359,7 +458,40 @@ export class StimpactClient {
   }
 
   private shouldIgnoreAutoCapturedError(error: unknown): boolean {
-    return error instanceof StimpactRequestError;
+    if (error instanceof StimpactRequestError) {
+      return true;
+    }
+    const trackedError = asTrackableObject(error);
+    if (!trackedError) {
+      return false;
+    }
+    return (
+      this.inFlightErrors.has(trackedError) ||
+      this.reportedErrors.has(trackedError) ||
+      hasCaptureState(trackedError, CAPTURE_IN_FLIGHT) ||
+      hasCaptureState(trackedError, CAPTURE_REPORTED)
+    );
+  }
+
+  private captureSyncFailure(
+    error: unknown,
+    context?: ErrorCaptureContext,
+  ): void {
+    void this.captureHandledError({
+      ...context,
+      error,
+    }).catch((captureFailure) => {
+      this.attachCaptureFailure(error, captureFailure);
+    });
+  }
+
+  private attachCaptureFailure(error: unknown, captureFailure: unknown): void {
+    if (error instanceof Error) {
+      Object.defineProperty(error, "captureFailure", {
+        value: captureFailure,
+        configurable: true,
+      });
+    }
   }
 
   private async sendTelemetry(payload: TelemetryPayload): Promise<void> {
@@ -597,6 +729,68 @@ function normalizeTimestamp(value: string | Date | undefined): string {
     return new Date().toISOString();
   }
   return value instanceof Date ? value.toISOString() : value;
+}
+
+function asTrackableObject(value: unknown): object | null {
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    return value as object;
+  }
+  return null;
+}
+
+function hasCaptureState(target: object, symbol: symbol): boolean {
+  return Boolean((target as Record<PropertyKey, unknown>)[symbol]);
+}
+
+function markCaptureState(target: object, symbol: symbol): void {
+  Object.defineProperty(target, symbol, {
+    value: true,
+    configurable: true,
+  });
+}
+
+function clearCaptureState(target: object, symbol: symbol): void {
+  delete (target as Record<PropertyKey, unknown>)[symbol];
+}
+
+function toError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(typeof error === "string" ? error : safeSerialize(error));
+}
+
+function resolveProcessTarget(): ProcessListenerTarget | null {
+  const candidate = (globalThis as { process?: ProcessListenerTarget }).process;
+  return candidate ?? null;
+}
+
+function addProcessListener(
+  target: ProcessListenerTarget,
+  event: string,
+  listener: (...args: unknown[]) => void,
+): void {
+  if (typeof target.on === "function") {
+    target.on(event, listener);
+    return;
+  }
+  if (typeof target.addListener === "function") {
+    target.addListener(event, listener);
+  }
+}
+
+function removeProcessListener(
+  target: ProcessListenerTarget,
+  event: string,
+  listener: (...args: unknown[]) => void,
+): void {
+  if (typeof target.off === "function") {
+    target.off(event, listener);
+    return;
+  }
+  if (typeof target.removeListener === "function") {
+    target.removeListener(event, listener);
+  }
 }
 
 function normalizeError(error: unknown, maxValueLength: number): NormalizedError {

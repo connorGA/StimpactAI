@@ -68,6 +68,11 @@ from models.control_plane import (
     ProjectBrowserKeyStatus,
     ProjectOnboardingStateRecord,
     ProjectPolicyRecord,
+    ProjectServiceDependencyKind,
+    ProjectServiceDependencyRecord,
+    ProjectServiceRecord,
+    ProjectServiceRoutingHints,
+    ProjectServiceType,
     ProjectSdkSetupStatus,
     ProjectTelemetryHeartbeatRecord,
     ProviderIntegrationRecord,
@@ -317,6 +322,45 @@ class StubControlPlaneRepository:
             sdk_setup_status=ProjectSdkSetupStatus.PENDING,
             sdk_setup_provider_repository_id=None,
             sdk_setup_change_request_url=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.project_service = ProjectServiceRecord(
+            id="service-1",
+            project_id="project-1",
+            name="Billing API",
+            slug="billing-api",
+            service_type=ProjectServiceType.API,
+            repo_profile_id=self.repo_profile.id,
+            owner="platform",
+            deploy_target="staging",
+            routing_hints=ProjectServiceRoutingHints(
+                service_names=["billing-api"],
+                path_prefixes=["/retry-policy"],
+                domains=["billing.example.com"],
+                tags=["payments"],
+            ),
+            startup_priority=10,
+            sandbox_healthcheck_command="python healthcheck.py",
+            sandbox_healthcheck_url=None,
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        self.dependency_service = ProjectServiceRecord(
+            id="service-2",
+            project_id="project-1",
+            name="Redis Cache",
+            slug="redis-cache",
+            service_type=ProjectServiceType.CACHE,
+            repo_profile_id=None,
+            owner="platform",
+            deploy_target="staging",
+            routing_hints=ProjectServiceRoutingHints(tags=["cache"]),
+            startup_priority=20,
+            sandbox_healthcheck_command=None,
+            sandbox_healthcheck_url=None,
+            active=True,
             created_at=now,
             updated_at=now,
         )
@@ -659,6 +703,68 @@ class StubControlPlaneRepository:
     async def list_repo_profiles(self, project_id: str) -> list[RepoProfileRecord]:
         assert project_id == "project-1"
         return [self.repo_profile]
+
+    async def get_repo_profile(self, repo_profile_id: str) -> RepoProfileRecord | None:
+        if repo_profile_id == self.repo_profile.id:
+            return self.repo_profile
+        return None
+
+    async def get_active_repo_profile(self, project_id: str) -> RepoProfileRecord | None:
+        if project_id == self.repo_profile.project_id:
+            return self.repo_profile
+        return None
+
+    async def get_provider_repository(self, provider_repository_id: str) -> ProviderRepositoryRecord | None:
+        if provider_repository_id == self.provider_repository.id:
+            return self.provider_repository
+        return None
+
+    async def list_project_services(self, project_id: str) -> list[ProjectServiceRecord]:
+        assert project_id == "project-1"
+        return [self.project_service, self.dependency_service]
+
+    async def get_project_service(self, service_id: str) -> ProjectServiceRecord | None:
+        if service_id == self.project_service.id:
+            return self.project_service
+        if service_id == self.dependency_service.id:
+            return self.dependency_service
+        return None
+
+    async def list_project_service_dependencies(
+        self,
+        service_id: str,
+    ) -> list[ProjectServiceDependencyRecord]:
+        if service_id != self.project_service.id:
+            return []
+        return [
+            ProjectServiceDependencyRecord(
+                service_id=self.project_service.id,
+                depends_on_service_id=self.dependency_service.id,
+                dependency_kind=ProjectServiceDependencyKind.REQUIRED,
+                created_at=self.project_service.created_at,
+            )
+        ]
+
+    async def list_project_dependencies_for_services(
+        self,
+        service_ids: list[str],
+    ) -> list[ProjectServiceDependencyRecord]:
+        if self.project_service.id in service_ids:
+            return await self.list_project_service_dependencies(self.project_service.id)
+        return []
+
+    async def resolve_project_service(
+        self,
+        *,
+        project_id: str,
+        service_name: str,
+        stacktrace: str | None = None,
+    ) -> ProjectServiceRecord | None:
+        assert project_id == "project-1"
+        _ = stacktrace
+        if service_name.strip().lower() in {"billing-api", "billing api"}:
+            return self.project_service
+        return None
 
 
 class StubSecretsWriter:
@@ -1244,7 +1350,8 @@ class StubAutonomousRunService:
         )
 
 
-def test_ingest_error_returns_accepted_response_and_signals_outbox() -> None:
+def test_ingest_error_returns_accepted_response_and_signals_outbox(caplog) -> None:
+    caplog.set_level("INFO")
     app = build_test_app()
     telemetry_repository = RecordingTelemetryRepository()
     outbox_signaler = RecordingOutboxSignaler()
@@ -1276,6 +1383,7 @@ def test_ingest_error_returns_accepted_response_and_signals_outbox() -> None:
     assert len(body["fingerprint"]) == 64
     assert len(telemetry_repository.calls) == 1
     assert outbox_signaler.calls == [("outbox-1", IncidentEventType.TELEMETRY_RECEIVED.value)]
+    assert any("telemetry_error_accepted" in message for message in caplog.messages)
 
 
 def test_ingest_heartbeat_updates_project_telemetry_verification(monkeypatch) -> None:
@@ -1324,6 +1432,62 @@ def test_ingest_heartbeat_updates_project_telemetry_verification(monkeypatch) ->
     assert body["status"] == "healthy"
     assert body["commit_sha"] == "abc123"
     assert body["heartbeat"]["service"] == "billing-api"
+
+
+def test_project_harness_readiness_reports_launch_contract(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
+    app = build_test_app()
+    repository = StubControlPlaneRepository()
+    repository.project_onboarding_state = repository.project_onboarding_state.model_copy(
+        update={"policy_reviewed": True, "sdk_setup_status": ProjectSdkSetupStatus.MANUAL}
+    )
+    repository.project_api_keys.append(
+        ProjectApiKeyRecord(
+            id="api-key-1",
+            project_id="project-1",
+            name="Telemetry key",
+            key_prefix="stimp_live_1234",
+            key_hash=hash_api_key("stimp_live_123"),
+            status=ProjectApiKeyStatus.ACTIVE,
+            last_used_at=None,
+            revoked_at=None,
+            created_at=datetime(2026, 3, 16, 12, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 3, 16, 12, 0, tzinfo=UTC),
+        )
+    )
+    repository.project_telemetry_heartbeats.append(
+        ProjectTelemetryHeartbeatRecord(
+            project_id="project-1",
+            service="billing-api",
+            environment=Environment.PRODUCTION,
+            last_seen_at=datetime.now(tz=UTC),
+            commit_sha="abc123",
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+    )
+    app.dependency_overrides[get_control_plane_repository] = lambda: repository
+    app.dependency_overrides[get_security_control_plane_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.get(
+        "/control-plane/projects/project-1/harness-readiness",
+        params={"service": "billing-api", "environment": "production"},
+        headers={"Authorization": "Bearer super-admin-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["telemetry_status"] == "healthy"
+    assert body["launch_contract"]["repo_profile_id"] == "profile-1"
+    assert body["launch_contract"]["provider_repository_name"] == "billing-api"
+    assert body["launch_contract"]["dependency_service_slugs"] == ["redis-cache"]
+    assert body["launch_contract"]["reproduce_command"] == "python reproduce.py"
+    assert body["blocked_checks"] == []
+    ready_ids = {item["id"] for item in body["ready_checks"]}
+    assert "telemetry-credentials" in ready_ids
+    assert "sandbox-contract" in ready_ids
 
 
 def test_browser_telemetry_token_can_be_issued_and_used() -> None:

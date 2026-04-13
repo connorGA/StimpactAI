@@ -29,8 +29,9 @@ def build_recipe(*, strategy, target: SdkBootstrapHarnessTarget) -> SdkBootstrap
                     title=f"Wire the {label} app",
                     content=(
                         "Create one shared Stimpact client in the real process entrypoint, start the heartbeat "
-                        "loop during application startup, and capture unhandled exceptions inside the framework "
-                        "request lifecycle."
+                        "loop during application startup, install `install_auto_capture()` for uncaught "
+                        "exceptions, and use `capture_handled_exception()` or `wrap_async()` inside handled "
+                        "request and task boundaries."
                     ),
                 ),
             ],
@@ -52,8 +53,10 @@ def build_recipe(*, strategy, target: SdkBootstrapHarnessTarget) -> SdkBootstrap
                     title=f"Wire the {label} runtime",
                     content=(
                         "Initialize `StimpactClient` in the main browser shell with `browserTokenEndpoint` or "
-                        "`tokenProvider`, start the heartbeat loop once during app startup, and enable "
-                        "`registerBrowserAutoCapture()` so uncaught errors are reported without exposing a reusable key."
+                        "`tokenProvider`, start the heartbeat loop once during app startup, enable "
+                        "`registerBrowserAutoCapture()` for uncaught failures, and use `captureHandledError()` "
+                        "or `wrapAsync()` in shared request wrappers plus React Query query and mutation boundaries "
+                        "so handled UI errors are also reported."
                     ),
                 ),
                 SdkBootstrapRecipeStep(
@@ -82,7 +85,8 @@ def build_recipe(*, strategy, target: SdkBootstrapHarnessTarget) -> SdkBootstrap
                 title=f"Wire the {label} runtime",
                 content=(
                     "Initialize `StimpactClient` with `apiKey` in the real process entrypoint, start the heartbeat "
-                    "loop once during startup, and capture uncaught exceptions or unhandled rejections in the server runtime."
+                    "loop once during startup, enable `registerProcessAutoCapture()` for uncaught failures, and "
+                    "use `captureHandledError()`, `wrap()`, or `wrapAsync()` in handled server request and job boundaries."
                 ),
             ),
         ],

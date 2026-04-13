@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 
 import { StimpactClient, StimpactRequestError } from "../dist/index.js";
 
@@ -178,6 +179,146 @@ test("browser auto-capture ignores SDK transport errors", async () => {
   }
 
   assert.equal(attempts, 0);
+});
+
+test("browser auto-capture forwards window errors", async () => {
+  const listeners = new Map();
+  const calls = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type) {
+      listeners.delete(type);
+    },
+  };
+
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-web",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  try {
+    const subscription = client.registerBrowserAutoCapture();
+    listeners.get("error")?.({
+      error: new Error("render boom"),
+      message: "render boom",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    subscription.dispose();
+  } finally {
+    globalThis.window = originalWindow;
+  }
+
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0][1].body);
+  assert.equal(payload.error_message, "render boom");
+  assert.match(payload.stacktrace, /render boom/);
+});
+
+test("captureHandledError avoids duplicate browser auto-capture for the same error object", async () => {
+  const listeners = new Map();
+  const calls = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type) {
+      listeners.delete(type);
+    },
+  };
+
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-web",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+  const sharedError = new Error("mutation failed");
+
+  try {
+    const subscription = client.registerBrowserAutoCapture();
+    await client.captureHandledError({ error: sharedError });
+    listeners.get("unhandledrejection")?.({
+      reason: sharedError,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    subscription.dispose();
+  } finally {
+    globalThis.window = originalWindow;
+  }
+
+  assert.equal(calls.length, 1);
+});
+
+test("wrap captures synchronous handled errors and rethrows the original error", async () => {
+  const calls = [];
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-api",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+  const original = new Error("sync failure");
+
+  assert.throws(
+    () =>
+      client.wrap(() => {
+        throw original;
+      }),
+    (error) => error === original,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0][1].body);
+  assert.equal(payload.error_message, "sync failure");
+});
+
+test("process auto-capture forwards uncaught exceptions and unhandled rejections", async () => {
+  const calls = [];
+  const processTarget = new EventEmitter();
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-api",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+
+  const subscription = client.registerProcessAutoCapture({ processTarget });
+  processTarget.emit("uncaughtException", new Error("uncaught boom"));
+  processTarget.emit("unhandledRejection", new Error("async boom"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  subscription.dispose();
+  processTarget.emit("uncaughtException", new Error("ignored after dispose"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls.length, 2);
+  const payloads = calls.map(([, init]) => JSON.parse(init.body));
+  assert.deepEqual(
+    payloads.map((payload) => payload.error_message),
+    ["uncaught boom", "async boom"],
+  );
 });
 
 test("sendHeartbeat posts to the heartbeat endpoint", async () => {

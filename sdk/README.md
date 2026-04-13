@@ -10,11 +10,28 @@ Browser runtimes should use either:
 - a custom `browserTokenEndpoint`
 - a custom `tokenProvider`
 
+## Capture contract
+
+Stimpact treats error capture as two complementary layers:
+
+- auto-capture for uncaught failures that escape to the runtime
+- handled-error capture for failures your app catches intentionally
+
+In practice that means:
+
+- browser runtimes should enable `registerBrowserAutoCapture()` for `window` errors and unhandled promise rejections
+- Node and other server runtimes should enable `registerProcessAutoCapture()` for uncaught exceptions and unhandled rejections
+- handled errors inside `catch` blocks, request wrappers, mutation handlers, and framework callbacks should use `captureHandledError()`, `wrap()`, or `wrapAsync()`
+- the SDK suppresses duplicate reporting for the same error object when a handled capture later reaches an auto-capture hook
+- SDK transport failures are never recursively auto-captured as application errors
+
 ## Install
 
 ```sh
 npm install @stimpact/sdk
 ```
+
+For package release validation and the prepublish checklist, see `PUBLISH_VALIDATION.md`.
 
 ## Server usage
 
@@ -29,10 +46,12 @@ const stimpact = new StimpactClient({
   environment: "production",
 });
 
+stimpact.registerProcessAutoCapture();
+
 try {
   await doWork();
 } catch (error) {
-  await stimpact.captureError({
+  await stimpact.captureHandledError({
     error,
     request: {
       method: "POST",
@@ -109,6 +128,35 @@ subscription.dispose();
 
 The SDK ignores its own transport errors during browser auto-capture so a failed telemetry request does not recursively report itself as another browser error.
 
+## Handled errors and framework integrations
+
+Use handled-error capture anywhere your app intentionally catches and renders the failure instead of letting it escape globally.
+
+```ts
+try {
+  await saveInvoice();
+} catch (error) {
+  await stimpact.captureHandledError({
+    error,
+    request: {
+      method: "POST",
+      url: "/api/invoices",
+    },
+  });
+  throw error;
+}
+```
+
+For synchronous code:
+
+```ts
+stimpact.wrap(() => {
+  performDangerousSynchronousWork();
+});
+```
+
+For async flows:
+
 ## Wrapped async flows
 
 ```ts
@@ -116,6 +164,29 @@ await stimpact.wrapAsync(async () => {
   await saveInvoice();
 });
 ```
+
+For framework-driven apps, instrument the shared boundary first instead of every component:
+
+- request wrappers such as `fetch` helpers or API clients
+- React Query / TanStack Query mutation and query defaults
+- framework error boundaries, loaders, and action handlers
+
+For example, a React Query mutation can capture the handled failure once in the shared `onError` path or request wrapper, then let the UI keep rendering the toast or retry state:
+
+```ts
+onError: async (error) => {
+  await stimpact.captureHandledError({
+    error,
+    request: {
+      method: "POST",
+      url: "/requests",
+    },
+  });
+  toast({ title: "Request failed" });
+}
+```
+
+Avoid capturing the same failure in both a shared request wrapper and a component-level `onError` unless they are intentionally distinct telemetry events.
 
 ## Data minimization defaults
 

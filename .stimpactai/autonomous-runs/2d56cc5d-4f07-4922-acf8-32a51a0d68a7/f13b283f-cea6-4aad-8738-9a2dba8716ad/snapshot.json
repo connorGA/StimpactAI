@@ -1758,13 +1758,22 @@
     "async_job_id": "f4f189da-47b9-42c1-8851-bbfd19c32dae",
     "benchmark_bug_class": "frontend-live-status-copy",
     "benchmark_scenario_id": "frontend-live-status-copy",
+    "browser_verification_urls": [],
     "coding_session_id": "f15eb787-e2ee-474a-be80-bf5d0a2c7539",
     "created_at": "2026-03-20T06:08:04.649405Z",
+    "dependency_service_slugs": [],
+    "environment": null,
     "execution_mode": "repair_and_propose",
     "id": "f13b283f-cea6-4aad-8738-9a2dba8716ad",
+    "incident_fingerprint": null,
     "incident_id": "2d56cc5d-4f07-4922-acf8-32a51a0d68a7",
+    "incident_title": null,
     "initializer_session_id": "a792a384-c8ca-4b08-a39a-0c3bd378a13a",
+    "install_command": null,
     "last_error": null,
+    "latest_telemetry_commit_sha": null,
+    "latest_telemetry_error_message": null,
+    "latest_telemetry_id": null,
     "latest_verification": {
       "command": "node frontend_drill_verify.mjs",
       "kind": "browser",
@@ -1820,6 +1829,7 @@
       "stagnation_count": 0,
       "step_index": 13
     },
+    "network_allowlist": [],
     "objective": "Investigate, repair, and verify incident 'billing-api: Frontend live status summary reported healthy state while an open incident was visible 20260320060758' for service billing-api.",
     "patch_run_id": null,
     "phase": "coding",
@@ -1844,13 +1854,21 @@
       "require_browser_verification": true,
       "requires_human_approval": false
     },
+    "project_id": null,
     "promotion_branch_name": null,
     "promotion_status": "not_requested",
     "promotion_url": null,
+    "provider_repository_name": null,
+    "provider_repository_owner": null,
     "repo_profile_id": "1c3fb01a-e64c-4a8f-9baa-788341aef7ad",
     "repository_root": "/Users/connor/Desktop/StimpactAi/.tmp-e2e/staging-drill-frontend-live-status-20260320c",
+    "reproduce_command": null,
+    "runtime_kind": null,
     "sandbox_run_id": null,
+    "service_name": null,
     "status": "running",
-    "updated_at": "2026-03-20T06:13:06.731414Z"
+    "success_criteria": null,
+    "updated_at": "2026-03-20T06:13:06.731414Z",
+    "verify_command": null
   }
 }

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+import sys
 import threading
 import traceback
 from typing import Any
@@ -89,12 +90,74 @@ class StimpactClient:
         }
         self._send(payload)
 
+    def capture_handled_exception(
+        self,
+        error_value: BaseException | Exception,
+        *,
+        request: dict[str, Any] | None = None,
+        response: dict[str, Any] | None = None,
+        commit_sha: str | None = None,
+        timestamp: str | None = None,
+    ) -> None:
+        self.capture_exception(
+            error_value,
+            request=request,
+            response=response,
+            commit_sha=commit_sha,
+            timestamp=timestamp,
+        )
+
     def wrap(self, operation, *, request: dict[str, Any] | None = None):
         try:
             return operation()
         except Exception as exc:  # pragma: no cover - thin wrapper
-            self.capture_exception(exc, request=request)
+            self.capture_handled_exception(exc, request=request)
             raise
+
+    async def wrap_async(self, operation, *, request: dict[str, Any] | None = None):
+        try:
+            return await operation()
+        except Exception as exc:
+            self.capture_handled_exception(exc, request=request)
+            raise
+
+    def install_auto_capture(
+        self,
+        *,
+        capture_uncaught_exceptions: bool = True,
+        capture_thread_exceptions: bool = True,
+    ) -> "_AutoCaptureHandle":
+        original_excepthook = sys.excepthook
+        original_threading_excepthook = getattr(threading, "excepthook", None)
+
+        def capture_without_raising(exc_value: BaseException | None) -> None:
+            if exc_value is None or isinstance(exc_value, KeyboardInterrupt | SystemExit):
+                return
+            try:
+                self.capture_exception(exc_value)
+            except Exception:
+                return
+
+        def excepthook(exc_type, exc_value, exc_traceback) -> None:
+            capture_without_raising(exc_value)
+            original_excepthook(exc_type, exc_value, exc_traceback)
+
+        def threading_excepthook(args) -> None:
+            capture_without_raising(getattr(args, "exc_value", None))
+            if original_threading_excepthook is not None:
+                original_threading_excepthook(args)
+
+        if capture_uncaught_exceptions:
+            sys.excepthook = excepthook
+        if capture_thread_exceptions and original_threading_excepthook is not None:
+            threading.excepthook = threading_excepthook
+
+        return _AutoCaptureHandle(
+            original_excepthook=original_excepthook,
+            original_threading_excepthook=original_threading_excepthook,
+            restore_sys_excepthook=capture_uncaught_exceptions,
+            restore_threading_excepthook=capture_thread_exceptions and original_threading_excepthook is not None,
+        )
 
     def send_heartbeat(
         self,
@@ -186,3 +249,17 @@ class _HeartbeatHandle:
         self.stop_event.set()
         if self.thread.is_alive():
             self.thread.join(timeout=1.0)
+
+
+@dataclass
+class _AutoCaptureHandle:
+    original_excepthook: Any
+    original_threading_excepthook: Any
+    restore_sys_excepthook: bool
+    restore_threading_excepthook: bool
+
+    def restore(self) -> None:
+        if self.restore_sys_excepthook:
+            sys.excepthook = self.original_excepthook
+        if self.restore_threading_excepthook:
+            threading.excepthook = self.original_threading_excepthook

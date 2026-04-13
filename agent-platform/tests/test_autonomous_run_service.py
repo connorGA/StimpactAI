@@ -29,7 +29,7 @@ from models.control_plane import (
     RepoProfileRecord,
     RuntimeKind,
 )
-from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus
+from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus, TelemetryRecord
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from services.autonomous_runs import AutonomousRunService
 from shared.types.telemetry import Environment
@@ -38,11 +38,31 @@ from shared.types.telemetry import Environment
 class StubIncidentRepository:
     def __init__(self, incident: IncidentRecord) -> None:
         self.incident = incident
+        now = datetime.now(UTC)
+        self.telemetry = TelemetryRecord(
+            id=incident.latest_telemetry_id,
+            project_id=incident.project_id,
+            environment=incident.environment,
+            service=incident.service,
+            error_message="Database timeout while waiting for checkout lock.",
+            stacktrace='Traceback:\n  File "/workspace/repo/app.py", line 10, in handle_request\nTimeoutError',
+            fingerprint=incident.fingerprint,
+            request_payload={"method": "POST", "path": "/checkout"},
+            response_payload={"status_code": 503},
+            commit_sha="deadbeef",
+            occurred_at=now,
+            received_at=now,
+        )
 
     async def get_incident(self, incident_id: str) -> IncidentRecord | None:
         if incident_id == self.incident.id:
             return self.incident
         return None
+
+    async def get_telemetry(self, telemetry_id: str) -> TelemetryRecord:
+        if telemetry_id != self.telemetry.id:
+            raise AssertionError(f"unknown telemetry id {telemetry_id}")
+        return self.telemetry
 
 
 class StubAsyncJobRepository:
@@ -473,10 +493,23 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
 
     assert detail.run.status is AutonomousRunStatus.QUEUED
     assert detail.run.approval_status is AutonomousApprovalStatus.PENDING
-    assert detail.run.async_job_id is None
+    assert detail.run.async_job_id == "job-1"
     assert detail.run.policy.requires_human_approval is True
     assert detail.run.benchmark_scenario_id == "status-429"
     assert detail.run.benchmark_bug_class == "retry-policy-429"
+    assert detail.run.project_id == "project-1"
+    assert detail.run.incident_title == "billing-api: Database timeout"
+    assert detail.run.incident_fingerprint == "fp-1"
+    assert detail.run.service_name == "billing-api"
+    assert detail.run.environment == "production"
+    assert detail.run.latest_telemetry_id == "telemetry-1"
+    assert detail.run.latest_telemetry_commit_sha == "deadbeef"
+    assert detail.run.provider_repository_owner == "acme"
+    assert detail.run.provider_repository_name == "billing-api"
+    assert detail.run.runtime_kind == "python"
+    assert detail.run.reproduce_command == "pytest tests/test_billing.py::test_timeout"
+    assert detail.run.verify_command == "pytest tests/test_billing.py::test_timeout_fixed"
+    assert detail.run.network_allowlist == ["pypi.org"]
 
     approved = await service.approve_run(
         "incident-1",
@@ -566,7 +599,7 @@ async def test_autonomous_run_service_recommend_mode_disables_writeback(
     )
 
     assert detail.run.approval_status is AutonomousApprovalStatus.PENDING
-    assert detail.run.async_job_id is None
+    assert detail.run.async_job_id == "job-1"
     assert detail.run.policy.requires_human_approval is True
     assert detail.run.policy.allow_writeback is False
 

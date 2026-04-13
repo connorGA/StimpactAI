@@ -55,10 +55,10 @@ class AutonomousPolicyService:
             elif project_policy.autonomy_mode is AutonomyMode.RECOMMEND:
                 allow_writeback = False
                 requires_human_approval = True
-                reasons.append("Recommend mode keeps execution human-approved and write-back disabled.")
+                reasons.append("Recommend mode keeps write-back disabled and requires approval before promotion.")
             elif project_policy.autonomy_mode is AutonomyMode.SUPERVISED_EXECUTE:
                 requires_human_approval = True
-                reasons.append("Supervised execute mode requires human approval before execution.")
+                reasons.append("Supervised execute mode requires human approval before promotion.")
             if not project_policy.allow_production_writes:
                 allow_writeback = False
                 reasons.append("Project policy currently disables production write-back.")

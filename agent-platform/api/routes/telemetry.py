@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 
 from fastapi import APIRouter, Depends, Request, status
 
@@ -28,6 +29,7 @@ from api.schemas.telemetry import (
 from models.normalized_telemetry import NormalizedTelemetry
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
+logger = logging.getLogger(__name__)
 
 
 def get_telemetry_repository(
@@ -98,6 +100,15 @@ async def ingest_error(
     await outbox_signaler.signal(
         event_id=outbox_event_id,
         event_type=incident_event.event_type.value,
+    )
+    logger.info(
+        "telemetry_error_accepted telemetry_id=%s fingerprint=%s project_id=%s service=%s environment=%s outbox_event_id=%s",
+        telemetry.id,
+        telemetry.fingerprint,
+        telemetry.project_id,
+        telemetry.service,
+        telemetry.environment.value,
+        outbox_event_id,
     )
 
     return TelemetryAcceptedResponse(

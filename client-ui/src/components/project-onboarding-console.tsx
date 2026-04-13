@@ -24,6 +24,7 @@ import type {
   SdkBootstrapChangeRequestResponse,
   SdkBootstrapPlanPreview,
   SdkBootstrapPreview,
+  ProjectHarnessReadiness,
   ProjectTelemetryVerification,
 } from "@/lib/types";
 
@@ -557,6 +558,7 @@ export function ProjectOnboardingConsole() {
   const [sdkBootstrapPlan, setSdkBootstrapPlan] = useState<SdkBootstrapPlanPreview | null>(null);
   const [sdkBootstrapPreview, setSdkBootstrapPreview] = useState<SdkBootstrapPreview | null>(null);
   const [sdkLatestBootstrapPreview, setSdkLatestBootstrapPreview] = useState<SdkBootstrapPreview | null>(null);
+  const [harnessReadiness, setHarnessReadiness] = useState<ProjectHarnessReadiness | null>(null);
   const [telemetryVerification, setTelemetryVerification] = useState<ProjectTelemetryVerification | null>(null);
   const [selectedSdkStrategyId, setSelectedSdkStrategyId] = useState("");
   const [dismissedSdkPreviewStrategyId, setDismissedSdkPreviewStrategyId] = useState<string | null>(null);
@@ -572,6 +574,7 @@ export function ProjectOnboardingConsole() {
   const [loadingRepoProfileInference, setLoadingRepoProfileInference] = useState(false);
   const [loadingSdkBootstrapPlan, setLoadingSdkBootstrapPlan] = useState(false);
   const [loadingSdkBootstrapPreview, setLoadingSdkBootstrapPreview] = useState(false);
+  const [loadingHarnessReadiness, setLoadingHarnessReadiness] = useState(false);
   const [loadingTelemetryVerification, setLoadingTelemetryVerification] = useState(false);
   const [editingStepKey, setEditingStepKey] = useState<StepEditKey | null>(null);
   const [activeStep, setActiveStep] = useState<(typeof STEP_ORDER)[number]>("1");
@@ -580,6 +583,7 @@ export function ProjectOnboardingConsole() {
   const repoProfileInferenceKeyRef = useRef("");
   const sdkBootstrapPlanKeyRef = useRef("");
   const sdkBootstrapPreviewKeyRef = useRef("");
+  const harnessReadinessKeyRef = useRef("");
   const telemetryVerificationKeyRef = useRef("");
   const sdkManualFallbackDialogKeyRef = useRef("");
   const singleRepoSecretMountSeedKeyRef = useRef("");
@@ -1193,9 +1197,54 @@ export function ProjectOnboardingConsole() {
     }
   }, [projectId, sdkEnvironment, effectiveSdkServiceName, shouldLoadStepSixData, telemetryVerification]);
 
+  const loadHarnessReadiness = useCallback(async (options?: { force?: boolean }) => {
+    const force = options?.force ?? false;
+    if (!projectId.trim() || !effectiveSdkServiceName.trim()) {
+      setHarnessReadiness(null);
+      setLoadingHarnessReadiness(false);
+      harnessReadinessKeyRef.current = "";
+      return;
+    }
+    if (!shouldLoadStepSixData) {
+      setLoadingHarnessReadiness(false);
+      return;
+    }
+    const requestKey = [
+      projectId.trim(),
+      effectiveSdkServiceName.trim(),
+      sdkEnvironment.trim() || "production",
+    ].join("|");
+    if (!force && harnessReadinessKeyRef.current === requestKey && harnessReadiness) {
+      setLoadingHarnessReadiness(false);
+      return;
+    }
+    setLoadingHarnessReadiness(true);
+    try {
+      const params = new URLSearchParams({
+        service: effectiveSdkServiceName.trim(),
+        environment: sdkEnvironment.trim() || "production",
+      });
+      const payload = await requestJson<ProjectHarnessReadiness>(
+        `projects/${encodeURIComponent(projectId.trim())}/harness-readiness?${params.toString()}`,
+        { method: "GET" },
+      );
+      harnessReadinessKeyRef.current = requestKey;
+      setHarnessReadiness(payload);
+    } catch (error) {
+      setHarnessReadiness(null);
+      setErrorMessage(error instanceof Error ? error.message : "Unable to load harness readiness.");
+    } finally {
+      setLoadingHarnessReadiness(false);
+    }
+  }, [effectiveSdkServiceName, harnessReadiness, projectId, sdkEnvironment, shouldLoadStepSixData]);
+
   useEffect(() => {
     void loadTelemetryVerification();
   }, [loadTelemetryVerification, state?.telemetry_heartbeats]);
+
+  useEffect(() => {
+    void loadHarnessReadiness();
+  }, [loadHarnessReadiness, state?.api_keys, state?.browser_keys, state?.repo_profiles, state?.project_services]);
 
   useEffect(() => {
     if (!state) {
@@ -2230,6 +2279,8 @@ export function ProjectOnboardingConsole() {
 
   function startAutomaticSdkWorkflow() {
     sdkManualFallbackDialogKeyRef.current = "";
+    sdkBootstrapPlanKeyRef.current = "";
+    sdkBootstrapPreviewKeyRef.current = "";
     setSdkSetupMode("automatic");
     if (!sdkTargetRepositoryId || !platformBaseUrl || !projectId.trim() || !effectiveSdkServiceName.trim()) {
       setSdkAutomaticRequested(false);
@@ -2240,6 +2291,7 @@ export function ProjectOnboardingConsole() {
     }
     setSdkAutomaticRequested(true);
     setDismissedSdkPreviewStrategyId(null);
+    setSdkBootstrapPlan(null);
     setSdkBootstrapPreview(null);
     setSdkLatestBootstrapPreview(null);
     setSdkAutomationStage("planning");
@@ -2248,9 +2300,12 @@ export function ProjectOnboardingConsole() {
   }
 
   function chooseAutomaticSdkMode() {
+    sdkBootstrapPlanKeyRef.current = "";
+    sdkBootstrapPreviewKeyRef.current = "";
     setSdkSetupMode("automatic");
     setSdkAutomaticRequested(false);
     setSdkAutomationStage("idle");
+    setSdkBootstrapPlan(null);
     setSdkBootstrapPreview(null);
     setSdkLatestBootstrapPreview(null);
     setShowSdkManualFallbackDialog(false);
@@ -2397,6 +2452,21 @@ export function ProjectOnboardingConsole() {
         : loadingTelemetryVerification
           ? "Checking heartbeat"
           : "Waiting for first heartbeat";
+  const harnessReadinessStatusLabel =
+    harnessReadiness?.status === "ready"
+      ? "Harness launch ready"
+      : harnessReadiness?.status === "warning"
+        ? "Needs review"
+        : loadingHarnessReadiness
+          ? "Checking launch readiness"
+          : "Launch readiness pending";
+  const harnessReadinessSummary =
+    harnessReadiness?.status === "ready"
+      ? "The project has enough mapped repo and sandbox context for an autonomous run to start cleanly."
+      : harnessReadiness?.status === "warning"
+        ? "The core launch contract is present, but there are still warnings to review before relying on live drills."
+        : harnessReadiness?.blocked_checks[0]?.summary ??
+          "The project still needs repo, service, or telemetry setup before the harness can reliably launch.";
   const sdkRepositoryLabel = sdkTargetRepositoryId
     ? (() => {
         const repository = repositories.find((candidate) => candidate.id === sdkTargetRepositoryId);
@@ -2793,6 +2863,11 @@ export function ProjectOnboardingConsole() {
       detail: "Deploy or run the updated service, trigger the app once, then come back here and confirm telemetry is arriving for this exact service and environment.",
       code: `Service: ${effectiveSdkServiceName}\nEnvironment: ${sdkEnvironment || "production"}`,
     },
+    {
+      title: "Verify one handled error path",
+      detail: "Trigger one safe error that is caught by the app itself, such as a failed mutation or shared request wrapper, and confirm Stimpact still records exactly one telemetry event for it.",
+      code: "Recommended targets: shared request helpers, mutation onError flows, or other handled UI failures",
+    },
   ] as const;
   const sdkManualPrimarySteps = sdkManualActionItems.slice(0, sdkHelperPlannedFile ? 4 : 3);
   const sdkManualFollowUpItems = [
@@ -2803,7 +2878,7 @@ export function ProjectOnboardingConsole() {
       ? "Replace the placeholder Stimpact base URL with your real public platform URL before deploying."
       : `Confirm the Stimpact base URL points at ${platformBaseUrl}.`,
     `Redeploy ${effectiveSdkServiceName} in ${sdkEnvironment.trim() || "production"}.`,
-    "Return here and refresh heartbeat verification to confirm the SDK is live.",
+    "Return here and refresh heartbeat verification, then confirm one handled error path is also reaching telemetry.",
   ];
   const sdkManualExtraNotes = [
     ...(sdkAutomaticFailureExplanation ? [sdkAutomaticFailureExplanation] : []),
@@ -5079,6 +5154,110 @@ export function ProjectOnboardingConsole() {
                     ? "A heartbeat was seen before, but not recently. Redeploy the SDK-enabled service or refresh once the runtime is active again."
                     : "No heartbeat has been seen yet. Finish setup, redeploy the service, then refresh verification here."}
               </p>
+              <div className="mt-6 border-t border-[rgba(17,24,39,0.08)] pt-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-[#171717]">Harness readiness</p>
+                    <p className="mt-1 max-w-3xl text-sm leading-6 text-[#746d66]">
+                      This checks whether telemetry, service mapping, repo profile commands, and policy controls are
+                      in place so an autonomous repair run can launch with enough context.
+                    </p>
+                  </div>
+                  <ActionButton
+                    label="Check harness readiness"
+                    onClick={() => {
+                      void loadHarnessReadiness({ force: true });
+                    }}
+                    disabled={loading || loadingHarnessReadiness || !effectiveSdkServiceName.trim()}
+                    variant="secondary"
+                  />
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${
+                      harnessReadiness?.status === "ready"
+                        ? "bg-[linear-gradient(180deg,#22c55e,#16a34a)] text-white"
+                        : harnessReadiness?.status === "warning"
+                          ? "bg-[rgba(245,158,11,0.14)] text-[#9a5b14]"
+                          : "bg-[rgba(29,26,24,0.08)] text-[#6f655d]"
+                    }`}
+                  >
+                    {harnessReadinessStatusLabel}
+                  </span>
+                  <span className="text-xs text-[#8a8178]">
+                    {effectiveSdkServiceName} / {sdkEnvironment.trim() || "production"}
+                  </span>
+                </div>
+                <p className="mt-4 text-sm leading-6 text-[#4c5c72]">{harnessReadinessSummary}</p>
+                {harnessReadiness ? (
+                  <>
+                    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[#4c5c72]">
+                      <p>
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                          Ready
+                        </span>{" "}
+                        <span className="font-semibold text-[#171717]">{harnessReadiness.ready_checks.length}</span>
+                      </p>
+                      <p>
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                          Warnings
+                        </span>{" "}
+                        <span className="font-semibold text-[#171717]">{harnessReadiness.warning_checks.length}</span>
+                      </p>
+                      <p>
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6f7b90]">
+                          Blocked
+                        </span>{" "}
+                        <span className="font-semibold text-[#171717]">{harnessReadiness.blocked_checks.length}</span>
+                      </p>
+                    </div>
+                    <div className="mt-4 grid gap-x-8 gap-y-4 lg:grid-cols-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">
+                          Launch contract
+                        </p>
+                        <div className="mt-2 space-y-2 text-sm leading-6 text-[#4c5c72]">
+                          <p>
+                            <span className="font-semibold text-[#171717]">Repo:</span>{" "}
+                            {harnessReadiness.launch_contract.provider_repository_owner &&
+                            harnessReadiness.launch_contract.provider_repository_name
+                              ? `${harnessReadiness.launch_contract.provider_repository_owner}/${harnessReadiness.launch_contract.provider_repository_name}`
+                              : "Not resolved yet"}
+                          </p>
+                          <p>
+                            <span className="font-semibold text-[#171717]">Runtime:</span>{" "}
+                            {harnessReadiness.launch_contract.runtime_kind ?? "Unknown"}
+                          </p>
+                          <p>
+                            <span className="font-semibold text-[#171717]">Reproduce:</span>{" "}
+                            {harnessReadiness.launch_contract.reproduce_command ?? "Missing"}
+                          </p>
+                          <p>
+                            <span className="font-semibold text-[#171717]">Verify:</span>{" "}
+                            {harnessReadiness.launch_contract.verify_command ?? "Missing"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#66758c]">
+                          Next fixes
+                        </p>
+                        {harnessReadiness.recommended_next_steps.length > 0 ? (
+                          <ul className="mt-2 space-y-2 text-sm leading-6 text-[#4c5c72]">
+                            {harnessReadiness.recommended_next_steps.slice(0, 4).map((item) => (
+                              <li key={item}>- {item}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-sm leading-6 text-[#4c5c72]">
+                            No blocking setup gaps were detected for this target.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
             </div>
           </div>
         </StepPanel>

@@ -119,6 +119,28 @@ class AutonomousRunService:
             request=request,
             browser_verification_supported=browser_verification_supported,
         )
+        latest_telemetry = await self._incident_repository.get_telemetry(incident.latest_telemetry_id)
+        dependency_service_slugs: list[str] = []
+        if (
+            service_context.project_service is not None
+            and self._control_plane_repository is not None
+            and hasattr(self._control_plane_repository, "list_project_service_dependencies")
+            and hasattr(self._control_plane_repository, "get_project_service")
+        ):
+            dependency_records = await self._control_plane_repository.list_project_service_dependencies(
+                service_context.project_service.id
+            )
+            for dependency in dependency_records:
+                dependency_service = await self._control_plane_repository.get_project_service(
+                    dependency.depends_on_service_id
+                )
+                if dependency_service is not None:
+                    dependency_service_slugs.append(dependency_service.slug)
+        provider_repository = None
+        if repo_profile is not None and self._control_plane_repository is not None:
+            provider_repository = await self._control_plane_repository.get_provider_repository(
+                repo_profile.provider_repository_id
+            )
         snapshot = self._runner.bootstrap_run(
             incident_id=incident_id,
             repo_profile_id=repo_profile.id if repo_profile is not None else None,
@@ -138,7 +160,27 @@ class AutonomousRunService:
             update={
                 "status": AutonomousRunStatus.QUEUED,
                 "phase": snapshot.run.phase,
+                "project_id": incident.project_id,
                 "repo_profile_id": repo_profile.id if repo_profile is not None else None,
+                "incident_title": incident.title,
+                "incident_fingerprint": incident.fingerprint,
+                "service_name": incident.service,
+                "environment": incident.environment.value,
+                "latest_telemetry_id": incident.latest_telemetry_id,
+                "latest_telemetry_commit_sha": latest_telemetry.commit_sha,
+                "latest_telemetry_error_message": latest_telemetry.error_message,
+                "runtime_kind": repo_profile.runtime_kind.value if repo_profile is not None else None,
+                "provider_repository_owner": provider_repository.owner if provider_repository is not None else None,
+                "provider_repository_name": provider_repository.name if provider_repository is not None else None,
+                "install_command": repo_profile.install_command if repo_profile is not None else None,
+                "reproduce_command": repo_profile.reproduce_command if repo_profile is not None else None,
+                "verify_command": repo_profile.verify_command if repo_profile is not None else None,
+                "success_criteria": repo_profile.success_criteria if repo_profile is not None else None,
+                "network_allowlist": list(repo_profile.network_allowlist) if repo_profile is not None else [],
+                "dependency_service_slugs": dependency_service_slugs,
+                "browser_verification_urls": [
+                    entrypoint.url for entrypoint in repository_profile_override.browser_verification_entrypoints
+                ],
                 "execution_mode": request.execution_mode,
                 "approval_status": approval_status,
                 "benchmark_scenario_id": request.benchmark_scenario_id,
@@ -150,11 +192,7 @@ class AutonomousRunService:
         self._event_stream.upsert_run(run)
 
         async_job_id = None
-        if (
-            approval_status is AutonomousApprovalStatus.NOT_REQUIRED
-            and policy.auto_run_allowed
-            and self._async_job_repository is not None
-        ):
+        if policy.auto_run_allowed and self._async_job_repository is not None:
             job = await self._async_job_repository.create_job(
                 job_type=AsyncJobType.AUTONOMOUS_REPAIR,
                 payload={"incident_id": incident_id, "autonomous_run_id": run.id},

@@ -29,6 +29,8 @@ export type CaptureErrorInput = {
   timestamp?: string | Date;
 };
 
+export type ErrorCaptureContext = Omit<CaptureErrorInput, "error">;
+
 export type HeartbeatInput = {
   commitSha?: string | null;
   environment?: StimpactEnvironment;
@@ -72,6 +74,23 @@ export type BrowserAutoCaptureOptions = {
 };
 
 export type BrowserCaptureSubscription = {
+  dispose: () => void;
+};
+
+export type ProcessListenerTarget = {
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  off?: (event: string, listener: (...args: unknown[]) => void) => void;
+  addListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+};
+
+export type ProcessAutoCaptureOptions = {
+  captureUncaughtExceptions?: boolean;
+  captureUnhandledRejections?: boolean;
+  processTarget?: ProcessListenerTarget | null;
+};
+
+export type ProcessCaptureSubscription = {
   dispose: () => void;
 };
 

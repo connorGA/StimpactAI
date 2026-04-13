@@ -1,0 +1,263 @@
+Delivery attempt
+checkout.session.completed
+Delivery status
+Failed
+Next retry in 59 minutes
+Attempt date
+Nov 2, 2025, 2:05:56 AM
+Event ID
+evt_1SOqg3RshsyL2EyvvqdMQPyB
+Origin date
+Nov 2, 2025, 2:05:56 AM
+Source
+Automatic
+API version
+2025-09-30.clover
+Description
+A Checkout Session was completed
+Response
+HTTP status code
+404
+{
+"error": 
+"User not found",
+"details": 
+"No user account found for tester@gmail.com. Please register first.",
+}
+Request
+{
+"id": 
+"evt_1SOqg3RshsyL2EyvvqdMQPyB"
+,
+"object": 
+"event",
+"api_version": 
+"2025-09-30.clover",
+"created": 
+1762049155
+,
+"data": {
+"object": {
+"id": 
+"cs_test_a1OY8jol37kztpD5QOPzGmew0Dfw6U3ROuam0htxXYdE1H56WRyXFL7sIT"
+,
+"object": 
+"checkout.session",
+"adaptive_pricing": {
+"enabled": 
+false,
+},
+"after_expiration": 
+null,
+"allow_promotion_codes": 
+false,
+"amount_subtotal": 
+499,
+"amount_total": 
+499,
+"automatic_tax": {
+"enabled": 
+false,
+"liability": 
+null,
+"provider": 
+null,
+"status": 
+null,
+},
+"billing_address_collection": 
+"auto",
+"cancel_url": 
+"https://stripe.com",
+"client_reference_id": 
+"56959145-39d0-4793-99f6-f93622cd2a0e",
+"client_secret": 
+null,
+"collected_information": {
+"business_name": 
+null,
+"individual_name": 
+null,
+"shipping_details": 
+null,
+},
+"consent": 
+null,
+"consent_collection": {
+"payment_method_reuse_agreement": 
+null,
+"promotions": 
+"none",
+"terms_of_service": 
+"none",
+},
+"created": 
+1762049119
+,
+"currency": 
+"usd",
+"currency_conversion": 
+null,
+"custom_fields": [],
+"custom_text": {
+"after_submit": 
+null,
+"shipping_address": 
+null,
+"submit": 
+null,
+"terms_of_service_acceptance": 
+null,
+},
+"customer": 
+"cus_TLXl6jy5X1I10Z"
+,
+"customer_creation": 
+"if_required",
+"customer_details": {
+"address": {
+"city": 
+null,
+"country": 
+"US",
+"line1": 
+null,
+"line2": 
+null,
+"postal_code": 
+"93711",
+"state": 
+null,
+},
+"business_name": 
+null,
+"email": 
+"tester@gmail.com",
+"individual_name": 
+null,
+"name": 
+"CONNOR",
+"phone": 
+null,
+"tax_exempt": 
+"none",
+"tax_ids": [],
+},
+"customer_email": 
+null,
+"discounts": [],
+"expires_at": 
+1762135519
+,
+"invoice": 
+"in_1SOqg0RshsyL2EyvB0Y6BXaU"
+,
+"invoice_creation": 
+null,
+"livemode": 
+false,
+"locale": 
+"auto",
+"metadata": {
+"credits": 
+"200",
+"plan_tier": 
+"plus",
+"purchase_type": 
+"subscription",
+},
+"mode": 
+"subscription",
+"origin_context": 
+null,
+"payment_intent": 
+null,
+"payment_link": 
+"plink_1SNmrHRshsyL2Eyv7FXdYriL"
+,
+"payment_method_collection": 
+"always",
+"payment_method_configuration_details": {
+"id": 
+"pmc_1SHRbBRshsyL2EyvJmsFAMlD"
+,
+"parent": 
+null,
+},
+"payment_method_options": {
+"card": {
+"request_three_d_secure": 
+"automatic",
+},
+},
+"payment_method_types": [
+"card",
+"klarna",
+"link",
+"cashapp",
+"amazon_pay",
+],
+"payment_status": 
+"paid",
+"permissions": 
+null,
+"phone_number_collection": {
+"enabled": 
+false,
+},
+"recovered_from": 
+null,
+"saved_payment_method_options": {
+"allow_redisplay_filters": [
+"always",
+],
+"payment_method_remove": 
+"disabled",
+"payment_method_save": 
+null,
+},
+"setup_intent": 
+null,
+"shipping_address_collection": 
+null,
+"shipping_cost": 
+null,
+"shipping_options": [],
+"status": 
+"complete",
+"submit_type": 
+"auto",
+"subscription": 
+"sub_1SOqg2RshsyL2EyvfvTBzS0y"
+,
+"success_url": 
+"https://syntheticsoulsongs.com/payment-success",
+"total_details": {
+"amount_discount": 
+0,
+"amount_shipping": 
+0,
+"amount_tax": 
+0,
+},
+"ui_mode": 
+"hosted",
+"url": 
+null,
+"wallet_options": 
+null,
+},
+},
+"livemode": 
+false,
+"pending_webhooks": 
+1,
+"request": {
+"id": 
+null,
+"idempotency_key": 
+null,
+},
+"type": 
+"checkout.session.completed",
+}

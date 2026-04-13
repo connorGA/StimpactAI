@@ -292,11 +292,12 @@ const sdkBootstrapStrategy = {
     },
     {
       title: "Initialize at startup",
-      content: "Import and initialize the SDK from `src/app/layout.tsx`.",
+      content:
+        "Import and initialize the SDK from `src/app/layout.tsx`, then wire handled request and mutation failures with `captureHandledError()` or `wrapAsync()`.",
     },
   ],
   preview_snippet:
-    "import { StimpactClient } from '@stimpact/sdk';\n\nconst stimpact = new StimpactClient({\n  baseUrl: '<public-stimpact-url>',\n  projectId: '<project-id>',\n  browserKey: '<browser-key>',\n  service: 'web-app',\n  environment: 'production',\n});\n\nstimpact.startHeartbeat();\nstimpact.registerBrowserAutoCapture();",
+    "import { StimpactClient } from '@stimpact/sdk';\n\nconst stimpact = new StimpactClient({\n  baseUrl: '<public-stimpact-url>',\n  projectId: '<project-id>',\n  browserKey: '<browser-key>',\n  service: 'web-app',\n  environment: 'production',\n});\n\nstimpact.startHeartbeat();\nstimpact.registerBrowserAutoCapture();\n\nexport async function captureHandledError(input) {\n  await stimpact.captureHandledError(input);\n}\n\nexport async function pingStimpact() {\n  await stimpact.ping();\n}",
   source: "deterministic",
   evidence: ["Detected app router layout at apps/web/src/app/layout.tsx"],
   confidence_reason: "The repo contains a supported Next.js App Router entrypoint.",

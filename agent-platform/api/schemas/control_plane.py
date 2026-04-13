@@ -248,6 +248,55 @@ class ProjectTelemetryVerificationResponse(BaseModel):
     heartbeat: ProjectTelemetryHeartbeatResponse | None = None
 
 
+class ProjectHarnessReadinessCheckResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    status: str
+    summary: str
+    detail: str | None = None
+
+
+class ProjectHarnessLaunchContractResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    environment: str
+    project_service_id: str | None = None
+    repo_profile_id: str | None = None
+    provider_repository_id: str | None = None
+    provider_repository_owner: str | None = None
+    provider_repository_name: str | None = None
+    runtime_kind: str | None = None
+    base_image: str | None = None
+    install_command: str | None = None
+    startup_commands: list[str] = Field(default_factory=list)
+    reproduce_command: str | None = None
+    verify_command: str | None = None
+    success_criteria: str | None = None
+    network_allowlist: list[str] = Field(default_factory=list)
+    dependency_service_slugs: list[str] = Field(default_factory=list)
+    browser_verification_urls: list[str] = Field(default_factory=list)
+    example_autonomous_run_request: dict[str, object] = Field(default_factory=dict)
+
+
+class ProjectHarnessReadinessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    service: str
+    environment: str
+    status: str
+    telemetry_status: str
+    ready_checks: list[ProjectHarnessReadinessCheckResponse] = Field(default_factory=list)
+    warning_checks: list[ProjectHarnessReadinessCheckResponse] = Field(default_factory=list)
+    blocked_checks: list[ProjectHarnessReadinessCheckResponse] = Field(default_factory=list)
+    missing_items: list[str] = Field(default_factory=list)
+    recommended_next_steps: list[str] = Field(default_factory=list)
+    launch_contract: ProjectHarnessLaunchContractResponse
+
+
 class UpdateProjectOnboardingStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
