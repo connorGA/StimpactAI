@@ -168,7 +168,7 @@ class StubRetryRunner:
         self._event_stream.upsert_run(updated)
         return self._event_stream.get_snapshot(run_id)
 
-    async def continue_run(self, *, run_id: str, decision_engine, max_steps: int = 12):
+    async def continue_run(self, *, run_id: str, decision_engine, max_steps: int = 20):
         _ = (decision_engine, max_steps)
         self.continue_calls += 1
         snapshot = self._event_stream.get_snapshot(run_id)

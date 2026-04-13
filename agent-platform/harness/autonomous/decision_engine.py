@@ -29,9 +29,9 @@ class AutonomousDecisionEngine(Protocol):
 
 
 class OpenAIAutonomousDecisionEngine:
-    _REQUEST_TIMEOUT_SECONDS = 45
-    _MAX_COMPLETION_ATTEMPTS = 3
-    _INITIAL_RETRY_DELAY_SECONDS = 2.0
+    _REQUEST_TIMEOUT_SECONDS = 90
+    _MAX_COMPLETION_ATTEMPTS = 5
+    _INITIAL_RETRY_DELAY_SECONDS = 4.0
 
     def __init__(self, *, client: AsyncOpenAI, model: str | None = None) -> None:
         self._client = client

@@ -155,6 +155,22 @@ async def _run_outbox_worker(stop_event: asyncio.Event) -> None:
             repository = OutboxRepository(manager.pool)
             incident_repository = IncidentRepository(manager.pool)
             control_plane_repository = ControlPlaneRepository(manager.pool)
+            async_job_repository = AsyncJobRepository(manager.pool)
+            autonomous_repository = AutonomousRunRepository(manager.pool)
+            patch_repository = PatchRepository(manager.pool)
+            provider_integration_service = ProviderIntegrationService(
+                control_plane_repository,
+                secrets_writer=AwsSecretsManagerWriter(),
+                secrets_reader=AwsSecretsManagerReader(),
+            )
+            autonomous_run_service = AutonomousRunService(
+                incident_repository,
+                async_job_repository=async_job_repository,
+                autonomous_repository=autonomous_repository,
+                control_plane_repository=control_plane_repository,
+                patch_repository=patch_repository,
+                provider_integration_service=provider_integration_service,
+            )
             dispatcher = OutboxDispatcher(
                 repository,
                 IncidentCreationService(
@@ -162,6 +178,7 @@ async def _run_outbox_worker(stop_event: asyncio.Event) -> None:
                     control_plane_repository=control_plane_repository,
                 ),
                 signal_bus=outbox_signal_bus,
+                autonomous_run_service=autonomous_run_service,
             )
 
             async def _process() -> int:

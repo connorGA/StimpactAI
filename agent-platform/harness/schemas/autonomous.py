@@ -93,7 +93,7 @@ class AutonomousLoopState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_index: int = Field(ge=0, default=0)
-    max_steps: int = Field(ge=1, default=12)
+    max_steps: int = Field(ge=1, default=20)
     checkpoint_ref: str | None = Field(default=None, max_length=256)
     recovery_attempts: int = Field(ge=0, default=0)
     consecutive_failures: int = Field(ge=0, default=0)

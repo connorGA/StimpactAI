@@ -1,0 +1,63 @@
+{
+  "approval_status": "pending",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-13T03:06:01.903899Z",
+  "created_at": "2026-04-13T03:04:59.275837Z",
+  "execution_mode": "repair_only",
+  "failure_class": "verification",
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "c09782f4-8aa8-4ef4-8270-edbc63dbe29c",
+  "last_error": "Run exceeded the max step budget of 12.",
+  "latest_verification": {
+    "command": "npm run check",
+    "kind": "integration",
+    "metadata": {
+      "feature_id": "soul-song-service-cannot-read-properties-of-undefined-reading-requestmetadata",
+      "tool_name": "run_command",
+      "turn_id": 14
+    },
+    "passed": false,
+    "recorded_at": "2026-04-13T03:06:01.895625Z",
+    "source": "tool",
+    "summary": "Command exited with status 127."
+  },
+  "objective": "Fix the TypeError: Cannot read properties of undefined (reading requestMetadata) in the Soul Song Service",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": false,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Recommend mode keeps write-back disabled and requires approval before promotion.",
+      "Project policy currently disables production write-back."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": true
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 1,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-c09782f4-ku4yvucd/repo",
+  "run_id": "260a29b6-6996-4cd0-be99-db167cb1f55b",
+  "stagnation_count": 1,
+  "status": "failed",
+  "total_decisions": 12,
+  "total_events": 63,
+  "total_steps": 12,
+  "total_tool_calls": 14
+}

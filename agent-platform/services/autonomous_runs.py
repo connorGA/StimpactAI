@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import atexit
+import logging
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +62,66 @@ class ResolvedAutonomousServiceContext:
     project_policy: object | None
 
 
+logger = logging.getLogger(__name__)
+
+_active_workspaces: dict[str, Path] = {}
+
+
+def _prepare_repository_workspace(
+    *,
+    run_id: str,
+    clone_url: str,
+    default_branch: str,
+) -> Path:
+    """Clone the connected repo into a temporary workspace for the agent.
+
+    The workspace is kept alive for the lifetime of the run and cleaned up
+    after the run completes (or when the process exits).
+    """
+    if run_id in _active_workspaces and _active_workspaces[run_id].exists():
+        return _active_workspaces[run_id]
+
+    workspace_dir = Path(tempfile.mkdtemp(prefix=f"stimpact-agent-{run_id[:8]}-"))
+    repo_dir = workspace_dir / "repo"
+    logger.info(
+        "Cloning connected repo for autonomous run",
+        extra={"run_id": run_id, "clone_url": clone_url, "target": str(repo_dir)},
+    )
+    subprocess.run(
+        [
+            "git", "clone", "--quiet", "--depth", "50",
+            "--single-branch", "--branch", default_branch,
+            clone_url, str(repo_dir),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    _active_workspaces[run_id] = repo_dir
+    return repo_dir
+
+
+def _cleanup_workspace(run_id: str) -> None:
+    repo_dir = _active_workspaces.pop(run_id, None)
+    if repo_dir is None:
+        return
+    workspace_dir = repo_dir.parent
+    try:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+        logger.info("Cleaned up agent workspace", extra={"run_id": run_id, "path": str(workspace_dir)})
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to clean up agent workspace", extra={"run_id": run_id, "path": str(workspace_dir)})
+
+
+def _cleanup_all_workspaces() -> None:
+    for run_id in list(_active_workspaces):
+        _cleanup_workspace(run_id)
+
+
+atexit.register(_cleanup_all_workspaces)
+
+
 class AutonomousRunService:
     def __init__(
         self,
@@ -100,25 +165,6 @@ class AutonomousRunService:
         incident = service_context.incident
         repo_profile = service_context.repo_profile
         repository_root = request.repository_root or str(self._repository_root)
-        repository_profile_override = self._profile_adapter.build_profile(
-            repository_root=repository_root,
-            repo_profile=repo_profile,
-        )
-        browser_verification_supported = self._supports_browser_verification(repository_profile_override)
-        feature_seeds = request.feature_seeds or self._derive_feature_seeds(
-            incident=incident,
-            repo_profile=repo_profile,
-            requested_mode=request.execution_mode,
-            browser_verification_supported=browser_verification_supported,
-        )
-        policy, approval_status = self._policy_service.evaluate(
-            incident=incident,
-            repo_profile=repo_profile,
-            project_service=service_context.project_service,
-            project_policy=service_context.project_policy,
-            request=request,
-            browser_verification_supported=browser_verification_supported,
-        )
         latest_telemetry = await self._incident_repository.get_telemetry(incident.latest_telemetry_id)
         dependency_service_slugs: list[str] = []
         if (
@@ -141,6 +187,34 @@ class AutonomousRunService:
             provider_repository = await self._control_plane_repository.get_provider_repository(
                 repo_profile.provider_repository_id
             )
+        if (
+            request.repository_root is None
+            and provider_repository is not None
+            and self._provider_integration_service is not None
+        ):
+            repository_root = str(await self._clone_connected_repo(
+                incident_id=incident_id,
+                provider_repository=provider_repository,
+            ))
+        repository_profile_override = self._profile_adapter.build_profile(
+            repository_root=repository_root,
+            repo_profile=repo_profile,
+        )
+        browser_verification_supported = self._supports_browser_verification(repository_profile_override)
+        feature_seeds = request.feature_seeds or self._derive_feature_seeds(
+            incident=incident,
+            repo_profile=repo_profile,
+            requested_mode=request.execution_mode,
+            browser_verification_supported=browser_verification_supported,
+        )
+        policy, approval_status = self._policy_service.evaluate(
+            incident=incident,
+            repo_profile=repo_profile,
+            project_service=service_context.project_service,
+            project_policy=service_context.project_policy,
+            request=request,
+            browser_verification_supported=browser_verification_supported,
+        )
         snapshot = self._runner.bootstrap_run(
             incident_id=incident_id,
             repo_profile_id=repo_profile.id if repo_profile is not None else None,
@@ -373,9 +447,22 @@ class AutonomousRunService:
             if detail.run.repo_profile_id is not None
             else None
         )
+        repository_root = detail.run.repository_root
+        if not Path(repository_root).exists() and repo_profile is not None and self._control_plane_repository is not None:
+            provider_repository = await self._control_plane_repository.get_provider_repository(
+                repo_profile.provider_repository_id
+            )
+            if provider_repository is not None and self._provider_integration_service is not None:
+                repository_root = str(await self._clone_connected_repo(
+                    incident_id=incident_id,
+                    provider_repository=provider_repository,
+                ))
+                detail = detail.model_copy(
+                    update={"run": detail.run.model_copy(update={"repository_root": repository_root})}
+                )
         repository_profile_override = (
             self._profile_adapter.build_profile(
-                repository_root=detail.run.repository_root,
+                repository_root=repository_root,
                 repo_profile=repo_profile,
             )
             if repo_profile is not None
@@ -389,79 +476,82 @@ class AutonomousRunService:
         feature_seeds = persisted_record.feature_seeds if persisted_record is not None else []
         attempt_budget = max(1, detail.run.policy.max_repair_attempts)
 
-        for attempt_number in range(1, attempt_budget + 1):
-            ensured_snapshot = self._runner.ensure_sessions(
-                run_id=run_id,
-                repository_root=detail.run.repository_root,
-                objective=detail.run.objective,
-                initializer_summary=initializer_summary,
-                repository_profile_override=repository_profile_override,
-                feature_seeds=feature_seeds,
-            )
-            active_run = ensured_snapshot.run
-            if self._autonomous_repository is not None:
-                await self._autonomous_repository.create_attempt(
-                    autonomous_run_id=run_id,
-                    async_job_id=job.id,
-                    attempt_number=attempt_number,
-                    status=AsyncJobStatus.RUNNING.value,
-                    error_message=None,
-                    finished=False,
+        try:
+            for attempt_number in range(1, attempt_budget + 1):
+                ensured_snapshot = self._runner.ensure_sessions(
+                    run_id=run_id,
+                    repository_root=repository_root,
+                    objective=detail.run.objective,
+                    initializer_summary=initializer_summary,
+                    repository_profile_override=repository_profile_override,
+                    feature_seeds=feature_seeds,
                 )
-            running_run = active_run.model_copy(
-                update={
-                    "status": AutonomousRunStatus.RUNNING,
-                    "async_job_id": job.id,
-                }
-            )
-            self._event_stream.upsert_run(running_run)
-            decision_engine = self._decision_engine_factory()
-            snapshot = await self._runner.continue_run(
-                run_id=run_id,
-                decision_engine=decision_engine,
-                max_steps=active_run.loop_state.max_steps,
-            )
-            snapshot = await self._postprocess_completed_run(snapshot)
-            outcome = self._artifact_store.get_outcome(incident_id, run_id)
-            if self._autonomous_repository is not None:
-                await self._autonomous_repository.update_run(
-                    run_id,
-                    async_job_id=job.id,
-                    project_service_id=getattr(persisted_record, "project_service_id", None),
-                    repo_profile_id=snapshot.run.repo_profile_id,
-                    run=snapshot.run.model_copy(update={"async_job_id": job.id}),
-                    outcome=outcome,
+                active_run = ensured_snapshot.run
+                if self._autonomous_repository is not None:
+                    await self._autonomous_repository.create_attempt(
+                        autonomous_run_id=run_id,
+                        async_job_id=job.id,
+                        attempt_number=attempt_number,
+                        status=AsyncJobStatus.RUNNING.value,
+                        error_message=None,
+                        finished=False,
+                    )
+                running_run = active_run.model_copy(
+                    update={
+                        "status": AutonomousRunStatus.RUNNING,
+                        "async_job_id": job.id,
+                    }
                 )
-                await self._autonomous_repository.create_attempt(
-                    autonomous_run_id=run_id,
-                    async_job_id=job.id,
-                    attempt_number=attempt_number,
-                    status=(
-                        job.status.value
-                        if snapshot.run.status is AutonomousRunStatus.RUNNING
-                        else snapshot.run.status.value
-                    ),
-                    error_message=snapshot.run.last_error,
-                    finished=True,
+                self._event_stream.upsert_run(running_run)
+                decision_engine = self._decision_engine_factory()
+                snapshot = await self._runner.continue_run(
+                    run_id=run_id,
+                    decision_engine=decision_engine,
+                    max_steps=active_run.loop_state.max_steps,
                 )
-            if not self._should_retry_run(snapshot.run, attempt_number=attempt_number, attempt_budget=attempt_budget):
-                return self.get_run_detail_sync(incident_id, run_id)
+                snapshot = await self._postprocess_completed_run(snapshot)
+                outcome = self._artifact_store.get_outcome(incident_id, run_id)
+                if self._autonomous_repository is not None:
+                    await self._autonomous_repository.update_run(
+                        run_id,
+                        async_job_id=job.id,
+                        project_service_id=getattr(persisted_record, "project_service_id", None),
+                        repo_profile_id=snapshot.run.repo_profile_id,
+                        run=snapshot.run.model_copy(update={"async_job_id": job.id}),
+                        outcome=outcome,
+                    )
+                    await self._autonomous_repository.create_attempt(
+                        autonomous_run_id=run_id,
+                        async_job_id=job.id,
+                        attempt_number=attempt_number,
+                        status=(
+                            job.status.value
+                            if snapshot.run.status is AutonomousRunStatus.RUNNING
+                            else snapshot.run.status.value
+                        ),
+                        error_message=snapshot.run.last_error,
+                        finished=True,
+                    )
+                if not self._should_retry_run(snapshot.run, attempt_number=attempt_number, attempt_budget=attempt_budget):
+                    return self.get_run_detail_sync(incident_id, run_id)
 
-            retry_context = self._build_retry_context(snapshot.run, next_attempt_number=attempt_number + 1)
-            reset_snapshot = self._runner.prepare_for_retry(
-                run_id=run_id,
-                retry_context=retry_context,
-            )
-            if self._autonomous_repository is not None:
-                await self._autonomous_repository.update_run(
-                    run_id,
-                    async_job_id=job.id,
-                    project_service_id=getattr(persisted_record, "project_service_id", None),
-                    repo_profile_id=reset_snapshot.run.repo_profile_id,
-                    run=reset_snapshot.run.model_copy(update={"async_job_id": job.id}),
-                    outcome=None,
+                retry_context = self._build_retry_context(snapshot.run, next_attempt_number=attempt_number + 1)
+                reset_snapshot = self._runner.prepare_for_retry(
+                    run_id=run_id,
+                    retry_context=retry_context,
                 )
-        return self.get_run_detail_sync(incident_id, run_id)
+                if self._autonomous_repository is not None:
+                    await self._autonomous_repository.update_run(
+                        run_id,
+                        async_job_id=job.id,
+                        project_service_id=getattr(persisted_record, "project_service_id", None),
+                        repo_profile_id=reset_snapshot.run.repo_profile_id,
+                        run=reset_snapshot.run.model_copy(update={"async_job_id": job.id}),
+                        outcome=None,
+                    )
+            return self.get_run_detail_sync(incident_id, run_id)
+        finally:
+            _cleanup_workspace(run_id)
 
     async def record_sandbox_result(self, sandbox_run: SandboxRunRecord) -> None:
         if self._autonomous_repository is None:
@@ -661,6 +751,35 @@ class AutonomousRunService:
         if self._control_plane_repository is None:
             return None
         return await self._control_plane_repository.get_active_repo_profile(project_id)
+
+    async def _clone_connected_repo(
+        self,
+        *,
+        incident_id: str,
+        provider_repository,
+    ) -> Path:
+        from services.provider_clients import get_provider_client
+
+        integration = await self._control_plane_repository.get_provider_integration(
+            provider_repository.provider_integration_id
+        )
+        if integration is None:
+            raise APIError(
+                "No provider integration found for this repository.",
+                status_code=404,
+                code="provider_integration_not_found",
+            )
+        client = get_provider_client(integration.provider)
+        sandbox_access = await client.build_sandbox_access(
+            integration,
+            provider_repository,
+        )
+        clone_url = sandbox_access.secret_value if sandbox_access else provider_repository.clone_url
+        return _prepare_repository_workspace(
+            run_id=incident_id,
+            clone_url=clone_url,
+            default_branch=provider_repository.default_branch,
+        )
 
     async def _resolve_incident_service_context(self, incident_id: str) -> ResolvedAutonomousServiceContext:
         incident = await self._require_incident(incident_id)

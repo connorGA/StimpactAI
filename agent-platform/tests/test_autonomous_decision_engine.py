@@ -83,11 +83,11 @@ async def test_openai_autonomous_decision_engine_fails_after_retry_budget(monkey
     monkeypatch.setattr(engine, "_request_completion", fake_request)
     monkeypatch.setattr("harness.autonomous.decision_engine.asyncio.sleep", fake_sleep)
 
-    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+    with pytest.raises(RuntimeError, match="failed after 5 attempts"):
         await engine.decide(
             run=_Dumpable(),
             coding_session=_Dumpable(),
             available_tools=[],
         )
 
-    assert attempts == 3
+    assert attempts == 5

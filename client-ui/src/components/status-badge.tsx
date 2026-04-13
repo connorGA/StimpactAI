@@ -1,16 +1,15 @@
 import type { IncidentStatus } from "@/lib/types";
 
-const statusClasses: Record<IncidentStatus, string> = {
-  open: "vault-badge bg-[rgba(255,106,61,0.1)] text-[#c9431d] border-[rgba(255,106,61,0.2)]",
-  resolved:
-    "vault-badge bg-[rgba(22,164,109,0.08)] text-[#13724d] border-[rgba(22,164,109,0.18)]",
+const statusConfig: Record<IncidentStatus, { className: string; dot: string }> = {
+  open: { className: "text-[#dc2626]", dot: "bg-[#dc2626]" },
+  resolved: { className: "text-[#16a34a]", dot: "bg-[#16a34a]" },
 };
 
 export function StatusBadge({ status }: { status: IncidentStatus }) {
+  const { className, dot } = statusConfig[status];
   return (
-    <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ring-1 ring-inset ${statusClasses[status]}`}
-    >
+    <span className={`inline-flex items-center gap-1 text-[11px] font-medium capitalize ${className}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       {status}
     </span>
   );

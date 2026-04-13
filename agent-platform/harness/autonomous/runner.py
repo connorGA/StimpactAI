@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from harness.schemas.autonomous import (
     AutonomousDecisionAction,
     AutonomousExecutionMode,
     AutonomousEventType,
+    AutonomousPromotionStatus,
     AutonomousRepairRunRecord,
     AutonomousRunEvent,
     AutonomousToolFailure,
@@ -297,7 +299,7 @@ class AutonomousRepairRunner:
         decision_engine: AutonomousDecisionEngine,
         repository_profile_override: HarnessRepositoryProfile | None = None,
         feature_seeds: list[FeatureSeed] | None = None,
-        max_steps: int = 12,
+        max_steps: int = 20,
     ) -> AutonomousRunSnapshot:
         snapshot = self.bootstrap_run(
             incident_id=incident_id,
@@ -318,7 +320,7 @@ class AutonomousRepairRunner:
         *,
         run_id: str,
         decision_engine: AutonomousDecisionEngine,
-        max_steps: int = 12,
+        max_steps: int = 20,
     ) -> AutonomousRunSnapshot:
         run = self.get_snapshot(run_id).run
         updated_loop_state = run.loop_state.model_copy(update={"max_steps": max_steps})
@@ -326,6 +328,8 @@ class AutonomousRepairRunner:
         baseline_checkpoint_failed = self._ensure_baseline_checkpoint(run_id)
         if baseline_checkpoint_failed is not None:
             return baseline_checkpoint_failed
+
+        self._auto_install_dependencies(run_id)
 
         for step_index in range(1, max_steps + 1):
             current_snapshot = self.get_snapshot(run_id)
@@ -822,6 +826,43 @@ class AutonomousRepairRunner:
         )
         self._persist_run(run.model_copy(update={"loop_state": updated_loop_state, "updated_at": datetime.now(UTC)}))
         return None
+
+    def _auto_install_dependencies(self, run_id: str) -> None:
+        run = self.get_snapshot(run_id).run
+        if run.coding_session_id is None:
+            return
+        coding_snapshot = self._orchestrator.restore_session(run.coding_session_id)
+        profile = coding_snapshot.repository_profile
+        if profile is None or not getattr(profile, "install_command", None):
+            return
+        repo_root = Path(coding_snapshot.repository_root)
+        if (repo_root / "node_modules").exists() or (repo_root / ".venv").exists():
+            return
+
+        install_decision = AutonomousDecision(
+            summary=f"Auto-install project dependencies before coding: {profile.install_command}",
+            rationale="Pre-install dependencies so the agent can focus on investigation and repair.",
+            action=AutonomousDecisionAction.INVOKE_TOOL,
+            selected_tool="run_command",
+            arguments={"command": profile.install_command, "timeout_seconds": 300},
+            arguments_summary=f"command={profile.install_command}",
+        )
+        try:
+            result = self._execute_decision_tool(run_id=run_id, run=run, decision=install_decision)
+            self._emit_event(
+                run_id=run_id,
+                event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                phase=AutonomousRunPhase.CODING,
+                summary=f"Auto-install {'succeeded' if result.ok else 'failed (agent can retry)'}.",
+                payload={"tool_name": "run_command", "ok": result.ok},
+            )
+        except Exception:  # noqa: BLE001
+            self._emit_event(
+                run_id=run_id,
+                event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                phase=AutonomousRunPhase.CODING,
+                summary="Auto-install raised an exception (agent can install manually).",
+            )
 
     def _recover_from_execution_failure(
         self,

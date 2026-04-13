@@ -78,101 +78,87 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
   const featuredAutonomousRun = featured
     ? await getLatestIncidentAutonomousRunDetail(featured.id).catch(() => null)
     : null;
-  const rangeLabel = buildRangeLabel(currentPage, pageSize, incidentList.total);
-  const paginationQuery = {
-    project_id: projectId,
-    status,
-  };
+  const paginationQuery = { project_id: projectId, status };
+  const openCount = countOpenIncidents(incidents);
+  const criticalCount = countCriticalIncidents(incidents);
 
   return (
-    <main className="space-y-8">
-      <section className="px-1">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="ops-kicker text-[11px] font-semibold uppercase">
-              Incident center
-            </p>
-            <h1 className="ops-title mt-3 max-w-4xl text-4xl font-semibold tracking-tight lg:text-[3.1rem]">
-              Incident history, operator triage, and live response progress
-            </h1>
-            <p className="ops-copy mt-4 max-w-3xl text-sm leading-7">
-              This route leans into case management. The incident list behaves
-              like a working ledger and the right rail stays focused on response
-              state, not decorative summaries.
-            </p>
-          </div>
-
-          <div className="ops-sheet-muted grid min-w-[300px] grid-cols-2 gap-4 rounded-[24px] p-5">
-            <IncidentStat label="Showing" value={rangeLabel} />
-            <IncidentStat label="Total" value={String(incidentList.total)} />
-            <IncidentStat label="Open" value={String(countOpenIncidents(incidents))} />
-            <IncidentStat label="Critical" value={String(countCriticalIncidents(incidents))} />
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
-        <section className="ops-sheet rounded-[28px] p-6">
-          <p className="ops-kicker text-[11px] font-semibold uppercase">
-            Incident history
+    <main className="mx-auto max-w-[1280px] space-y-1">
+      {/* Header */}
+      <div className="flex items-center justify-between pb-5 pt-1">
+        <div>
+          <h1 className="text-2xl font-semibold text-[#111827]">Incidents</h1>
+          <p className="mt-1 text-sm text-[#6b7280]">
+            {incidentList.total} total · {openCount} open · {criticalCount} critical
           </p>
+        </div>
+        <Link
+          href="/live"
+          className="rounded-lg border border-[#e5e7eb] bg-white px-3.5 py-2 text-sm font-medium text-[#374151] shadow-sm transition hover:bg-[#f9fafb]"
+        >
+          Live view
+        </Link>
+      </div>
 
-          <form className="mt-5 border-b border-[rgba(24,24,27,0.08)] pb-5">
-            <div className="flex flex-col gap-3 xl:flex-row">
-              <label className="flex-1">
-                <span className="mb-2 block text-sm font-medium text-[#111827]">Project ID</span>
-                <input
-                  type="text"
-                  name="project_id"
-                  defaultValue={projectId}
-                  placeholder="Filter by project"
-                  className="vault-input w-full rounded-[18px] px-3 py-2.5 text-sm text-[#111827]"
-                />
-              </label>
-              <label className="w-full xl:w-[180px]">
-                <span className="mb-2 block text-sm font-medium text-[#111827]">Status</span>
-                <select
-                  name="status"
-                  defaultValue={status ?? ""}
-                  className="vault-input w-full rounded-[18px] px-3 py-2.5 text-sm text-[#111827]"
-                >
-                  <option value="">All</option>
-                  <option value="open">Open</option>
-                  <option value="resolved">Resolved</option>
-                </select>
-              </label>
-              <label className="w-full xl:w-[180px]">
-                <span className="mb-2 block text-sm font-medium text-[#111827]">Page size</span>
-                <select
-                  name="page_size"
-                  defaultValue={String(pageSize)}
-                  className="vault-input w-full rounded-[18px] px-3 py-2.5 text-sm text-[#111827]"
-                >
-                  <option value="10">10 per page</option>
-                  <option value="25">25 per page</option>
-                  <option value="50">50 per page</option>
-                </select>
-              </label>
-            </div>
+      {/* Filters */}
+      <div className="rounded-xl border border-[#e5e7eb] bg-white px-5 py-4">
+        <form className="flex flex-wrap items-end gap-3">
+          <label className="flex-1 min-w-[180px]">
+            <span className="mb-1.5 block text-xs font-medium text-[#6b7280]">Project</span>
+            <input
+              type="text"
+              name="project_id"
+              defaultValue={projectId}
+              placeholder="Filter by project"
+              className="w-full rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-sm text-[#111827] outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1]"
+            />
+          </label>
+          <label className="w-[140px]">
+            <span className="mb-1.5 block text-xs font-medium text-[#6b7280]">Status</span>
+            <select
+              name="status"
+              defaultValue={status ?? ""}
+              className="w-full rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-sm text-[#111827] outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1]"
+            >
+              <option value="">All</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </label>
+          <label className="w-[140px]">
+            <span className="mb-1.5 block text-xs font-medium text-[#6b7280]">Page size</span>
+            <select
+              name="page_size"
+              defaultValue={String(pageSize)}
+              className="w-full rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-sm text-[#111827] outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1]"
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <div className="flex items-center gap-2">
+            <input type="hidden" name="page" value="1" />
+            <button
+              type="submit"
+              className="rounded-lg bg-[#111827] px-3.5 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#1f2937]"
+            >
+              Apply
+            </button>
+            <Link
+              href="/incidents"
+              className="rounded-lg border border-[#e5e7eb] bg-white px-3.5 py-2 text-sm font-medium text-[#374151] shadow-sm transition hover:bg-[#f9fafb]"
+            >
+              Reset
+            </Link>
+          </div>
+        </form>
+      </div>
 
-            <div className="mt-3 flex items-center gap-2">
-              <input type="hidden" name="page" value="1" />
-              <button
-                type="submit"
-                className="ops-button rounded-full px-4 py-2 text-sm font-semibold"
-              >
-                Apply filters
-              </button>
-              <Link
-                href="/incidents"
-                className="ops-button-secondary rounded-full px-4 py-2 text-sm font-semibold"
-              >
-                Reset
-              </Link>
-            </div>
-          </form>
-
-          <div className="mt-6">
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        {/* Incident table */}
+        <div className="rounded-xl border border-[#e5e7eb] bg-white">
+          <div className="border-b border-[#f3f4f6] px-5 py-3">
             <PaginationControls
               pathname="/incidents"
               query={paginationQuery}
@@ -183,51 +169,46 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
             />
           </div>
 
-          <div className="mt-4">
-            {incidents.length === 0 ? (
-              <div className="py-10 text-sm text-[#5f6470]">
-                No incidents match the current filters.
+          {incidents.length === 0 ? (
+            <div className="px-5 py-20 text-center">
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-[#f3f4f6]">
+                <svg className="h-5 w-5 text-[#9ca3af]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
               </div>
-            ) : (
-              incidents.map((incident) => (
+              <p className="text-sm font-medium text-[#374151]">No incidents found</p>
+              <p className="mt-1 text-xs text-[#9ca3af]">Try adjusting your filters.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#f3f4f6]">
+              {incidents.map((incident) => (
                 <Link
                   key={incident.id}
                   href={`/incidents/${incident.id}`}
-                  className="block border-b border-[rgba(24,24,27,0.08)] py-5 transition last:border-b-0 hover:bg-white/24"
+                  className="flex items-center gap-4 px-5 py-3.5 transition hover:bg-[#f9fafb]"
                 >
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <SeverityBadge severity={incident.severity} />
-                        <StatusBadge status={incident.status} />
-                        <span className="text-xs uppercase tracking-[0.14em] text-[#8f735c]">
-                          {incident.environment}
-                        </span>
-                      </div>
-                      <h2 className="mt-3 text-lg font-semibold text-[#111827]">
-                        {incident.title}
-                      </h2>
-                      <p className="mt-1 text-sm text-[#5f6470]">
-                        {incident.project_id} • {incident.service} • last seen{" "}
-                        {formatTimestamp(incident.last_seen_at)}
-                      </p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <SeverityBadge severity={incident.severity} />
+                      <StatusBadge status={incident.status} />
+                      <span className="text-xs text-[#9ca3af]">{incident.environment}</span>
                     </div>
-
-                    <div className="grid min-w-[220px] grid-cols-2 gap-6 xl:text-right">
-                      <HistoryMetric label="Events" value={String(incident.event_count)} />
-                      <HistoryMetric
-                        label="Telemetry"
-                        value={incident.latest_telemetry_id.slice(0, 10)}
-                      />
-                    </div>
+                    <p className="mt-1.5 truncate text-sm font-medium text-[#111827]">
+                      {incident.title}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-[#9ca3af]">
+                      {incident.service} · last seen {formatTimestamp(incident.last_seen_at)}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-sm font-semibold tabular-nums text-[#111827]">{incident.event_count}</p>
+                    <p className="text-[11px] text-[#9ca3af]">events</p>
                   </div>
                 </Link>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
 
           {incidents.length > 0 ? (
-            <div className="mt-6 border-t border-[rgba(24,24,27,0.08)] pt-6">
+            <div className="border-t border-[#f3f4f6] px-5 py-3">
               <PaginationControls
                 pathname="/incidents"
                 query={paginationQuery}
@@ -238,104 +219,115 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
               />
             </div>
           ) : null}
-        </section>
+        </div>
 
-        <div className="space-y-6">
-          <section className="ops-sheet-dark rounded-[28px] p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/48">
-                  Active progress
-                </p>
-                <h2 className="mt-2 text-2xl font-semibold text-white">
-                  {featured ? "Live incident progress" : "Progress feed waiting"}
-                </h2>
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                <span className="ops-pill-strong rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]">
-                  {featured ? featured.status : "Idle"}
+        {/* Sidebar: featured incident + stats */}
+        <div className="space-y-5">
+          {/* Featured incident */}
+          <div className="rounded-xl border border-[#e5e7eb] bg-[#111827] p-5 text-white">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-white/50">Latest incident</p>
+              {featured ? (
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  featured.status === "open" ? "bg-white/10 text-[#fbbf24]" : "bg-white/10 text-[#34d399]"
+                }`}>
+                  {featured.status}
                 </span>
-                {featuredAutonomousRun ? (
-                  <span
-                    className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
-                      featuredAutonomousRun.run.status === "failed"
-                        ? "bg-[rgba(233,89,80,0.16)] text-[#ffd5d1]"
-                        : featuredAutonomousRun.run.status === "running" ||
-                            featuredAutonomousRun.run.status === "queued"
-                          ? "bg-[rgba(111,158,210,0.18)] text-white"
-                          : "bg-white/10 text-white/78"
-                    }`}
-                  >
-                    {buildAutonomousSummaryLabel(featuredAutonomousRun.run.status)}
-                  </span>
-                ) : null}
-              </div>
+              ) : null}
             </div>
 
             {featured ? (
-              <div className="mt-6">
-                <div className="rounded-[20px] border border-white/10 bg-white/6 px-4 py-4">
-                  <p className="font-semibold text-white">{featured.title}</p>
-                  <p className="mt-2 text-sm leading-6 text-white/68">
-                    {featured.service} • {featured.environment} • fingerprint{" "}
-                    {featured.fingerprint.slice(0, 14)}
-                  </p>
-                  {featuredAutonomousRun?.run.status === "failed" &&
-                  featuredAutonomousRun.run.last_error ? (
-                    <p className="mt-3 text-sm leading-6 text-[#ffd5d1]">
-                      Latest autonomous repair failed:{" "}
-                      {truncateAutonomousError(featuredAutonomousRun.run.last_error)}
-                    </p>
-                  ) : null}
-                </div>
+              <div className="mt-3">
+                <p className="text-sm font-semibold">{featured.title}</p>
+                <p className="mt-1.5 text-xs leading-relaxed text-white/60">
+                  {featured.service} · {featured.environment} · {featured.fingerprint.slice(0, 12)}
+                </p>
 
-                <div className="mt-6 space-y-5">
-                  {buildIncidentProgress(featured).map((step, index) => (
-                    <div key={step.title} className="flex gap-4">
-                      <div className="flex flex-col items-center">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
-                          {index + 1}
-                        </span>
-                        {index < 2 ? <span className="mt-2 h-full w-px bg-white/12" /> : null}
-                      </div>
-                      <div className="pb-4">
-                        <p className="font-medium text-white">{step.title}</p>
-                        <p className="mt-1 text-sm leading-6 text-white/70">{step.detail}</p>
-                        <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/42">
-                          {step.timestamp}
-                        </p>
-                      </div>
+                {featuredAutonomousRun ? (
+                  <div className="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium text-white/50">Autonomous repair</span>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        featuredAutonomousRun.run.status === "failed"
+                          ? "bg-[#dc2626]/20 text-[#fca5a5]"
+                          : featuredAutonomousRun.run.status === "running" || featuredAutonomousRun.run.status === "queued"
+                            ? "bg-[#3b82f6]/20 text-[#93c5fd]"
+                            : featuredAutonomousRun.run.status === "succeeded"
+                              ? "bg-[#22c55e]/20 text-[#86efac]"
+                              : "bg-white/10 text-white/50"
+                      }`}>
+                        {featuredAutonomousRun.run.status}
+                      </span>
                     </div>
-                  ))}
+                    {featuredAutonomousRun.run.status === "failed" && featuredAutonomousRun.run.last_error ? (
+                      <p className="mt-2 text-xs leading-relaxed text-[#fca5a5]">
+                        {truncateAutonomousError(featuredAutonomousRun.run.last_error)}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
+                  <MiniStat label="Events" value={String(featured.event_count)} />
+                  <MiniStat label="Status" value={featured.status} />
+                  <MiniStat label="Severity" value={featured.severity} />
                 </div>
               </div>
             ) : (
-              <div className="mt-6 text-sm leading-7 text-white/68">
-                When a live incident is present, its current progress updates will
-                appear here.
-              </div>
+              <p className="mt-3 text-xs text-white/40">No incidents to display.</p>
             )}
-          </section>
+          </div>
 
-          <section className="ops-sheet-muted rounded-[28px] p-6">
-            <p className="ops-kicker text-[11px] font-semibold uppercase">
-              Incident-specific metrics
-            </p>
-            <div className="mt-5 grid gap-4 sm:grid-cols-3">
-              <HistoryMetric label="Tracked incidents" value={String(incidentList.total)} />
-              <HistoryMetric
-                label="Open incidents"
-                value={String(countOpenIncidents(incidents))}
-              />
-              <HistoryMetric
-                label="Critical incidents"
-                value={String(countCriticalIncidents(incidents))}
-              />
+          {/* Progress timeline */}
+          {featured ? (
+            <div className="rounded-xl border border-[#e5e7eb] bg-white p-5">
+              <p className="text-xs font-medium text-[#6b7280]">Incident progress</p>
+              <div className="mt-4 space-y-0">
+                {buildIncidentProgress(featured).map((step, index) => (
+                  <div key={step.title} className="flex gap-3">
+                    <div className="flex flex-col items-center">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f3f4f6] text-[11px] font-semibold text-[#6b7280]">
+                        {index + 1}
+                      </span>
+                      {index < 2 ? <span className="mt-1 h-full w-px bg-[#e5e7eb]" /> : null}
+                    </div>
+                    <div className="pb-4">
+                      <p className="text-sm font-medium text-[#111827]">{step.title}</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-[#9ca3af]">{step.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </section>
+          ) : null}
+
+          {/* Quick stats */}
+          <div className="grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-[#e5e7eb] bg-[#e5e7eb]">
+            <div className="bg-white px-3 py-3 text-center">
+              <p className="text-lg font-semibold tabular-nums text-[#111827]">{incidentList.total}</p>
+              <p className="text-[11px] text-[#9ca3af]">Total</p>
+            </div>
+            <div className="bg-white px-3 py-3 text-center">
+              <p className="text-lg font-semibold tabular-nums text-[#111827]">{openCount}</p>
+              <p className="text-[11px] text-[#9ca3af]">Open</p>
+            </div>
+            <div className="bg-white px-3 py-3 text-center">
+              <p className="text-lg font-semibold tabular-nums text-[#111827]">{criticalCount}</p>
+              <p className="text-[11px] text-[#9ca3af]">Critical</p>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
     </main>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[11px] text-white/40">{label}</p>
+      <p className="mt-0.5 text-sm font-medium capitalize">{value}</p>
+    </div>
   );
 }
 
@@ -349,38 +341,6 @@ function parsePageSize(value?: string): number {
   return parsed === 10 || parsed === 25 || parsed === 50 ? parsed : 25;
 }
 
-function buildRangeLabel(currentPage: number, pageSize: number, totalItems: number): string {
-  if (totalItems === 0) {
-    return "0";
-  }
-
-  const start = (currentPage - 1) * pageSize + 1;
-  const end = Math.min(totalItems, currentPage * pageSize);
-  return `${start}-${end}`;
-}
-
-function IncidentStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border-l border-[rgba(24,24,27,0.08)] pl-4 first:border-l-0 first:pl-0">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f735c]">
-        {label}
-      </p>
-      <p className="mt-3 text-3xl font-semibold text-[#111827]">{value}</p>
-    </div>
-  );
-}
-
-function HistoryMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8f735c]">
-        {label}
-      </p>
-      <p className="mt-2 truncate text-sm font-semibold text-[#111827]">{value}</p>
-    </div>
-  );
-}
-
 function buildIncidentProgress(incident: {
   title: string;
   service: string;
@@ -390,36 +350,20 @@ function buildIncidentProgress(incident: {
 }) {
   return [
     {
-      title: "Incident detected",
-      detail: `${incident.service} crossed the current alert threshold and the incident was grouped.`,
-      timestamp: formatTimestamp(incident.last_seen_at),
+      title: "Detected",
+      detail: `${incident.service} crossed the alert threshold.`,
     },
     {
-      title: "Operator review in progress",
-      detail: `${incident.event_count} linked events are available for the active investigation timeline.`,
-      timestamp: "Monitoring",
+      title: "Under review",
+      detail: `${incident.event_count} events attached for investigation.`,
     },
     {
-      title: `Current status: ${incident.status}`,
-      detail: "Additional response-state updates and assignee tracking will appear here once wired.",
-      timestamp: "Awaiting update",
+      title: `Status: ${incident.status}`,
+      detail: "Awaiting resolution or additional response actions.",
     },
   ];
 }
 
-function buildAutonomousSummaryLabel(status: string): string {
-  if (status === "failed") {
-    return "Autonomous failed";
-  }
-  if (status === "running" || status === "queued") {
-    return "Autonomous active";
-  }
-  if (status === "succeeded") {
-    return "Autonomous succeeded";
-  }
-  return "Autonomous cancelled";
-}
-
 function truncateAutonomousError(error: string): string {
-  return error.length <= 140 ? error : `${error.slice(0, 137)}...`;
+  return error.length <= 120 ? error : `${error.slice(0, 117)}…`;
 }
