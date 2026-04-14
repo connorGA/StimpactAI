@@ -1,0 +1,63 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-13T20:42:42.448278Z",
+  "created_at": "2026-04-13T20:42:20.122660Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "06de8019-3341-4695-8317-c522d084d2ef",
+  "last_error": "Sandbox reproduced the incident but failed to apply the generated patch.",
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": false,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "2793dbdd-a8bc-4327-9e3d-545c05dbc86f"
+    },
+    "passed": false,
+    "recorded_at": "2026-04-13T20:43:00.107442Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident but failed to apply the generated patch."
+  },
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Cannot read properties of undefined (reading 'requestMetadata')' for service Soul Song Service.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "blocked",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-06de8019-gtwib0r7/repo",
+  "run_id": "b333919f-de65-43fb-90a0-6c0c6e0adb2d",
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 2,
+  "total_tool_calls": 0
+}

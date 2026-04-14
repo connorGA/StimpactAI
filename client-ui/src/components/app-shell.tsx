@@ -234,7 +234,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 lg:px-8 lg:pb-10 lg:pt-[5.5rem]">
-          <div className="relative mx-auto flex w-full max-w-[1320px] flex-col gap-6">
+          <div className="relative mx-auto flex w-full max-w-[1320px] flex-col gap-5">
             {children}
           </div>
         </div>

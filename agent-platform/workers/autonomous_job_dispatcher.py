@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from api.core.config import get_async_job_stale_lease_seconds
 from api.repositories.async_job_repository import AsyncJobRepository
 from models.async_job import AsyncJobStatus, AsyncJobType
 from services.autonomous_runs import AutonomousRunService
+
+logger = logging.getLogger(__name__)
 
 
 class AutonomousJobDispatcher:
@@ -19,15 +23,23 @@ class AutonomousJobDispatcher:
         self._worker_id = worker_id
 
     async def run_once(self, *, limit: int = 10) -> int:
-        await self._repository.reclaim_expired_leases(
+        reclaimed = await self._repository.reclaim_expired_leases(
             stale_after_seconds=get_async_job_stale_lease_seconds(),
             job_type=AsyncJobType.AUTONOMOUS_REPAIR,
         )
+        if reclaimed:
+            logger.info("Reclaimed %d stale autonomous job lease(s)", len(reclaimed))
         jobs = await self._repository.lease_jobs(limit=limit, job_type=AsyncJobType.AUTONOMOUS_REPAIR)
         processed = 0
 
         for job in jobs:
             processed += 1
+            run_id = str(job.payload.get("autonomous_run_id", "?"))
+            incident_id = str(job.payload.get("incident_id", "?"))
+            logger.info(
+                "Processing autonomous job %s (run=%s, incident=%s)",
+                job.id, run_id, incident_id,
+            )
             try:
                 await self._service.process_async_job(job)
                 await self._repository.mark_job_status(job.id, status=AsyncJobStatus.SUCCEEDED)
@@ -37,7 +49,11 @@ class AutonomousJobDispatcher:
                     status=AsyncJobStatus.SUCCEEDED,
                     finished=True,
                 )
+                logger.info("Autonomous job %s completed successfully", job.id)
             except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Autonomous job %s failed (run=%s)", job.id, run_id,
+                )
                 await self._repository.mark_job_status(
                     job.id,
                     status=AsyncJobStatus.FAILED,
@@ -50,5 +66,12 @@ class AutonomousJobDispatcher:
                     error_message=str(exc),
                     finished=True,
                 )
+                await self._service.mark_run_failed(
+                    incident_id=incident_id,
+                    run_id=run_id,
+                    error=str(exc),
+                )
 
+        if processed:
+            logger.info("Processed %d autonomous job(s) this cycle", processed)
         return processed

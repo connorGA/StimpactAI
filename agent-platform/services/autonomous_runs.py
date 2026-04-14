@@ -354,6 +354,30 @@ class AutonomousRunService:
             AutonomousRunStatus.CANCELLED,
         }
 
+    async def mark_run_failed(self, *, incident_id: str, run_id: str, error: str) -> None:
+        """Mark a run as failed so the UI no longer shows it as stuck in 'Repairing'."""
+        try:
+            snapshot = self._load_snapshot(incident_id, run_id)
+            failed_run = snapshot.run.model_copy(
+                update={
+                    "status": AutonomousRunStatus.FAILED,
+                    "last_error": error,
+                }
+            )
+            self._event_stream.upsert_run(failed_run)
+            if self._autonomous_repository is not None:
+                await self._autonomous_repository.update_run(
+                    run_id,
+                    async_job_id=failed_run.async_job_id,
+                    project_service_id=None,
+                    repo_profile_id=failed_run.repo_profile_id,
+                    run=failed_run,
+                    outcome=None,
+                )
+            logger.info("Marked autonomous run %s as failed: %s", run_id, error[:200])
+        except Exception:
+            logger.exception("Could not mark autonomous run %s as failed", run_id)
+
     def _load_snapshot(self, incident_id: str, run_id: str):
         event_stream_snapshot = None
         if self._event_stream.has_run(run_id):
@@ -875,6 +899,16 @@ class AutonomousRunService:
         for event in detail.events:
             self._event_stream.append_event(event)
 
+    _NON_CODE_FILENAMES = frozenset({
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "Pipfile.lock",
+        "Gemfile.lock",
+        "composer.lock",
+    })
+
     async def _postprocess_completed_run(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunSnapshot:
         run = snapshot.run
         if (
@@ -896,6 +930,21 @@ class AutonomousRunService:
         if diff is None or not diff.patch.strip():
             return snapshot
 
+        code_changes = [
+            f for f in diff.changed_files
+            if f.path.rsplit("/", 1)[-1] not in self._NON_CODE_FILENAMES
+        ]
+        if not code_changes:
+            logger.info(
+                "Skipping sandbox verification — diff only contains lockfile/metadata changes: %s",
+                [f.path for f in diff.changed_files],
+            )
+            return snapshot
+
+        filtered_patch = self._filter_patch_hunks(diff.patch, self._NON_CODE_FILENAMES)
+        if not filtered_patch.strip():
+            return snapshot
+
         patch_proposal = PatchProposal(
             patch_summary="Autonomous repair candidate generated from the harness working tree.",
             rationale="The autonomous harness produced a diff relative to its last known good checkpoint.",
@@ -904,9 +953,9 @@ class AutonomousRunService:
                     path=changed_file.path,
                     reason=f"Autonomous harness modified this file as part of the repair attempt ({changed_file.status.value}).",
                 )
-                for changed_file in diff.changed_files
+                for changed_file in code_changes
             ],
-            unified_diff=diff.patch,
+            unified_diff=filtered_patch,
             verification_steps=["Run the configured sandbox reproduce and verify commands."],
             confidence=0.9,
         )
@@ -953,6 +1002,21 @@ class AutonomousRunService:
                 outcome=outcome,
             )
         return self._event_stream.get_snapshot(run.id)
+
+    @staticmethod
+    def _filter_patch_hunks(patch_text: str, exclude_filenames: frozenset[str]) -> str:
+        """Strip diff hunks for files whose basename is in *exclude_filenames*."""
+        kept_lines: list[str] = []
+        skip = False
+        for line in patch_text.splitlines(keepends=True):
+            if line.startswith("diff --git "):
+                parts = line.split()
+                path_b = parts[-1] if len(parts) >= 4 else ""
+                basename = path_b.rsplit("/", 1)[-1]
+                skip = basename in exclude_filenames
+            if not skip:
+                kept_lines.append(line)
+        return "".join(kept_lines)
 
     def _should_retry_run(
         self,

@@ -1,0 +1,63 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-13T22:54:13.645733Z",
+  "created_at": "2026-04-13T22:53:07.249503Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "6e1ac46d-3f6f-44d8-bff0-94de25c348b5",
+  "last_error": null,
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "317f9951-09f4-4394-acbd-47b1064b99aa"
+    },
+    "passed": true,
+    "recorded_at": "2026-04-13T22:54:30.728013Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident, applied the patch, and verified the candidate fix."
+  },
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Request failed before the platform acknowledged it.' for service Soul Song Service.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-6e1ac46d-uyban1cy/repo",
+  "run_id": "bb62011d-c623-49d3-b57c-e897a1df2700",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 10,
+  "total_tool_calls": 0
+}

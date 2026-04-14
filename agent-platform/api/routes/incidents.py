@@ -250,6 +250,48 @@ async def list_incidents(
     )
 
 
+@router.patch(
+    "/{incident_id}/resolve",
+    response_model=IncidentSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def resolve_incident(
+    request: Request,
+    incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> IncidentSummaryResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
+    updated = await repository.update_incident_status(incident_id, IncidentStatus.RESOLVED)
+    return IncidentSummaryResponse.from_record(updated)
+
+
+@router.patch(
+    "/{incident_id}/reopen",
+    response_model=IncidentSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def reopen_incident(
+    request: Request,
+    incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> IncidentSummaryResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
+    updated = await repository.update_incident_status(incident_id, IncidentStatus.OPEN)
+    return IncidentSummaryResponse.from_record(updated)
+
+
 @router.get(
     "/reporting/overview",
     response_model=IncidentReportingOverviewResponse,

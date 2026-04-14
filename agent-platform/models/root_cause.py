@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from models.failure_classification import FailureCategory
 
@@ -55,12 +56,19 @@ class RootCauseEvidence(BaseModel):
 
 
 class RootCauseReasoning(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     root_cause_hypothesis: str
     reasoning_summary: str
     alternative_hypotheses: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("root_cause_hypothesis", "reasoning_summary", mode="before")
+    @classmethod
+    def _coerce_list_to_str(cls, v: Any) -> str:
+        if isinstance(v, list):
+            return " ".join(str(item) for item in v)
+        return v
 
 
 class RootCauseAnalysis(BaseModel):

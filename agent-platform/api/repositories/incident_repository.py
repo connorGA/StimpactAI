@@ -382,6 +382,26 @@ class IncidentRepository:
         )
         return IncidentRecord.from_db_row(row)
 
+    async def update_incident_status(
+        self,
+        incident_id: str,
+        new_status: IncidentStatus,
+    ) -> IncidentRecord:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for incident updates.")
+        try:
+            async with self._pool.acquire() as connection:
+                row = await connection.fetchrow(
+                    "UPDATE incidents SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+                    incident_id,
+                    new_status.value,
+                )
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to update incident status.") from exc
+        if row is None:
+            raise PersistenceError(f"Incident {incident_id} was not found.")
+        return IncidentRecord.from_db_row(row)
+
 
 def _max_severity(current: IncidentSeverity, candidate: IncidentSeverity) -> IncidentSeverity:
     order = {

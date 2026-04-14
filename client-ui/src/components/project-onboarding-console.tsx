@@ -2910,12 +2910,11 @@ export function ProjectOnboardingConsole() {
   return (
     <div className="space-y-5">
       <section className="relative px-4 pb-2 pt-2 text-center">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_26%_12%,rgba(255,178,83,0.12),transparent_24%),radial-gradient(circle_at_74%_14%,rgba(255,106,61,0.12),transparent_22%),radial-gradient(circle_at_50%_0%,rgba(29,26,24,0.06),transparent_30%)] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.58)_0%,rgba(0,0,0,0.24)_42%,transparent_78%)]" />
         <div className="relative mx-auto max-w-4xl">
           <p className="landing-static-tag mx-auto block w-fit !text-center">
             Project onboarding
           </p>
-          <h1 className="mx-auto mt-4 max-w-4xl text-4xl font-semibold tracking-tight text-[#171717] lg:text-[3.35rem]">
+          <h1 className="mx-auto mt-4 max-w-4xl text-4xl font-semibold tracking-tight text-white lg:text-[3.35rem]">
             Set up your project in one guided flow
           </h1>
 
@@ -5768,17 +5767,17 @@ function TimelineNode({
       className="group relative w-full cursor-pointer bg-transparent px-1 pt-0 text-center focus:outline-none"
     >
       <div className="mx-auto flex w-full flex-col items-center">
-        <span className="inline-block text-[11px] font-semibold uppercase tracking-[0.18em] text-[#66758c]">
+        <span className="inline-block text-[11px] font-semibold uppercase tracking-[0.18em] text-white/55">
           Step {step}
         </span>
         <div className="relative z-10 mt-2 flex h-14 items-center justify-center overflow-visible">
           <TimelineDot active={active} complete={complete} step={step} />
         </div>
         <div className="flex min-h-[86px] w-full flex-col items-center">
-          <p className={`mt-1 text-sm font-semibold ${active ? "text-[#171717]" : "text-[#2f241f]"}`}>
+          <p className={`mt-1 text-sm font-semibold ${active ? "text-white" : "text-white/80"}`}>
             {label}
           </p>
-          <p className="mt-1 max-w-[144px] text-[12px] font-medium leading-5 text-[#66758c]">
+          <p className="mt-1 max-w-[144px] text-[12px] font-medium leading-5 text-white/55">
             {detail}
           </p>
         </div>

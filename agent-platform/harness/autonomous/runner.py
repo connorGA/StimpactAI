@@ -829,40 +829,61 @@ class AutonomousRepairRunner:
 
     def _auto_install_dependencies(self, run_id: str) -> None:
         run = self.get_snapshot(run_id).run
-        if run.coding_session_id is None:
+        install_command = run.install_command
+        if not install_command:
             return
-        coding_snapshot = self._orchestrator.restore_session(run.coding_session_id)
-        profile = coding_snapshot.repository_profile
-        if profile is None or not getattr(profile, "install_command", None):
-            return
-        repo_root = Path(coding_snapshot.repository_root)
+        repo_root = Path(run.repository_root)
         if (repo_root / "node_modules").exists() or (repo_root / ".venv").exists():
             return
 
-        install_decision = AutonomousDecision(
-            summary=f"Auto-install project dependencies before coding: {profile.install_command}",
-            rationale="Pre-install dependencies so the agent can focus on investigation and repair.",
-            action=AutonomousDecisionAction.INVOKE_TOOL,
-            selected_tool="run_command",
-            arguments={"command": profile.install_command, "timeout_seconds": 300},
-            arguments_summary=f"command={profile.install_command}",
-        )
-        try:
-            result = self._execute_decision_tool(run_id=run_id, run=run, decision=install_decision)
-            self._emit_event(
-                run_id=run_id,
-                event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
-                phase=AutonomousRunPhase.CODING,
-                summary=f"Auto-install {'succeeded' if result.ok else 'failed (agent can retry)'}.",
-                payload={"tool_name": "run_command", "ok": result.ok},
+        commands_to_try = [install_command]
+        if install_command.strip() == "npm ci":
+            commands_to_try.append("npm install")
+
+        for cmd in commands_to_try:
+            install_decision = AutonomousDecision(
+                summary=f"Auto-install project dependencies: {cmd}",
+                rationale="Pre-install dependencies so the agent can focus on investigation and repair.",
+                action=AutonomousDecisionAction.INVOKE_TOOL,
+                selected_tool="run_command",
+                arguments={"command": cmd, "timeout_seconds": 300},
+                arguments_summary=f"command={cmd}",
             )
-        except Exception:  # noqa: BLE001
-            self._emit_event(
-                run_id=run_id,
-                event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
-                phase=AutonomousRunPhase.CODING,
-                summary="Auto-install raised an exception (agent can install manually).",
-            )
+            try:
+                result = self._execute_decision_tool(run_id=run_id, run=run, decision=install_decision)
+                if result.ok:
+                    self._emit_event(
+                        run_id=run_id,
+                        event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                        phase=AutonomousRunPhase.CODING,
+                        summary=f"Auto-install succeeded with: {cmd}",
+                        payload={"tool_name": "run_command", "ok": True},
+                    )
+                    return
+                if cmd != commands_to_try[-1]:
+                    self._emit_event(
+                        run_id=run_id,
+                        event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                        phase=AutonomousRunPhase.CODING,
+                        summary=f"Auto-install with '{cmd}' failed, trying fallback.",
+                        payload={"tool_name": "run_command", "ok": False},
+                    )
+                    continue
+                self._emit_event(
+                    run_id=run_id,
+                    event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                    phase=AutonomousRunPhase.CODING,
+                    summary=f"Auto-install failed with: {cmd} (agent can retry manually).",
+                    payload={"tool_name": "run_command", "ok": False},
+                )
+            except Exception:  # noqa: BLE001
+                if cmd == commands_to_try[-1]:
+                    self._emit_event(
+                        run_id=run_id,
+                        event_type=AutonomousEventType.TOOL_CALL_COMPLETED,
+                        phase=AutonomousRunPhase.CODING,
+                        summary="Auto-install raised an exception (agent can install manually).",
+                    )
 
     def _recover_from_execution_failure(
         self,

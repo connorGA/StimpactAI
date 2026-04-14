@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Sequence
 
 from openai import AsyncOpenAI
 
 from api.core.errors import APIError
+
+logger = logging.getLogger(__name__)
 from api.repositories.incident_repository import IncidentRepository
 from models.failure_classification import FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, TelemetryRecord
@@ -162,8 +165,14 @@ class RootCauseReasoner:
             raise APIError("OpenAI returned an empty root cause analysis.", code="empty_root_cause_response")
 
         try:
-            return RootCauseReasoning.model_validate_json(_extract_json_object(content))
+            extracted = _extract_json_object(content)
+            return RootCauseReasoning.model_validate_json(extracted)
         except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to parse RCA response: %s\nRaw content: %s",
+                exc,
+                content[:2000],
+            )
             raise APIError(
                 "OpenAI returned an invalid root cause analysis response.",
                 code="invalid_root_cause_response",
