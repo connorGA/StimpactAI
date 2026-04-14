@@ -347,9 +347,17 @@ export default async function IncidentDetailPage({
                   {patch.patch_summary}
                 </h3>
               </div>
-              <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
-                {Math.round(patch.confidence * 100)}% confidence
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                {patch.status === "failed" ? (
+                  <span className="rounded-full bg-[rgba(180,83,9,0.12)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#b45309]">
+                    No diff
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
+                    {Math.round(patch.confidence * 100)}% confidence
+                  </span>
+                )}
+              </div>
             </div>
             <p className="mt-4 text-sm leading-6 text-[#746d66]">
               {patch.rationale}
@@ -388,9 +396,16 @@ export default async function IncidentDetailPage({
               <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
                 Unified diff
               </p>
-              <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[#35547d]">
-                {patch.unified_diff}
-              </pre>
+              {patch.status === "failed" || !patch.unified_diff.trim() ? (
+                <p className="mt-3 text-sm leading-6 text-[#746d66]">
+                  No unified diff was produced for this incident. See the summary above, or trigger patch
+                  generation again after more evidence is available.
+                </p>
+              ) : (
+                <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-sm leading-6 text-[#35547d]">
+                  {patch.unified_diff}
+                </pre>
+              )}
             </div>
           </section>
 

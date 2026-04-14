@@ -87,6 +87,7 @@ from models.control_plane import (
 )
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
+from models.live_operations_metrics import LiveOperationsMetricsRecord
 from models.patch import PatchRunRecord, PatchRunStatus, PatchTargetFile
 from models.root_cause import RootCauseAnalysis, RootCauseEvidence, RootCauseReasoning
 from models.sandbox import (
@@ -206,6 +207,18 @@ class StubIncidentRepository:
         assert incident_id == self.incident.id
         assert limit >= 1
         return self.events[:limit]
+
+    async def fetch_live_operations_metrics(self, project_id: str) -> LiveOperationsMetricsRecord:
+        assert project_id == "project-1"
+        return LiveOperationsMetricsRecord(
+            uptime_percent_last_30d=90.0,
+            uptime_percent_prior_30d=85.0,
+            avg_agent_response_seconds_last_30d=300.0,
+            avg_agent_response_seconds_prior_30d=400.0,
+            open_incidents=1,
+            agent_resolution_percent_last_30d=50.0,
+            agent_resolution_percent_prior_30d=40.0,
+        )
 
 
 class StubFailureClassifier:
@@ -1856,6 +1869,12 @@ def test_incident_reporting_overview_returns_real_aggregates() -> None:
     assert body["critical_incidents"] == 1
     assert body["total_event_volume"] == 2
     assert body["service_counts"][0]["label"] == "billing-api"
+    assert body["uptime_percent_last_30d"] == 90.0
+    assert body["uptime_delta_pp"] == 5.0
+    assert body["avg_agent_response_seconds_last_30d"] == 300.0
+    assert body["avg_agent_response_delta_seconds"] == -100.0
+    assert body["agent_resolution_percent_last_30d"] == 50.0
+    assert body["agent_resolution_delta_pp"] == 10.0
 
 
 def test_get_incident_returns_detail_payload() -> None:

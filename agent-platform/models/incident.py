@@ -84,6 +84,8 @@ class IncidentRecord(BaseModel):
     latest_telemetry_id: str
     created_at: datetime
     updated_at: datetime
+    resolved_at: datetime | None = None
+    resolution_source: str | None = None
 
     @classmethod
     def from_db_row(cls, row: Any) -> "IncidentRecord":
@@ -104,6 +106,10 @@ class IncidentRecord(BaseModel):
             latest_telemetry_id=str(row["latest_telemetry_id"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            resolved_at=row["resolved_at"] if row["resolved_at"] is not None else None,
+            resolution_source=(
+                str(row["resolution_source"]) if row["resolution_source"] is not None else None
+            ),
         )
 
 

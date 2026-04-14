@@ -310,10 +310,40 @@ async def get_incident_reporting_overview(
         limit=500,
         offset=0,
     )
+    uptime_pct = 100.0
+    uptime_delta_pp = 0.0
+    avg_sec: float | None = None
+    avg_delta_sec: float | None = None
+    agent_pct: float | None = None
+    agent_delta_pp: float | None = None
+    open_n = sum(1 for incident in incidents if incident.status == IncidentStatus.OPEN)
+    if project_id:
+        live = await repository.fetch_live_operations_metrics(project_id)
+        uptime_pct = live.uptime_percent_last_30d
+        uptime_delta_pp = live.uptime_percent_last_30d - live.uptime_percent_prior_30d
+        avg_sec = live.avg_agent_response_seconds_last_30d
+        if (
+            live.avg_agent_response_seconds_last_30d is not None
+            and live.avg_agent_response_seconds_prior_30d is not None
+        ):
+            avg_delta_sec = (
+                live.avg_agent_response_seconds_last_30d
+                - live.avg_agent_response_seconds_prior_30d
+            )
+        agent_pct = live.agent_resolution_percent_last_30d
+        if (
+            live.agent_resolution_percent_last_30d is not None
+            and live.agent_resolution_percent_prior_30d is not None
+        ):
+            agent_delta_pp = (
+                live.agent_resolution_percent_last_30d
+                - live.agent_resolution_percent_prior_30d
+            )
+        open_n = live.open_incidents
     return IncidentReportingOverviewResponse(
         project_id=project_id,
         total_visible_incidents=len(incidents),
-        open_incidents=sum(1 for incident in incidents if incident.status == IncidentStatus.OPEN),
+        open_incidents=open_n,
         critical_incidents=sum(1 for incident in incidents if incident.severity.value == "critical"),
         total_event_volume=sum(incident.event_count for incident in incidents),
         latest_incident_at=max((incident.last_seen_at for incident in incidents), default=None),
@@ -325,6 +355,12 @@ async def get_incident_reporting_overview(
         ),
         recent_incident_activity=_build_recent_activity(incidents),
         daily_incident_activity=_build_daily_activity(incidents),
+        uptime_percent_last_30d=uptime_pct,
+        uptime_delta_pp=uptime_delta_pp,
+        avg_agent_response_seconds_last_30d=avg_sec,
+        avg_agent_response_delta_seconds=avg_delta_sec,
+        agent_resolution_percent_last_30d=agent_pct,
+        agent_resolution_delta_pp=agent_delta_pp,
     )
 
 

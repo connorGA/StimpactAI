@@ -11,8 +11,10 @@ from models.incident import (
     IncidentProcessingResult,
     IncidentRecord,
     IncidentSeverity,
+    IncidentStatus,
     TelemetryRecord,
 )
+from models.live_operations_metrics import LiveOperationsMetricsRecord
 
 SELECT_TELEMETRY_SQL = """
 SELECT
@@ -386,21 +388,166 @@ class IncidentRepository:
         self,
         incident_id: str,
         new_status: IncidentStatus,
+        *,
+        resolution_source: str | None = None,
     ) -> IncidentRecord:
         if self._pool is None:
             raise PersistenceError("Postgres is not configured for incident updates.")
         try:
             async with self._pool.acquire() as connection:
                 row = await connection.fetchrow(
-                    "UPDATE incidents SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+                    """
+                    UPDATE incidents SET
+                        status = $2::text,
+                        updated_at = NOW(),
+                        resolved_at = CASE WHEN $2::text = 'resolved' THEN NOW() ELSE NULL END,
+                        resolution_source = CASE
+                            WHEN $2::text = 'resolved' THEN COALESCE($3::text, 'user')
+                            ELSE NULL
+                        END
+                    WHERE id = $1::uuid
+                    RETURNING *
+                    """,
                     incident_id,
                     new_status.value,
+                    resolution_source,
                 )
         except asyncpg.PostgresError as exc:
             raise PersistenceError("Failed to update incident status.") from exc
         if row is None:
             raise PersistenceError(f"Incident {incident_id} was not found.")
         return IncidentRecord.from_db_row(row)
+
+    async def mark_resolved_by_autonomous_agent(self, incident_id: str) -> IncidentRecord | None:
+        """Mark an open incident resolved by a successful autonomous repair (idempotent if already resolved)."""
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for incident updates.")
+        try:
+            async with self._pool.acquire() as connection:
+                row = await connection.fetchrow(
+                    """
+                    UPDATE incidents SET
+                        status = 'resolved',
+                        resolved_at = NOW(),
+                        resolution_source = 'autonomous_agent',
+                        updated_at = NOW()
+                    WHERE id = $1::uuid AND status = 'open'
+                    RETURNING *
+                    """,
+                    incident_id,
+                )
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to mark incident resolved by agent.") from exc
+        if row is None:
+            return None
+        return IncidentRecord.from_db_row(row)
+
+    async def fetch_live_operations_metrics(self, project_id: str) -> LiveOperationsMetricsRecord:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for incident reads.")
+
+        bad_days_current_sql = """
+            SELECT COUNT(DISTINCT ((first_seen_at AT TIME ZONE 'UTC')::date))::int AS n
+            FROM incidents
+            WHERE project_id = $1
+              AND first_seen_at >= NOW() - INTERVAL '30 days'
+              AND first_seen_at < NOW()
+        """
+        bad_days_prior_sql = """
+            SELECT COUNT(DISTINCT ((first_seen_at AT TIME ZONE 'UTC')::date))::int AS n
+            FROM incidents
+            WHERE project_id = $1
+              AND first_seen_at >= NOW() - INTERVAL '60 days'
+              AND first_seen_at < NOW() - INTERVAL '30 days'
+        """
+        open_sql = """
+            SELECT COUNT(*)::int AS n FROM incidents
+            WHERE project_id = $1 AND status = 'open'
+        """
+
+        def _uptime_pct(bad_days: int, window_days: int = 30) -> float:
+            bd = min(max(bad_days, 0), window_days)
+            return max(0.0, min(100.0, 100.0 * (window_days - bd) / float(window_days)))
+
+        try:
+            async with self._pool.acquire() as connection:
+                bad_cur = await connection.fetchval(bad_days_current_sql, project_id) or 0
+                bad_prev = await connection.fetchval(bad_days_prior_sql, project_id) or 0
+                open_n = await connection.fetchrow(open_sql, project_id)
+                open_count = int(open_n["n"]) if open_n is not None else 0
+
+                row_avg_cur = await connection.fetchrow(
+                    """
+                    SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - first_seen_at))) AS secs
+                    FROM incidents
+                    WHERE project_id = $1
+                      AND resolution_source = 'autonomous_agent'
+                      AND resolved_at IS NOT NULL
+                      AND resolved_at >= NOW() - INTERVAL '30 days'
+                      AND resolved_at < NOW()
+                    """,
+                    project_id,
+                )
+                row_avg_prev = await connection.fetchrow(
+                    """
+                    SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - first_seen_at))) AS secs
+                    FROM incidents
+                    WHERE project_id = $1
+                      AND resolution_source = 'autonomous_agent'
+                      AND resolved_at IS NOT NULL
+                      AND resolved_at >= NOW() - INTERVAL '60 days'
+                      AND resolved_at < NOW() - INTERVAL '30 days'
+                    """,
+                    project_id,
+                )
+                rate_cur = await connection.fetchrow(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE resolution_source = 'autonomous_agent')::bigint AS agent_n,
+                        COUNT(*)::bigint AS total_n
+                    FROM incidents
+                    WHERE project_id = $1
+                      AND status = 'resolved'
+                      AND resolved_at IS NOT NULL
+                      AND resolved_at >= NOW() - INTERVAL '30 days'
+                      AND resolved_at < NOW()
+                    """,
+                    project_id,
+                )
+                rate_prev = await connection.fetchrow(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE resolution_source = 'autonomous_agent')::bigint AS agent_n,
+                        COUNT(*)::bigint AS total_n
+                    FROM incidents
+                    WHERE project_id = $1
+                      AND status = 'resolved'
+                      AND resolved_at IS NOT NULL
+                      AND resolved_at >= NOW() - INTERVAL '60 days'
+                      AND resolved_at < NOW() - INTERVAL '30 days'
+                    """,
+                    project_id,
+                )
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to load live operations metrics.") from exc
+
+        def _rate(row: asyncpg.Record | None) -> float | None:
+            if row is None or int(row["total_n"] or 0) == 0:
+                return None
+            return 100.0 * float(row["agent_n"] or 0) / float(row["total_n"])
+
+        avg_cur = row_avg_cur["secs"] if row_avg_cur and row_avg_cur["secs"] is not None else None
+        avg_prev = row_avg_prev["secs"] if row_avg_prev and row_avg_prev["secs"] is not None else None
+
+        return LiveOperationsMetricsRecord(
+            uptime_percent_last_30d=_uptime_pct(int(bad_cur)),
+            uptime_percent_prior_30d=_uptime_pct(int(bad_prev)),
+            avg_agent_response_seconds_last_30d=float(avg_cur) if avg_cur is not None else None,
+            avg_agent_response_seconds_prior_30d=float(avg_prev) if avg_prev is not None else None,
+            open_incidents=open_count,
+            agent_resolution_percent_last_30d=_rate(rate_cur),
+            agent_resolution_percent_prior_30d=_rate(rate_prev),
+        )
 
 
 def _max_severity(current: IncidentSeverity, candidate: IncidentSeverity) -> IncidentSeverity:

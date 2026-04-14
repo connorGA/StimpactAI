@@ -39,6 +39,8 @@ class IncidentSummaryResponse(BaseModel):
     latest_telemetry_id: str
     created_at: datetime
     updated_at: datetime
+    resolved_at: datetime | None = None
+    resolution_source: str | None = None
 
     @classmethod
     def from_record(cls, incident: IncidentRecord) -> "IncidentSummaryResponse":
@@ -112,6 +114,13 @@ class IncidentReportingOverviewResponse(BaseModel):
     severity_counts: list[IncidentCountBreakdownResponse] = Field(default_factory=list)
     recent_incident_activity: list[IncidentActivityPointResponse] = Field(default_factory=list)
     daily_incident_activity: list[IncidentActivityPointResponse] = Field(default_factory=list)
+    # Live dashboard (30d rolling vs prior 30d where applicable)
+    uptime_percent_last_30d: float = Field(ge=0.0, le=100.0, default=100.0)
+    uptime_delta_pp: float = 0.0
+    avg_agent_response_seconds_last_30d: float | None = None
+    avg_agent_response_delta_seconds: float | None = None
+    agent_resolution_percent_last_30d: float | None = None
+    agent_resolution_delta_pp: float | None = None
 
 
 class IncidentDetailResponse(BaseModel):

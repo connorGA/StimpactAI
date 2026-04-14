@@ -9,6 +9,7 @@ import pytest
 from api.core.errors import APIError
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus, TelemetryRecord
+from models.patch import PatchRunStatus
 from services.code_context import CodeContextService
 from services.patch_generation import PatchGenerationService, summarize_unified_diff
 from shared.types.telemetry import Environment
@@ -107,7 +108,7 @@ class StubPatchRepository:
         return SimpleNamespace(
             id="patch-1",
             incident_id=kwargs["incident_id"],
-            status="generated",
+            status=kwargs.get("status", PatchRunStatus.GENERATED),
             patch_summary=proposal.patch_summary,
             rationale=proposal.rationale,
             target_files=proposal.target_files,
@@ -236,3 +237,33 @@ async def test_patch_generation_rejects_large_diffs() -> None:
         await service.get_or_generate_patch("incident-1", event_limit=20)
 
     assert exc_info.value.code == "patch_constraints_violated"
+
+
+@pytest.mark.asyncio
+async def test_patch_generation_empty_diff_persists_failed_run() -> None:
+    patch_repo = StubPatchRepository()
+    service = PatchGenerationService(
+        StubIncidentRepository(),
+        patch_repo,
+        classifier=StubFailureClassifier(),
+        code_context=StubCodeContextService(),
+        client=RecordingOpenAIClient(
+            {
+                "patch_summary": "Nothing to change",
+                "rationale": "Model returned no diff.",
+                "target_files": [],
+                "unified_diff": "",
+                "verification_steps": [],
+                "confidence": 0.0,
+            }
+        ),
+        model="patch-model",
+    )
+
+    record = await service.get_or_generate_patch("incident-1", event_limit=20)
+
+    assert record.status == PatchRunStatus.FAILED
+    assert len(patch_repo.created) == 1
+    assert patch_repo.created[0]["status"] == PatchRunStatus.FAILED
+    assert patch_repo.created[0]["diff_line_count"] == 0
+    assert patch_repo.created[0]["file_count"] == 0

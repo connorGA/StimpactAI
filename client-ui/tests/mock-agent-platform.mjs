@@ -400,6 +400,12 @@ function buildIncidentReportingOverview(projectId = null) {
       { label: "Sat", count: 0 },
       { label: "Sun", count: 0 },
     ],
+    uptime_percent_last_30d: 96.7,
+    uptime_delta_pp: 3.3,
+    avg_agent_response_seconds_last_30d: 420,
+    avg_agent_response_delta_seconds: -120,
+    agent_resolution_percent_last_30d: 75,
+    agent_resolution_delta_pp: 12.5,
   };
 }
 

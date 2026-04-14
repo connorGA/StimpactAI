@@ -10,7 +10,7 @@ from api.repositories.incident_repository import IncidentRepository
 from api.repositories.patch_repository import PatchRepository
 from models.failure_classification import FailureClassification
 from models.incident import IncidentRecord
-from models.patch import PatchProposal, PatchRunRecord, PatchTargetFile
+from models.patch import PatchProposal, PatchRunRecord, PatchRunStatus, PatchTargetFile
 from models.root_cause import RootCauseEvidence
 from services.code_context import CodeContextService
 from services.failure_classifier import FailureClassifier
@@ -72,6 +72,28 @@ class PatchGenerationService:
             classification=classification,
             evidence=evidence,
         )
+        if not proposal.unified_diff.strip():
+            return await self._patch_repository.create_patch_run(
+                incident_id=incident.id,
+                repo_profile_id=None,
+                proposal=PatchProposal(
+                    patch_summary="No patch was generated",
+                    rationale=(
+                        "The patch model did not return a usable unified diff for this incident. "
+                        "That can happen when evidence is sparse, the stack trace does not map to "
+                        "checked-in files, or the failure is environmental rather than a simple code fix."
+                    ),
+                    target_files=[],
+                    unified_diff="",
+                    verification_steps=[],
+                    confidence=0.0,
+                ),
+                model_name=self._model,
+                based_on_commit_sha=evidence.latest_commit_sha,
+                diff_line_count=0,
+                file_count=0,
+                status=PatchRunStatus.FAILED,
+            )
         diff_summary = summarize_unified_diff(proposal.unified_diff)
         file_count = max(len(proposal.target_files), diff_summary.file_count)
 
@@ -171,8 +193,6 @@ class PatchGenerationService:
                 code="invalid_patch_response",
             ) from exc
 
-        if not proposal.unified_diff.strip():
-            raise APIError("Patch generation returned an empty diff.", code="invalid_patch_response")
         return proposal
 
 

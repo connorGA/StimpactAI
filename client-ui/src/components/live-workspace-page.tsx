@@ -52,11 +52,6 @@ export function LiveDashboard({ projectId, incidents, reporting, autonomousRuns,
   }, [projectId, sdkDefaultService]);
 
   const rangeIncidents = useMemo(() => filterByRange(incidents, chartRange), [incidents, chartRange]);
-  const totalInRange = rangeIncidents.length;
-  const openInRange = rangeIncidents.filter((i) => i.status === "open").length;
-  const resolvedInRange = totalInRange - openInRange;
-  const resRate = totalInRange > 0 ? ((resolvedInRange / totalInRange) * 100).toFixed(1) : "—";
-  const eventVol = rangeIncidents.reduce((s, i) => s + i.event_count, 0);
 
   const trendPoints = useMemo(() => buildTrendPoints(rangeIncidents, chartRange, reporting), [rangeIncidents, chartRange, reporting]);
   const serviceBreakdown = useMemo(() => {
@@ -94,12 +89,52 @@ export function LiveDashboard({ projectId, incidents, reporting, autonomousRuns,
         </Link>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <StatCard label="Total Incidents" value={fmtBig(totalInRange)} />
-        <StatCard label="Open Incidents" value={String(openInRange)} accent={openInRange > 0} />
-        <StatCard label="Resolution Rate" value={resRate === "—" ? "—" : `${resRate}%`} />
-        <StatCard label="Event Volume" value={fmtBig(eventVol)} />
+      {/* Stats — rolling 30d (fixed window from reporting API); chart filters below do not change these */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <LiveMetricCard
+          label="Uptime"
+          hint="% of days in the last 30d with no new incident"
+          value={`${reporting.uptime_percent_last_30d.toFixed(1)}%`}
+          delta={{ value: reporting.uptime_delta_pp, mode: "higherIsGood", format: "percent" }}
+        />
+        <LiveMetricCard
+          label="Avg response time"
+          hint="Mean time from first signal to agent fix (autonomous), last 30d"
+          value={
+            reporting.avg_agent_response_seconds_last_30d == null
+              ? "—"
+              : fmtDurationSeconds(reporting.avg_agent_response_seconds_last_30d)
+          }
+          delta={
+            reporting.avg_agent_response_delta_seconds == null
+              ? null
+              : {
+                  value: reporting.avg_agent_response_delta_seconds,
+                  mode: "lowerIsGood",
+                  format: "seconds",
+                }
+          }
+        />
+        <LiveMetricCard
+          label="Open incidents"
+          hint="Currently open incidents"
+          value={reporting.open_incidents === 0 ? "None" : String(reporting.open_incidents)}
+          valueClassName={reporting.open_incidents === 0 ? "text-[#20c933]" : "text-[#ff6a3d]"}
+        />
+        <LiveMetricCard
+          label="Agent resolution rate"
+          hint="% of incidents resolved by the agent in the last 30d"
+          value={
+            reporting.agent_resolution_percent_last_30d == null
+              ? "—"
+              : `${reporting.agent_resolution_percent_last_30d.toFixed(1)}%`
+          }
+          delta={
+            reporting.agent_resolution_delta_pp == null
+              ? null
+              : { value: reporting.agent_resolution_delta_pp, mode: "higherIsGood", format: "percent" }
+          }
+        />
       </div>
 
       {/* Chart */}
@@ -179,7 +214,7 @@ export function LiveDashboard({ projectId, incidents, reporting, autonomousRuns,
             <>
               <div className="flex shrink-0 items-start justify-between gap-3 px-5 pt-5">
                 <p className="text-sm font-semibold text-white/90">Incidents by Service</p>
-                <DonutLegendCompact data={serviceBreakdown} total={totalInRange} />
+                <DonutLegendCompact data={serviceBreakdown} total={rangeIncidents.length} />
               </div>
               <div className="flex min-h-[min(260px,35vh)] flex-1 items-center justify-center px-4 pb-6 pt-2">
                 <div className="aspect-square w-full max-w-[min(280px,78%)]">
@@ -276,15 +311,94 @@ function SdkBadge({ verification }: { verification: ProjectTelemetryVerification
   );
 }
 
-// ── Stat card ──
+// ── Live metric cards ──
 
-function StatCard({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+type MetricDelta = {
+  value: number;
+  mode: "higherIsGood" | "lowerIsGood";
+  format: "percent" | "seconds";
+};
+
+function LiveMetricCard({
+  label,
+  hint,
+  value,
+  valueClassName,
+  delta,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  valueClassName?: string;
+  delta?: MetricDelta | null;
+}) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[rgba(14,18,28,0.8)] px-5 py-4">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-white/40">{label}</p>
-      <p className={`mt-1.5 text-2xl font-bold tabular-nums ${accent ? "text-[#ff6a3d]" : "text-white"}`}>{value}</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="min-w-0 flex-1 text-[11px] font-medium uppercase tracking-wider text-white/40" title={hint}>
+          {label}
+        </p>
+        {delta ? (
+          <div className="shrink-0">
+            <MetricDeltaBadge delta={delta} />
+          </div>
+        ) : null}
+      </div>
+      <p className={`mt-1.5 text-2xl font-bold tabular-nums ${valueClassName ?? "text-white"}`}>{value}</p>
     </div>
   );
+}
+
+function MetricDeltaBadge({ delta }: { delta: MetricDelta }) {
+  const { value: raw, mode, format } = delta;
+  if (Number.isNaN(raw)) return null;
+
+  const good =
+    raw === 0 ? null : mode === "higherIsGood" ? raw > 0 : raw < 0;
+  const up = raw > 0;
+
+  let text: string;
+  if (format === "percent") {
+    text = `${Math.abs(raw).toFixed(1)}%`;
+  } else {
+    text = formatAbsDurationSeconds(Math.abs(raw));
+  }
+
+  const base =
+    "inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums leading-none";
+  if (raw === 0) {
+    return (
+      <span className={`${base} border-white/10 bg-white/[0.06] text-white/45`} title="Change vs prior 30 days">
+        <span aria-hidden>→</span>
+        {format === "percent" ? "0%" : "0s"}
+      </span>
+    );
+  }
+  const tone =
+    good === true
+      ? "border-[rgba(32,201,51,0.35)] bg-[rgba(32,201,51,0.12)] text-[#4ade80]"
+      : "border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.1)] text-[#fca5a5]";
+
+  return (
+    <span className={`${base} ${tone}`} title="Change vs prior 30 days">
+      <span aria-hidden className="text-[10px] leading-none">
+        {up ? "↑" : "↓"}
+      </span>
+      {text}
+    </span>
+  );
+}
+
+function fmtDurationSeconds(s: number): string {
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+
+function formatAbsDurationSeconds(s: number): string {
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
 }
 
 // ── Trend chart ──

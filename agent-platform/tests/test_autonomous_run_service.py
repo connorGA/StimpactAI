@@ -64,6 +64,11 @@ class StubIncidentRepository:
             raise AssertionError(f"unknown telemetry id {telemetry_id}")
         return self.telemetry
 
+    async def mark_resolved_by_autonomous_agent(self, incident_id: str) -> IncidentRecord | None:
+        if incident_id != self.incident.id:
+            return None
+        return self.incident
+
 
 class StubAsyncJobRepository:
     def __init__(self) -> None:

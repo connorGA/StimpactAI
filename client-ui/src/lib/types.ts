@@ -73,6 +73,18 @@ export type IncidentReportingOverview = {
   severity_counts: IncidentCountBreakdown[];
   recent_incident_activity: IncidentActivityPoint[];
   daily_incident_activity: IncidentActivityPoint[];
+  /** % of calendar days in the last 30d with no new incident (higher = fewer incident days). */
+  uptime_percent_last_30d: number;
+  /** Change vs prior 30d (percentage points); positive = more "uptime" days. */
+  uptime_delta_pp: number;
+  /** Mean seconds from first signal to agent resolution (autonomous), last 30d. */
+  avg_agent_response_seconds_last_30d: number | null;
+  /** vs prior 30d; positive = slower (worse). */
+  avg_agent_response_delta_seconds: number | null;
+  /** % of resolved incidents in window attributed to autonomous agent. */
+  agent_resolution_percent_last_30d: number | null;
+  /** vs prior 30d (percentage points); positive = higher agent share. */
+  agent_resolution_delta_pp: number | null;
 };
 
 export type IncidentDetailResponse = {

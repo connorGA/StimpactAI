@@ -641,6 +641,18 @@ class AutonomousRunService:
                 run=updated_run,
                 outcome=outcome,
             )
+            if (
+                sandbox_run.status is SandboxRunStatus.SUCCEEDED
+                and sandbox_run.verification_succeeded
+                and sandbox_run.patch_applied
+                and updated_run.status is AutonomousRunStatus.SUCCEEDED
+            ):
+                marked = await self._incident_repository.mark_resolved_by_autonomous_agent(record.incident_id)
+                if marked is not None:
+                    logger.info(
+                        "Marked incident resolved by autonomous agent after sandbox verification",
+                        extra={"incident_id": record.incident_id, "run_id": updated_run.id},
+                    )
 
     async def promote_run(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
         incident = await self._require_incident(incident_id)
