@@ -44,6 +44,7 @@ class NormalizedTelemetry(BaseModel):
     request: HttpRequestContext | None = None
     response: HttpResponseContext | None = None
     commit_sha: str | None = None
+    handled: bool | None = None
     occurred_at: datetime
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -60,6 +61,7 @@ class NormalizedTelemetry(BaseModel):
         response: HttpResponseContext | None,
         commit_sha: str | None,
         timestamp: datetime,
+        handled: bool | None = None,
     ) -> "NormalizedTelemetry":
         normalized_error_message = " ".join(error_message.split())
         normalized_stacktrace = "\n".join(
@@ -82,5 +84,6 @@ class NormalizedTelemetry(BaseModel):
             request=request,
             response=response,
             commit_sha=commit_sha,
+            handled=handled,
             occurred_at=timestamp.astimezone(UTC),
         )

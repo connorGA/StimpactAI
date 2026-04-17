@@ -85,10 +85,12 @@ export default async function ChatPage() {
         </section>
 
         <ChatPanel
+          variant="dark"
           title="Global incident agent"
-          description="Use the agent to summarize the visible incident set, prioritize work, and answer grounded questions from the current operational context."
+          description="Summarize the visible incident set, prioritize work, and ask grounded questions from the current operational context."
           endpoint="/api/incidents/chat"
           extraBody={{
+            project_id: projectId,
             incident_limit: 20,
           }}
           suggestedPrompts={[
@@ -96,6 +98,7 @@ export default async function ChatPage() {
             "What should the next operator focus on first?",
             "Which services appear most impacted in the current incident set?",
           ]}
+          className="min-h-[32rem] lg:min-h-[36rem]"
         />
 
         <div className="space-y-6">

@@ -28,6 +28,10 @@ SELECT
     request_payload,
     response_payload,
     commit_sha,
+    handled,
+    classification,
+    classification_reason,
+    classification_source,
     occurred_at,
     received_at
 FROM telemetry_events

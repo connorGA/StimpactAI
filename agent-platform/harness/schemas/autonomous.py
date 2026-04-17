@@ -195,6 +195,7 @@ class AutonomousRepairRunRecord(BaseModel):
     benchmark_scenario_id: str | None = Field(default=None, max_length=128)
     benchmark_bug_class: str | None = Field(default=None, max_length=128)
     latest_verification: AutonomousVerificationEvidence | None = None
+    policy_block_reason: str | None = Field(default=None, max_length=2_000)
     policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     loop_state: AutonomousLoopState = Field(default_factory=AutonomousLoopState)
     created_at: datetime
@@ -244,6 +245,9 @@ class AutonomousRunOutcome(BaseModel):
     total_events: int = Field(ge=0, default=0)
     last_error: str | None = Field(default=None, max_length=4_000)
     latest_verification: AutonomousVerificationEvidence | None = None
+    root_cause_explanation: str | None = Field(default=None, max_length=8_000)
+    solution_description: str | None = Field(default=None, max_length=8_000)
+    narrative_generated_at: datetime | None = None
     final_success: bool = False
     fresh_verification_satisfied: bool = False
     failure_class: AutonomousToolFailureClass | None = None

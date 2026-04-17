@@ -8,6 +8,8 @@ type PaginationControlsProps = {
   pageSize: number;
   totalItems: number;
   itemLabel: string;
+  /** Dark styling for pages on the charcoal dashboard background. */
+  variant?: "light" | "dark";
 };
 
 export function PaginationControls({
@@ -17,21 +19,30 @@ export function PaginationControls({
   pageSize,
   totalItems,
   itemLabel,
+  variant = "light",
 }: PaginationControlsProps) {
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endItem = totalItems === 0 ? 0 : Math.min(totalItems, currentPage * pageSize);
   const pageNumbers = buildPageWindow(currentPage, totalPages);
+  const dark = variant === "dark";
 
   return (
     <div className="flex items-center justify-between gap-4">
-      <p className="text-xs text-[#6b7280]">
-        <span className="font-medium text-[#374151]">{startItem}–{endItem}</span> of{" "}
-        <span className="font-medium text-[#374151]">{totalItems}</span> {itemLabel}
+      <p className={dark ? "text-xs text-white/45" : "text-xs text-[#6b7280]"}>
+        <span className={dark ? "font-medium text-white/80" : "font-medium text-[#374151]"}>
+          {startItem}–{endItem}
+        </span>{" "}
+        of{" "}
+        <span className={dark ? "font-medium text-white/80" : "font-medium text-[#374151]"}>
+          {totalItems}
+        </span>{" "}
+        {itemLabel}
       </p>
 
       <div className="flex items-center gap-1">
         <PaginationLink
+          variant={variant}
           href={buildPageHref(pathname, query, Math.max(1, currentPage - 1), pageSize)}
           disabled={currentPage <= 1}
         >
@@ -40,12 +51,16 @@ export function PaginationControls({
 
         {pageNumbers.map((pageNumber, index) =>
           pageNumber === "ellipsis" ? (
-            <span key={`ellipsis-${index}`} className="px-1 text-xs text-[#9ca3af]">
+            <span
+              key={`ellipsis-${index}`}
+              className={dark ? "px-1 text-xs text-white/35" : "px-1 text-xs text-[#9ca3af]"}
+            >
               …
             </span>
           ) : (
             <PaginationLink
               key={pageNumber}
+              variant={variant}
               href={buildPageHref(pathname, query, pageNumber, pageSize)}
               active={pageNumber === currentPage}
             >
@@ -55,6 +70,7 @@ export function PaginationControls({
         )}
 
         <PaginationLink
+          variant={variant}
           href={buildPageHref(pathname, query, Math.min(totalPages, currentPage + 1), pageSize)}
           disabled={currentPage >= totalPages}
         >
@@ -70,15 +86,23 @@ function PaginationLink({
   children,
   active = false,
   disabled = false,
+  variant = "light",
 }: {
   href: string;
   children: ReactNode;
   active?: boolean;
   disabled?: boolean;
+  variant?: "light" | "dark";
 }) {
+  const dark = variant === "dark";
+
   if (disabled) {
     return (
-      <span className="flex h-8 min-w-[2rem] items-center justify-center rounded-md px-2 text-xs text-[#d1d5db]">
+      <span
+        className={`flex h-8 min-w-[2rem] items-center justify-center rounded-md px-2 text-xs ${
+          dark ? "text-white/25" : "text-[#d1d5db]"
+        }`}
+      >
         {children}
       </span>
     );
@@ -86,7 +110,11 @@ function PaginationLink({
 
   if (active) {
     return (
-      <span className="flex h-8 min-w-[2rem] items-center justify-center rounded-md bg-[#111827] px-2 text-xs font-medium text-white">
+      <span
+        className={`flex h-8 min-w-[2rem] items-center justify-center rounded-md px-2 text-xs font-medium text-white ${
+          dark ? "bg-white/15" : "bg-[#111827]"
+        }`}
+      >
         {children}
       </span>
     );
@@ -95,7 +123,11 @@ function PaginationLink({
   return (
     <Link
       href={href}
-      className="flex h-8 min-w-[2rem] items-center justify-center rounded-md px-2 text-xs font-medium text-[#374151] transition hover:bg-[#f3f4f6]"
+      className={`flex h-8 min-w-[2rem] items-center justify-center rounded-md px-2 text-xs font-medium transition ${
+        dark
+          ? "text-white/65 hover:bg-white/[0.06]"
+          : "text-[#374151] hover:bg-[#f3f4f6]"
+      }`}
     >
       {children}
     </Link>

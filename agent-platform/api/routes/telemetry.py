@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import logging
 
+import asyncpg
 from fastapi import APIRouter, Depends, Request, status
 
+from api.core.config import get_process_outbox_inline
 from api.core.security import (
     authorize_telemetry_ingest_payload,
     enforce_browser_token_issue_rate_limit,
@@ -30,6 +32,81 @@ from models.normalized_telemetry import NormalizedTelemetry
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 logger = logging.getLogger(__name__)
+
+
+async def _process_telemetry_outbox_inline(
+    *,
+    pool: asyncpg.Pool,
+    outbox_event_id: str,
+    incident_payload: dict[str, object],
+) -> None:
+    from openai import AsyncOpenAI
+
+    from api.core.config import (
+        get_openai_api_key,
+        get_telemetry_classifier_enabled,
+        get_telemetry_classifier_frequency_threshold,
+        get_telemetry_classifier_model,
+        get_telemetry_classifier_window_minutes,
+    )
+    from api.repositories.control_plane_repository import ControlPlaneRepository
+    from api.repositories.async_job_repository import AsyncJobRepository
+    from api.repositories.autonomous_repository import AutonomousRunRepository
+    from api.repositories.fingerprint_classification_repository import (
+        FingerprintClassificationRepository,
+    )
+    from api.repositories.incident_repository import IncidentRepository
+    from api.repositories.outbox_repository import OutboxRepository
+    from api.repositories.patch_repository import PatchRepository
+    from api.repositories.telemetry_repository import PostgresTelemetryRepository
+    from services.autonomous_runs import AutonomousRunService
+    from services.autonomous_trigger import trigger_autonomous_run_for_new_incident
+    from services.incident_creation import IncidentCreationService
+    from services.provider_integration_service import ProviderIntegrationService
+    from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter
+    from services.telemetry_classifier import TelemetryClassifier
+
+    incident_repository = IncidentRepository(pool)
+    control_plane_repository = ControlPlaneRepository(pool)
+    telemetry_repository = PostgresTelemetryRepository(pool)
+    classifier: TelemetryClassifier | None = None
+    if get_telemetry_classifier_enabled():
+        openai_key = get_openai_api_key()
+        classifier = TelemetryClassifier(
+            fingerprint_repository=FingerprintClassificationRepository(pool),
+            telemetry_repository=telemetry_repository,
+            openai_client=AsyncOpenAI(api_key=openai_key) if openai_key else None,
+            openai_model=get_telemetry_classifier_model() if openai_key else None,
+            frequency_window_minutes=get_telemetry_classifier_window_minutes(),
+            frequency_threshold=get_telemetry_classifier_frequency_threshold(),
+        )
+    creation = IncidentCreationService(
+        incident_repository,
+        control_plane_repository=control_plane_repository,
+        classifier=classifier,
+        telemetry_repository=telemetry_repository,
+    )
+    result = await creation.process_telemetry_received(incident_payload)
+    if result.created_new_incident and result.incident_id is not None:
+        autonomous_service = AutonomousRunService(
+            incident_repository,
+            async_job_repository=AsyncJobRepository(pool),
+            autonomous_repository=AutonomousRunRepository(pool),
+            control_plane_repository=control_plane_repository,
+            patch_repository=PatchRepository(pool),
+            provider_integration_service=ProviderIntegrationService(
+                control_plane_repository,
+                secrets_writer=AwsSecretsManagerWriter(),
+                secrets_reader=AwsSecretsManagerReader(),
+            ),
+        )
+        await trigger_autonomous_run_for_new_incident(
+            incident_id=result.incident_id,
+            autonomous_run_service=autonomous_service,
+            processing_result=result,
+        )
+    outbox = OutboxRepository(pool)
+    await outbox.mark_processed(outbox_event_id)
 
 
 def get_telemetry_repository(
@@ -76,6 +153,7 @@ async def issue_browser_token(
 
 @router.post("/error", response_model=TelemetryAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_error(
+    request: Request,
     payload: TelemetryErrorRequest,
     repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
     publisher: IncidentEventPublisher = Depends(get_incident_event_publisher),
@@ -93,6 +171,7 @@ async def ingest_error(
         response=payload.response,
         commit_sha=payload.commit_sha,
         timestamp=payload.timestamp,
+        handled=payload.handled,
     )
     incident_event = publisher.build_telemetry_received(telemetry)
 
@@ -101,6 +180,29 @@ async def ingest_error(
         event_id=outbox_event_id,
         event_type=incident_event.event_type.value,
     )
+
+    if get_process_outbox_inline():
+        postgres = getattr(request.app.state, "postgres", None)
+        pool = postgres.pool if postgres is not None else None
+        if pool is not None:
+            try:
+                await _process_telemetry_outbox_inline(
+                    pool=pool,
+                    outbox_event_id=outbox_event_id,
+                    incident_payload=incident_event.model_dump(mode="json"),
+                )
+                logger.info(
+                    "telemetry_outbox_processed_inline telemetry_id=%s outbox_event_id=%s",
+                    telemetry.id,
+                    outbox_event_id,
+                )
+            except Exception:
+                logger.exception(
+                    "telemetry_outbox_inline_failed telemetry_id=%s outbox_event_id=%s",
+                    telemetry.id,
+                    outbox_event_id,
+                )
+
     logger.info(
         "telemetry_error_accepted telemetry_id=%s fingerprint=%s project_id=%s service=%s environment=%s outbox_event_id=%s",
         telemetry.id,

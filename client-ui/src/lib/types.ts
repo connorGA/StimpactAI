@@ -293,6 +293,13 @@ export type AutonomousPromotionStatus =
   | "blocked";
 
 export type AutonomousDecisionAction = "invoke_tool" | "complete" | "fail";
+export type AutonomousToolFailureClass =
+  | "validation"
+  | "verification"
+  | "tool_error"
+  | "stagnation"
+  | "exception"
+  | "unknown";
 
 export type AutonomousDecision = {
   summary: string;
@@ -305,16 +312,39 @@ export type AutonomousDecision = {
   verification_kind: string | null;
 };
 
+export type AutonomousToolFailure = {
+  tool_name: string;
+  failure_class: AutonomousToolFailureClass;
+  message: string;
+  hint: string | null;
+  signature: string;
+  repeated_count: number;
+  details: Record<string, unknown>;
+};
+
+export type AutonomousVerificationEvidence = {
+  source: string;
+  kind: string;
+  summary: string;
+  passed: boolean;
+  command: string | null;
+  recorded_at: string;
+  metadata: Record<string, unknown>;
+};
+
 export type AutonomousLoopState = {
   step_index: number;
   max_steps: number;
   checkpoint_ref: string | null;
   recovery_attempts: number;
   consecutive_failures: number;
+  stagnation_count: number;
   last_tool_name: string | null;
   recent_tool_names: string[];
   last_tool_ok: boolean | null;
   last_tool_result: Record<string, unknown>;
+  last_failure: AutonomousToolFailure | null;
+  recent_failure_signatures: string[];
 };
 
 export type AutonomousPolicyDecision = {
@@ -366,6 +396,8 @@ export type AutonomousRun = {
   initializer_session_id: string | null;
   coding_session_id: string | null;
   last_error: string | null;
+  latest_verification: AutonomousVerificationEvidence | null;
+  policy_block_reason: string | null;
   policy: AutonomousPolicyDecision;
   loop_state: AutonomousLoopState;
   created_at: string;
@@ -395,11 +427,19 @@ export type AutonomousRunOutcome = {
   promotion_status: AutonomousPromotionStatus;
   checkpoint_ref: string | null;
   recovery_attempts: number;
+  stagnation_count: number;
   total_steps: number;
   total_decisions: number;
   total_tool_calls: number;
   total_events: number;
   last_error: string | null;
+  latest_verification: AutonomousVerificationEvidence | null;
+  root_cause_explanation: string | null;
+  solution_description: string | null;
+  narrative_generated_at: string | null;
+  final_success: boolean;
+  fresh_verification_satisfied: boolean;
+  failure_class: AutonomousToolFailureClass | null;
   policy: AutonomousPolicyDecision;
   created_at: string;
   completed_at: string;
@@ -416,6 +456,24 @@ export type IncidentAutonomousRunDetail = {
   events: AutonomousRunEvent[];
   outcome: AutonomousRunOutcome | null;
   artifact_paths: AutonomousArtifactPaths;
+};
+
+export type IncidentLiveTransition = {
+  incident_id: string;
+  incident_title: string;
+  run_id: string;
+  status: AutonomousRunStatus;
+  phase: AutonomousRunPhase;
+  updated_at: string;
+  last_event: string | null;
+  promotion_url: string | null;
+};
+
+export type IncidentLiveStreamPayload = {
+  project_id: string;
+  open_incidents: number;
+  repairing_incidents: number;
+  recent_transitions: IncidentLiveTransition[];
 };
 
 export type AutonomousRunQueuedResponse = {
@@ -953,4 +1011,40 @@ export type ApproveAccessRequestResponse = {
   access_request: AccessRequest;
   invite: OrganizationInvite;
   invite_token: string;
+};
+
+export type TelemetryClassification = "code_bug" | "user_error" | "code_ambiguous";
+
+export type SuppressedFingerprint = {
+  project_id: string;
+  fingerprint: string;
+  classification: TelemetryClassification | string;
+  classification_reason: string | null;
+  classification_source: string | null;
+  service: string;
+  error_message: string;
+  first_occurred_at: string;
+  last_occurred_at: string;
+  occurrence_count: number;
+  last_classified_at: string | null;
+};
+
+export type SuppressedFingerprintListResponse = {
+  items: SuppressedFingerprint[];
+};
+
+export type SuppressionSummary = {
+  project_id: string;
+  window_minutes: number;
+  user_error_event_count: number;
+  user_error_unique_fingerprints: number;
+  code_ambiguous_event_count: number;
+  code_ambiguous_unique_fingerprints: number;
+};
+
+export type ReclassifyFingerprintResponse = {
+  project_id: string;
+  fingerprint: string;
+  classification: TelemetryClassification | string;
+  reason: string | null;
 };

@@ -23,6 +23,7 @@ type TelemetryPayload = {
   response?: CaptureErrorInput["response"];
   commit_sha?: string | null;
   timestamp: string;
+  handled?: boolean | null;
 };
 
 type HeartbeatPayload = {
@@ -130,11 +131,20 @@ export class StimpactClient {
   }
 
   async captureError(input: CaptureErrorInput): Promise<void> {
-    await this.captureWithState(input);
+    await this.captureWithState({ ...input, handled: input.handled ?? false });
   }
 
   async captureHandledError(input: CaptureErrorInput): Promise<void> {
-    await this.captureWithState(input);
+    await this.captureWithState({ ...input, handled: input.handled ?? true });
+  }
+
+  /**
+   * Report an expected error (e.g. a validation failure or a login with the
+   * wrong password) explicitly tagged as handled, so the platform does not
+   * kick off an autonomous repair run for it.
+   */
+  async captureHandled(input: CaptureErrorInput): Promise<void> {
+    await this.captureHandledError(input);
   }
 
   async sendHeartbeat(input: HeartbeatInput = {}): Promise<void> {
@@ -202,6 +212,7 @@ export class StimpactClient {
       void this.captureError({
         error: toError(error),
         service: this.options.service,
+        handled: false,
       }).catch(() => undefined);
     };
 
@@ -212,6 +223,7 @@ export class StimpactClient {
       void this.captureError({
         error: toError(reason),
         service: this.options.service,
+        handled: false,
       }).catch(() => undefined);
     };
 
@@ -259,6 +271,7 @@ export class StimpactClient {
         : undefined,
       commit_sha: input.commitSha ?? null,
       timestamp: normalizeTimestamp(input.timestamp),
+      handled: typeof input.handled === "boolean" ? input.handled : undefined,
     };
 
     try {
@@ -425,6 +438,7 @@ export class StimpactClient {
       void this.captureError({
         error: event.error ?? event.message,
         service: this.options.service,
+        handled: false,
       }).catch(() => undefined);
     };
 
@@ -435,6 +449,7 @@ export class StimpactClient {
       void this.captureError({
         error: event.reason ?? "Unhandled promise rejection",
         service: this.options.service,
+        handled: false,
       }).catch(() => undefined);
     };
 

@@ -393,6 +393,50 @@ def get_kubeconfig_context() -> str | None:
     return get_nonempty_env("AGENT_PLATFORM_KUBECONFIG_CONTEXT")
 
 
+def get_process_outbox_inline() -> bool:
+    """When true, correlate telemetry into incidents inside the API right after ingest and mark the outbox row processed.
+
+    Use for local development when the outbox worker is not running. In production, prefer the worker.
+    """
+    return get_bool_env("AGENT_PLATFORM_PROCESS_OUTBOX_INLINE", False)
+
+
+def get_telemetry_classifier_enabled() -> bool:
+    """When true, classify telemetry events before creating incidents.
+
+    Disabled by default so the existing behaviour is preserved during rollout;
+    flip via the ``AGENT_PLATFORM_TELEMETRY_CLASSIFIER_ENABLED`` environment
+    variable once production accuracy has been validated.
+    """
+
+    return get_bool_env("AGENT_PLATFORM_TELEMETRY_CLASSIFIER_ENABLED", False)
+
+
+def get_telemetry_classifier_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_TELEMETRY_CLASSIFIER_MODEL",
+        "OPENAI_RCA_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
+def get_telemetry_classifier_window_minutes() -> int:
+    raw = os.getenv("AGENT_PLATFORM_TELEMETRY_CLASSIFIER_WINDOW_MINUTES", "5").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+def get_telemetry_classifier_frequency_threshold() -> int:
+    raw = os.getenv("AGENT_PLATFORM_TELEMETRY_CLASSIFIER_FREQUENCY_THRESHOLD", "10").strip()
+    try:
+        return max(2, int(raw))
+    except ValueError:
+        return 10
+
+
 def get_worker_idle_seconds() -> float:
     value = os.getenv("AGENT_PLATFORM_WORKER_IDLE_SECONDS", "2").strip()
     try:

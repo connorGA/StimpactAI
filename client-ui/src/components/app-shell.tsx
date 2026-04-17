@@ -186,7 +186,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         }`}
       >
         <div className="flex-1 overflow-y-auto px-4 py-5">
-          <AppShellNav compact={false} pendingHref={pendingNavHref} onNavigate={handleShellNavigate} />
+          <AppShellNav
+            compact={false}
+            pendingHref={pendingNavHref}
+            onNavigate={handleShellNavigate}
+            currentProjectId={currentProject?.id ?? null}
+          />
         </div>
 
         <button
@@ -229,12 +234,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             onLogout={handleLogout}
           />
           <div className="mt-4">
-            <AppShellNav mobile pendingHref={pendingNavHref} onNavigate={handleShellNavigate} />
+            <AppShellNav
+              mobile
+              pendingHref={pendingNavHref}
+              onNavigate={handleShellNavigate}
+              currentProjectId={currentProject?.id ?? null}
+            />
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 lg:px-8 lg:pb-10 lg:pt-[5.5rem]">
-          <div className="relative mx-auto flex w-full max-w-[1320px] flex-col gap-5">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-8 pt-4 lg:px-8 lg:pb-10 lg:pt-[5.5rem]">
+          <div className="relative mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col gap-5">
             {children}
           </div>
         </div>

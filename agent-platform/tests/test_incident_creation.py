@@ -104,3 +104,92 @@ async def test_process_telemetry_received_derives_severity_title_and_payload() -
     assert repository.attach_kwargs["severity"] is IncidentSeverity.CRITICAL
     assert repository.attach_kwargs["title"] == "billing-api: Payment gateway timed out"
     assert repository.attach_kwargs["event_type"] == "telemetry.received"
+
+
+class _StubClassifier:
+    def __init__(self, verdict):
+        self._verdict = verdict
+
+    async def classify(self, _normalized):
+        return self._verdict
+
+
+class _StubTelemetryRepo:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, str, str | None, str]] = []
+
+    async def update_classification(
+        self, telemetry_id: str, *, classification: str, reason: str | None, source: str
+    ) -> None:
+        self.updates.append((telemetry_id, classification, reason, source))
+
+
+@pytest.mark.asyncio
+async def test_process_telemetry_suppressed_when_classifier_says_user_error() -> None:
+    from services.telemetry_classifier import Classification, ClassificationResult
+
+    telemetry = build_telemetry(
+        status_code=403,
+        error_message="Invalid credentials",
+        request_method="POST",
+    )
+    repository = RecordingIncidentRepository(telemetry)
+    telemetry_repo = _StubTelemetryRepo()
+    classifier = _StubClassifier(
+        ClassificationResult(
+            classification=Classification.USER_ERROR,
+            reason="Auth endpoint rejected credentials",
+            source="rules",
+        )
+    )
+    service = IncidentCreationService(
+        repository,
+        classifier=classifier,
+        telemetry_repository=telemetry_repo,
+    )
+    event = IncidentEvent(
+        telemetry_id=telemetry.id,
+        project_id=telemetry.project_id,
+        fingerprint=telemetry.fingerprint,
+        payload={"service": telemetry.service},
+    )
+
+    result = await service.process_telemetry_received(event.model_dump(mode="json"))
+
+    assert result.suppressed is True
+    assert result.created_new_incident is False
+    assert result.incident_id is None
+    assert result.classification == "user_error"
+    assert repository.attach_kwargs is None
+    assert telemetry_repo.updates == [
+        (telemetry.id, "user_error", "Auth endpoint rejected credentials", "rules")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_telemetry_ambiguous_creates_incident_with_human_approval() -> None:
+    from services.telemetry_classifier import Classification, ClassificationResult
+
+    telemetry = build_telemetry(status_code=404)
+    repository = RecordingIncidentRepository(telemetry)
+    classifier = _StubClassifier(
+        ClassificationResult(
+            classification=Classification.CODE_AMBIGUOUS,
+            reason="Unclear without human review",
+            source="default",
+        )
+    )
+    service = IncidentCreationService(repository, classifier=classifier)
+    event = IncidentEvent(
+        telemetry_id=telemetry.id,
+        project_id=telemetry.project_id,
+        fingerprint=telemetry.fingerprint,
+        payload={"service": telemetry.service},
+    )
+
+    result = await service.process_telemetry_received(event.model_dump(mode="json"))
+
+    assert result.suppressed is False
+    assert result.created_new_incident is True
+    assert result.requires_human_approval is True
+    assert result.classification == "code_ambiguous"

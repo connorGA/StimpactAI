@@ -42,3 +42,11 @@ class TelemetryEnvelope(BaseModel):
     service: str = Field(min_length=1, max_length=128)
     commit_sha: str | None = Field(default=None, max_length=64)
     timestamp: datetime
+    handled: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the error was caught/handled at the call site before being reported. "
+            "True indicates the caller explicitly captured a known error (e.g. a failed login) "
+            "and treats this as a user-facing outcome rather than an unhandled exception."
+        ),
+    )

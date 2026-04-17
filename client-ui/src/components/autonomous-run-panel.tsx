@@ -1,40 +1,57 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { formatTimestamp } from "@/lib/dashboard";
+import {
+  autonomousResolutionHeadline,
+  formatAutonomousApprovalStatus,
+  formatAutonomousExecutionMode,
+  formatAutonomousPhase,
+} from "@/lib/incident-resolution-copy";
 import type {
   AutonomousApprovalStatus,
   AutonomousExecutionMode,
+  AutonomousRunEvent,
+  AutonomousRunStatus,
   IncidentAutonomousRunDetail,
+  IncidentSandboxRunDetail,
 } from "@/lib/types";
-import { formatTimestamp } from "@/lib/dashboard";
 
 type AutonomousRunPanelProps = {
   incidentId: string;
   initialDetail: IncidentAutonomousRunDetail | null;
+  initialSandboxDetail?: IncidentSandboxRunDetail | null;
+  variant?: "default" | "embedded" | "hub";
 };
 
 export function AutonomousRunPanel({
   incidentId,
   initialDetail,
+  initialSandboxDetail = null,
+  variant = "default",
 }: AutonomousRunPanelProps) {
   const [detail, setDetail] = useState<IncidentAutonomousRunDetail | null>(initialDetail);
-  const [connectionState, setConnectionState] = useState<"live" | "reconnecting">(
-    "live",
+  const [stickyEvents, setStickyEvents] = useState<AutonomousRunEvent[]>(
+    () => initialDetail?.events ?? [],
   );
+  const [sandboxDetail, setSandboxDetail] = useState<IncidentSandboxRunDetail | null>(initialSandboxDetail);
+  const [connectionState, setConnectionState] = useState<"live" | "reconnecting">("live");
+  const [sandboxConnectionState, setSandboxConnectionState] = useState<"live" | "reconnecting" | "idle">("idle");
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const embedded = variant === "embedded";
+  const hub = variant === "hub";
   const activeRunId = detail?.run.id ?? null;
-  const isActiveRun =
-    detail?.run.status === "running" || detail?.run.status === "queued";
+  const isActiveRun = detail?.run.status === "running" || detail?.run.status === "queued";
   const streamState = !isActiveRun ? "idle" : connectionState;
+  const sandboxRunId = detail?.run.sandbox_run_id ?? sandboxDetail?.run.id ?? null;
 
   const refreshLatestDetail = useCallback(async () => {
-    const response = await fetch(
-      `/api/incidents/${incidentId}/autonomous-runs/latest`,
-      { cache: "no-store" },
-    );
+    const response = await fetch(`/api/incidents/${incidentId}/autonomous-runs/latest`, {
+      cache: "no-store",
+    });
     if (!response.ok) {
       throw new Error("Failed to load the latest autonomous run.");
     }
@@ -43,10 +60,7 @@ export function AutonomousRunPanel({
     return latest;
   }, [incidentId]);
 
-  async function runJsonAction<T>(
-    path: string,
-    options?: RequestInit,
-  ): Promise<T> {
+  async function runJsonAction<T>(path: string, options?: RequestInit): Promise<T> {
     const response = await fetch(path, {
       ...options,
       headers: {
@@ -62,7 +76,7 @@ export function AutonomousRunPanel({
           message = payload.error.message;
         }
       } catch {
-        // Keep the default fallback message.
+        // Keep the fallback message.
       }
       throw new Error(message);
     }
@@ -73,16 +87,13 @@ export function AutonomousRunPanel({
     setActionError(null);
     setActiveAction(`start:${executionMode}`);
     try {
-      await runJsonAction(
-        `/api/incidents/${incidentId}/autonomous-runs`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            execution_mode: executionMode,
-            allow_writeback: executionMode === "repair_and_propose",
-          }),
-        },
-      );
+      await runJsonAction(`/api/incidents/${incidentId}/autonomous-runs`, {
+        method: "POST",
+        body: JSON.stringify({
+          execution_mode: executionMode,
+          allow_writeback: executionMode === "repair_and_propose",
+        }),
+      });
       await refreshLatestDetail();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to start autonomous run.");
@@ -133,58 +144,30 @@ export function AutonomousRunPanel({
   }
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function refreshLatest() {
-      try {
-        await refreshLatestDetail();
-        if (cancelled) {
-          return;
-        }
-      } catch {
-        // Keep the previous detail when the poll fails.
-      }
-    }
-
     if (isActiveRun) {
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
-
-    void refreshLatest();
     const interval = window.setInterval(() => {
-      void refreshLatest();
+      void refreshLatestDetail().catch(() => {
+        // Keep the previous snapshot if refresh fails.
+      });
     }, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [incidentId, isActiveRun, refreshLatestDetail]);
+    return () => window.clearInterval(interval);
+  }, [isActiveRun, refreshLatestDetail]);
 
   useEffect(() => {
     if (!activeRunId || !isActiveRun) {
       return;
     }
-
     const source = new EventSource(
       `/api/incidents/${incidentId}/autonomous-runs/${activeRunId}/events`,
     );
-
-    source.onopen = () => {
-      setConnectionState("live");
-    };
-
+    source.onopen = () => setConnectionState("live");
     source.onmessage = (event) => {
       try {
         const next = JSON.parse(event.data) as IncidentAutonomousRunDetail;
         setDetail(next);
-        setConnectionState(
-          next.run.status === "running" || next.run.status === "queued"
-            ? "live"
-            : "live",
-        );
+        setConnectionState("live");
         if (
           next.run.status === "succeeded" ||
           next.run.status === "failed" ||
@@ -196,344 +179,711 @@ export function AutonomousRunPanel({
         setConnectionState("reconnecting");
       }
     };
-
     source.onerror = () => {
       setConnectionState("reconnecting");
       source.close();
     };
-
-    return () => {
-      source.close();
-    };
+    return () => source.close();
   }, [activeRunId, incidentId, isActiveRun]);
 
-  const recentEvents = useMemo(
-    () => (detail?.events ?? []).slice(-12).reverse(),
-    [detail],
-  );
+  useEffect(() => {
+    if (!sandboxRunId) {
+      setSandboxConnectionState("idle");
+      return;
+    }
+    const source = new EventSource(
+      `/api/incidents/${incidentId}/sandbox-runs/${sandboxRunId}/events`,
+    );
+    source.onopen = () => setSandboxConnectionState("live");
+    source.onmessage = (event) => {
+      try {
+        const next = JSON.parse(event.data) as IncidentSandboxRunDetail;
+        setSandboxDetail(next);
+        setSandboxConnectionState(
+          next.run.status === "running" || next.run.status === "queued" ? "live" : "idle",
+        );
+        if (next.run.status === "succeeded" || next.run.status === "failed") {
+          source.close();
+        }
+      } catch {
+        setSandboxConnectionState("reconnecting");
+      }
+    };
+    source.onerror = () => {
+      setSandboxConnectionState("reconnecting");
+      source.close();
+    };
+    return () => source.close();
+  }, [incidentId, sandboxRunId]);
 
+  const stickyIncidentIdRef = useRef(incidentId);
+  useEffect(() => {
+    if (stickyIncidentIdRef.current === incidentId) {
+      return;
+    }
+    stickyIncidentIdRef.current = incidentId;
+    setStickyEvents(initialDetail?.events ?? []);
+  }, [incidentId, initialDetail]);
+
+  useEffect(() => {
+    const incoming = detail?.events;
+    if (!incoming || incoming.length === 0) {
+      return;
+    }
+    setStickyEvents((prev) => mergeRunEventsById(prev, incoming));
+  }, [detail?.events]);
+
+  const orderedStickyEvents = useMemo(
+    () =>
+      [...stickyEvents].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      ),
+    [stickyEvents],
+  );
+  const recentEvents = useMemo(() => orderedStickyEvents.slice(-16).reverse(), [orderedStickyEvents]);
+  const latestActionEvent = orderedStickyEvents.at(-1) ?? null;
+  const recentSandboxSteps = useMemo(
+    () => (sandboxDetail?.steps ?? []).slice(-8).reverse(),
+    [sandboxDetail],
+  );
   const canRetry =
     detail?.run.status === "failed" ||
     detail?.run.status === "cancelled" ||
     detail?.run.status === "succeeded";
 
-  return (
-    <section className="ops-sheet rounded-[22px] p-5">
-      <div className="flex items-start justify-between gap-3">
+  const runStatus = detail?.run.status;
+  const stepIndex = detail?.run.loop_state.step_index ?? 0;
+  const maxSteps = detail?.run.loop_state.max_steps ?? 0;
+  const progressPct =
+    detail && runStatus
+      ? runStatus === "succeeded" || runStatus === "failed" || runStatus === "cancelled"
+        ? 100
+        : maxSteps > 0
+          ? Math.min(100, (stepIndex / maxSteps) * 100)
+          : 0
+      : 0;
+  const progressBarTone =
+    runStatus === "failed"
+      ? "from-[#f87171] to-[#fb923c]"
+      : runStatus === "cancelled"
+        ? "from-white/30 to-white/20"
+        : "from-[#ff6a3d] to-[#ffb253]";
+  const stepCaption =
+    detail && maxSteps > 0
+      ? runStatus === "succeeded"
+        ? `Finished after ${stepIndex} step${stepIndex !== 1 ? "s" : ""} · budget ${maxSteps}`
+        : runStatus === "failed" || runStatus === "cancelled"
+          ? `Stopped at step ${stepIndex} of ${maxSteps}`
+          : `Step ${stepIndex} / ${maxSteps}`
+      : detail
+        ? `Step index ${stepIndex}${maxSteps > 0 ? ` · budget ${maxSteps}` : ""}`
+        : null;
+
+  const panelRing =
+    detail &&
+    (detail.run.approval_status === "pending" ||
+      detail.run.status === "running" ||
+      detail.run.status === "queued")
+      ? "border-[rgba(255,106,61,0.45)] shadow-[0_0_48px_-16px_rgba(255,106,61,0.35)]"
+      : "border-white/[0.08]";
+
+  const approvalBanner =
+    detail?.run.approval_status === "pending" ? (
+      <Banner tone="warning" compact={hub}>
         <div>
-          <p className="ops-kicker text-[11px] font-semibold uppercase">
-            Autonomous repair run
+          <p className="text-sm font-semibold text-[#fde68a]">Approval required</p>
+          <p className="mt-0.5 text-sm text-white/70">
+            The agent paused for manual review. Approve or reject to continue the run.
           </p>
-          <h3 className="mt-3 text-base font-semibold text-[#171717]">
-            {detail ? detail.run.objective : "No autonomous repair runs yet"}
-          </h3>
         </div>
-        {detail ? (
-          <div className="flex flex-col items-end gap-2">
-            <span className="rounded-full bg-[rgba(23,23,23,0.06)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#745744]">
-              {detail.run.status}
-            </span>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6380a3]">
-              {streamState === "live"
-                ? "Live"
-                : streamState === "reconnecting"
-                  ? "Reconnecting"
-                  : "Snapshot"}
-            </span>
-          </div>
-        ) : null}
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <ActionButton
+            label="Approve"
+            disabled={activeAction !== null}
+            active={activeAction === "approval:approved"}
+            onClick={() => setApprovalStatus("approved")}
+          />
+          <ActionButton
+            label="Reject"
+            disabled={activeAction !== null}
+            active={activeAction === "approval:rejected"}
+            variant="danger"
+            onClick={() => setApprovalStatus("rejected")}
+          />
+        </div>
+      </Banner>
+    ) : null;
+
+  const policyBanner =
+    detail?.run.policy_block_reason ? (
+      <Banner tone="warning" compact={hub}>
+        <div>
+          <p className="text-sm font-semibold text-[#fde68a]">Auto-repair blocked</p>
+          <p className="mt-0.5 text-sm text-white/70">{detail.run.policy_block_reason}</p>
+        </div>
+        <span className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-white/70">
+          Connect a repo profile or adjust project policy
+        </span>
+      </Banner>
+    ) : null;
+
+  const currentActionBanner =
+    detail && latestActionEvent ? (
+      <div className="mt-4 rounded-xl border border-[rgba(45,127,249,0.28)] bg-[rgba(45,127,249,0.08)] px-4 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-[#93c5fd]">
+          What the agent is doing now
+        </p>
+        <p className="mt-1 text-sm font-medium text-white/90">
+          {latestActionEvent.summary}
+        </p>
+        <p className="mt-1 text-xs text-white/55">
+          {formatAutonomousPhase(latestActionEvent.phase)}
+          {latestActionEvent.decision?.selected_tool
+            ? ` · ${latestActionEvent.decision.selected_tool}`
+            : ""}
+        </p>
       </div>
+    ) : null;
+
+  if (hub) {
+    return (
+      <section className="relative overflow-hidden">
+        {approvalBanner}
+        {policyBanner}
+        {currentActionBanner}
+        {detail ? (
+          <>
+            <details className="mt-3 rounded-lg border border-white/[0.08] bg-black/20 open:border-white/[0.12]">
+              <summary className="cursor-pointer list-none px-3 py-2.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+                <span className="flex items-center justify-between gap-2">
+                  Run actions
+                  <span className="text-white/35 transition group-open:rotate-180">▼</span>
+                </span>
+              </summary>
+              <div className="border-t border-white/[0.06] px-3 py-3">
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton label="Investigate only" disabled={activeAction !== null} active={activeAction === "start:investigate_only"} onClick={() => startRun("investigate_only")} />
+                  <ActionButton label="Repair only" disabled={activeAction !== null} active={activeAction === "start:repair_only"} onClick={() => startRun("repair_only")} />
+                  <ActionButton label="Repair + PR/MR" disabled={activeAction !== null} active={activeAction === "start:repair_and_propose"} onClick={() => startRun("repair_and_propose")} />
+                  {detail.run.promotion_status === "ready" ? (
+                    <ActionButton label="Promote" disabled={activeAction !== null} active={activeAction === "promote"} onClick={promoteRun} />
+                  ) : null}
+                  {canRetry ? (
+                    <ActionButton label="Retry" disabled={activeAction !== null} active={false} onClick={() => startRun(detail.run.execution_mode)} />
+                  ) : null}
+                </div>
+                {detail.run.promotion_url ? (
+                  <a
+                    href={detail.run.promotion_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 inline-flex text-xs font-medium text-[#86efac] hover:text-[#bbf7d0]"
+                  >
+                    View created PR →
+                  </a>
+                ) : null}
+                {actionError ? <p className="mt-2 text-sm text-[#fca5a5]">{actionError}</p> : null}
+              </div>
+            </details>
+            {detail.run.last_error ? (
+              <div className="mt-3 rounded-lg border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.08)] px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">Last error</p>
+                <p className="mt-1 text-sm leading-relaxed text-[#fecaca]">{detail.run.last_error}</p>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <ActionButton label="Investigate only" disabled={activeAction !== null} active={activeAction === "start:investigate_only"} onClick={() => startRun("investigate_only")} />
+            <ActionButton label="Repair only" disabled={activeAction !== null} active={activeAction === "start:repair_only"} onClick={() => startRun("repair_only")} />
+            <ActionButton label="Repair + PR/MR" disabled={activeAction !== null} active={activeAction === "start:repair_and_propose"} onClick={() => startRun("repair_and_propose")} />
+            {actionError ? <p className="w-full text-sm text-[#fca5a5]">{actionError}</p> : null}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className={
+        embedded
+          ? "relative overflow-hidden"
+          : `relative overflow-hidden rounded-2xl border bg-[rgba(14,18,28,0.92)] p-5 sm:p-6 ${panelRing}`
+      }
+    >
+      {approvalBanner}
+      {policyBanner}
+
+      {embedded ? null : (
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">
+                Autonomous resolution
+              </p>
+              {detail && isActiveRun ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(255,106,61,0.35)] bg-[rgba(255,106,61,0.1)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#ffb99a]">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ff6a3d] opacity-60" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#ff6a3d]" />
+                  </span>
+                  Live
+                </span>
+              ) : null}
+              {detail && streamState === "reconnecting" ? (
+                <span className="text-[10px] font-medium uppercase tracking-wide text-amber-200/80">
+                  Reconnecting…
+                </span>
+              ) : null}
+              {sandboxRunId && sandboxConnectionState !== "idle" ? (
+                <span className="text-[10px] font-medium uppercase tracking-wide text-[#93c5fd]">
+                  Sandbox {sandboxConnectionState === "live" ? "live" : "reconnecting"}
+                </span>
+              ) : null}
+            </div>
+            <h3 className="mt-2 text-lg font-semibold leading-snug text-white">
+              {detail ? detail.run.objective : "No autonomous run yet"}
+            </h3>
+            {detail ? (
+              <p className="mt-2 text-sm text-white/55">
+                {autonomousResolutionHeadline({
+                  status: detail.run.status,
+                  phase: detail.run.phase,
+                  approval_status: detail.run.approval_status,
+                  execution_mode: detail.run.execution_mode,
+                })}
+              </p>
+            ) : null}
+          </div>
+
+          {detail ? (
+            <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+              <StatusPill status={detail.run.status} />
+              <span className="text-[10px] font-medium uppercase tracking-wider text-white/35">
+                {streamState === "live" && isActiveRun
+                  ? "Streaming updates"
+                  : streamState === "reconnecting"
+                    ? "Reconnecting"
+                    : "Snapshot"}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {detail ? (
         <>
-          <div className="mt-4 grid gap-4">
-            <AutonomousMetaRow label="Phase" value={detail.run.phase} />
-            <AutonomousMetaRow label="Mode" value={detail.run.execution_mode} />
-            <AutonomousMetaRow
-              label="Approval"
-              value={detail.run.approval_status}
-            />
-            <AutonomousMetaRow
-              label="Promotion"
-              value={detail.run.promotion_status}
-            />
-            <AutonomousMetaRow
-              label="Progress"
-              value={`${detail.run.loop_state.step_index}/${detail.run.loop_state.max_steps} steps`}
-            />
-            <AutonomousMetaRow
-              label="Recovery attempts"
-              value={String(detail.run.loop_state.recovery_attempts)}
-            />
-            <AutonomousMetaRow
-              label="Last tool"
-              value={detail.run.loop_state.last_tool_name ?? "No tool has run yet"}
-            />
-            <AutonomousMetaRow
-              label="Checkpoint"
-              value={detail.run.loop_state.checkpoint_ref ?? "No checkpoint yet"}
-            />
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-              Operator controls
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <ActionButton
-                label="Investigate only"
-                disabled={activeAction !== null}
-                active={activeAction === "start:investigate_only"}
-                onClick={() => startRun("investigate_only")}
-              />
-              <ActionButton
-                label="Repair only"
-                disabled={activeAction !== null}
-                active={activeAction === "start:repair_only"}
-                onClick={() => startRun("repair_only")}
-              />
-              <ActionButton
-                label="Repair + PR/MR"
-                disabled={activeAction !== null}
-                active={activeAction === "start:repair_and_propose"}
-                onClick={() => startRun("repair_and_propose")}
-              />
-              {detail.run.approval_status === "pending" ? (
-                <>
-                  <ActionButton
-                    label="Approve"
-                    disabled={activeAction !== null}
-                    active={activeAction === "approval:approved"}
-                    onClick={() => setApprovalStatus("approved")}
-                  />
-                  <ActionButton
-                    label="Reject"
-                    disabled={activeAction !== null}
-                    active={activeAction === "approval:rejected"}
-                    onClick={() => setApprovalStatus("rejected")}
-                  />
-                </>
-              ) : null}
-              {detail.run.promotion_status === "ready" ? (
-                <ActionButton
-                  label="Promote"
-                  disabled={activeAction !== null}
-                  active={activeAction === "promote"}
-                  onClick={promoteRun}
-                />
-              ) : null}
-              {canRetry ? (
-                <ActionButton
-                  label="Retry"
-                  disabled={activeAction !== null}
-                  active={false}
-                  onClick={() => startRun(detail.run.execution_mode)}
-                />
-              ) : null}
-            </div>
-            {actionError ? (
-              <p className="mt-3 text-sm text-[#b4453d]">{actionError}</p>
-            ) : null}
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-              Policy and readiness
-            </p>
-            <div className="mt-3 grid gap-3 text-sm text-[#5f6470]">
-              <AutonomousMetaRow
-                label="Auto-run allowed"
-                value={detail.run.policy.auto_run_allowed ? "Yes" : "No"}
-              />
-              <AutonomousMetaRow
-                label="Write-back allowed"
-                value={detail.run.policy.allow_writeback ? "Yes" : "No"}
-              />
-              <AutonomousMetaRow
-                label="Browser verification required"
-                value={detail.run.policy.require_browser_verification ? "Yes" : "No"}
-              />
-              <AutonomousMetaRow
-                label="Allowed backends"
-                value={detail.run.policy.allowed_execution_backends.join(", ") || "None"}
-              />
-              <AutonomousMetaRow
-                label="Allowed tools"
-                value={detail.run.policy.allowed_tool_categories.join(", ") || "None"}
-              />
-              <AutonomousMetaRow
-                label="Repo profile"
-                value={detail.run.repo_profile_id ?? "Not resolved"}
-              />
-              <AutonomousMetaRow
-                label="Patch run"
-                value={detail.run.patch_run_id ?? "Pending"}
-              />
-              <AutonomousMetaRow
-                label="Sandbox run"
-                value={detail.run.sandbox_run_id ?? "Pending"}
-              />
-            </div>
-            {detail.run.policy.reasons.length > 0 ? (
-              <div className="mt-3 rounded-2xl bg-[rgba(244,248,253,0.85)] p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-                  Policy reasons
+          <div className="mt-5 rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
+                  Run phase
                 </p>
-                <div className="mt-2 space-y-2 text-sm text-[#5f6470]">
-                  {detail.run.policy.reasons.map((reason) => (
-                    <p key={reason}>{reason}</p>
-                  ))}
-                </div>
+                <p className="font-medium text-white">{formatAutonomousPhase(detail.run.phase)}</p>
+              </div>
+              <div className="text-right text-sm text-white/60">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-white/35">
+                  Mode
+                </p>
+                <p className="font-medium text-white/85">
+                  {formatAutonomousExecutionMode(detail.run.execution_mode)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px] text-white/45">
+                <span>{stepCaption}</span>
+                <span>
+                  {detail.run.loop_state.last_tool_name
+                    ? `Last tool: ${detail.run.loop_state.last_tool_name}`
+                    : "Starting tools…"}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-500 ease-out ${progressBarTone}`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-white/[0.06] pt-3 text-[11px] text-white/50">
+              <span>Approval: {formatAutonomousApprovalStatus(detail.run.approval_status)}</span>
+              <span className="capitalize">Promotion: {detail.run.promotion_status.replace(/_/g, " ")}</span>
+              {detail.run.loop_state.recovery_attempts > 0 ? (
+                <span>Recovery attempts: {detail.run.loop_state.recovery_attempts}</span>
+              ) : null}
+              {detail.run.loop_state.stagnation_count > 0 ? (
+                <span>Stagnation count: {detail.run.loop_state.stagnation_count}</span>
+              ) : null}
+            </div>
+            {detail.run.loop_state.last_failure ? (
+              <div className="mt-3 rounded-lg border border-[rgba(248,113,113,0.25)] bg-[rgba(248,113,113,0.06)] px-3 py-2.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">
+                  Last tool failure
+                </p>
+                <p className="mt-1 text-sm text-white/80">
+                  {detail.run.loop_state.last_failure.tool_name} ·{" "}
+                  {detail.run.loop_state.last_failure.failure_class.replace(/_/g, " ")}
+                </p>
+                <p className="mt-1 text-sm text-white/60">
+                  {detail.run.loop_state.last_failure.message}
+                </p>
+                {detail.run.loop_state.last_failure.hint ? (
+                  <p className="mt-1 text-xs text-white/45">
+                    Hint: {detail.run.loop_state.last_failure.hint}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </div>
+
+          {currentActionBanner}
+
+          <details className="group mt-4 rounded-xl border border-white/[0.06] bg-black/15">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center justify-between gap-2">
+                Operator controls
+                <span className="text-white/35 transition group-open:rotate-180">▼</span>
+              </span>
+            </summary>
+            <div className="border-t border-white/[0.06] px-4 py-4">
+              <div className="flex flex-wrap gap-2">
+                <ActionButton label="Investigate only" disabled={activeAction !== null} active={activeAction === "start:investigate_only"} onClick={() => startRun("investigate_only")} />
+                <ActionButton label="Repair only" disabled={activeAction !== null} active={activeAction === "start:repair_only"} onClick={() => startRun("repair_only")} />
+                <ActionButton label="Repair + PR/MR" disabled={activeAction !== null} active={activeAction === "start:repair_and_propose"} onClick={() => startRun("repair_and_propose")} />
+                {detail.run.promotion_status === "ready" ? (
+                  <ActionButton label="Promote" disabled={activeAction !== null} active={activeAction === "promote"} onClick={promoteRun} />
+                ) : null}
+                {canRetry ? (
+                  <ActionButton label="Retry" disabled={activeAction !== null} active={false} onClick={() => startRun(detail.run.execution_mode)} />
+                ) : null}
+              </div>
+              {detail.run.promotion_url ? (
+                <a
+                  href={detail.run.promotion_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex text-sm font-medium text-[#86efac] hover:text-[#bbf7d0]"
+                >
+                  View created PR →
+                </a>
+              ) : null}
+              {actionError ? <p className="mt-3 text-sm text-[#fca5a5]">{actionError}</p> : null}
+            </div>
+          </details>
+
+          <details className="group mt-3 rounded-xl border border-white/[0.06] bg-black/15">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center justify-between gap-2">
+                Policy & readiness
+                <span className="text-white/35 transition group-open:rotate-180">▼</span>
+              </span>
+            </summary>
+            <div className="border-t border-white/[0.06] px-4 py-4">
+              <div className="grid gap-2 text-sm text-white/60">
+                <AutonomousMetaRow label="Auto-run allowed" value={detail.run.policy.auto_run_allowed ? "Yes" : "No"} />
+                <AutonomousMetaRow label="Write-back allowed" value={detail.run.policy.allow_writeback ? "Yes" : "No"} />
+                <AutonomousMetaRow label="Browser verification required" value={detail.run.policy.require_browser_verification ? "Yes" : "No"} />
+                <AutonomousMetaRow label="Allowed backends" value={detail.run.policy.allowed_execution_backends.join(", ") || "None"} />
+                <AutonomousMetaRow label="Allowed tools" value={detail.run.policy.allowed_tool_categories.join(", ") || "None"} />
+                <AutonomousMetaRow label="Repo profile" value={detail.run.repo_profile_id ?? "Not resolved"} />
+                <AutonomousMetaRow label="Patch run" value={detail.run.patch_run_id ?? "Pending"} />
+                <AutonomousMetaRow label="Sandbox run" value={detail.run.sandbox_run_id ?? "Pending"} />
+              </div>
+              {detail.run.policy.reasons.length > 0 ? (
+                <div className="mt-4 rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Policy reasons
+                  </p>
+                  <div className="mt-2 space-y-2 text-sm text-white/65">
+                    {detail.run.policy.reasons.map((reason) => (
+                      <p key={reason}>{reason}</p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </details>
 
           {detail.outcome ? (
-            <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-                Outcome record
-              </p>
-              <div className="mt-3 grid gap-3 text-sm text-[#5f6470]">
-                <AutonomousMetaRow
-                  label="Decisions"
-                  value={String(detail.outcome.total_decisions)}
-                />
-                <AutonomousMetaRow
-                  label="Tool calls"
-                  value={String(detail.outcome.total_tool_calls)}
-                />
-                <AutonomousMetaRow
-                  label="Completed"
-                  value={formatTimestamp(detail.outcome.completed_at)}
-                />
-                <AutonomousMetaRow
-                  label="Approval"
-                  value={detail.outcome.approval_status}
-                />
-                <AutonomousMetaRow
-                  label="Promotion"
-                  value={detail.outcome.promotion_status}
-                />
+            <details className="group mt-3 rounded-xl border border-white/[0.06] bg-black/15">
+              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+                <span className="flex items-center justify-between gap-2">
+                  Outcome record
+                  <span className="text-white/35 transition group-open:rotate-180">▼</span>
+                </span>
+              </summary>
+              <div className="border-t border-white/[0.06] px-4 py-4">
+                <div className="grid gap-2 text-sm text-white/65">
+                  <AutonomousMetaRow label="Decisions" value={String(detail.outcome.total_decisions)} />
+                  <AutonomousMetaRow label="Tool calls" value={String(detail.outcome.total_tool_calls)} />
+                  <AutonomousMetaRow label="Completed" value={formatTimestamp(detail.outcome.completed_at)} />
+                  <AutonomousMetaRow label="Final success" value={detail.outcome.final_success ? "Yes" : "No"} />
+                  <AutonomousMetaRow label="Fresh verification" value={detail.outcome.fresh_verification_satisfied ? "Satisfied" : "Pending"} />
+                  <AutonomousMetaRow label="Promotion" value={detail.outcome.promotion_status} />
+                </div>
+                {detail.outcome.latest_verification ? (
+                  <div className="mt-4 rounded-lg border border-[rgba(32,201,51,0.2)] bg-[rgba(32,201,51,0.06)] p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[#86efac]">
+                      Verification summary
+                    </p>
+                    <p className="mt-1 text-sm text-white/80">
+                      {detail.outcome.latest_verification.summary}
+                    </p>
+                    {detail.outcome.latest_verification.command ? (
+                      <p className="mt-1 break-all text-xs text-white/45">
+                        {detail.outcome.latest_verification.command}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
+            </details>
+          ) : null}
+
+          <div className="mt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              Live activity
+            </p>
+            <div className="mt-2 max-h-[32rem] space-y-2 overflow-auto pr-1">
+              {recentEvents.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-white/[0.08] px-3 py-6 text-center text-sm text-white/40">
+                  Events will appear here as the agent runs.
+                </p>
+              ) : (
+                recentEvents.map((event) => <EventCard key={event.id} event={event} />)
+              )}
+            </div>
+          </div>
+
+          {sandboxDetail ? (
+            <div className="mt-4 rounded-xl border border-white/[0.06] bg-black/15 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Sandbox activity
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-white/90">
+                    {sandboxDetail.run.summary}
+                  </p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/65">
+                  {sandboxDetail.run.status}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/50">
+                <span>Patch applied: {sandboxDetail.run.patch_applied ? "Yes" : "No"}</span>
+                <span>Reproduced: {sandboxDetail.run.reproduction_succeeded ? "Yes" : "No"}</span>
+                <span>Verified: {sandboxDetail.run.verification_succeeded ? "Yes" : "No"}</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {recentSandboxSteps.length === 0 ? (
+                  <p className="text-sm text-white/40">
+                    Waiting for sandbox steps…
+                  </p>
+                ) : (
+                  recentSandboxSteps.map((step) => (
+                    <div
+                      key={step.id}
+                      className="rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-white/90">{step.step_name}</p>
+                          <p className="mt-1 text-sm text-white/55">{step.summary}</p>
+                        </div>
+                        <span className="text-[10px] uppercase tracking-wide text-white/40">
+                          {step.status}
+                        </span>
+                      </div>
+                      {step.command ? (
+                        <p className="mt-2 break-all font-mono text-[11px] text-[#a5d4ff]">
+                          {step.command}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+              <details className="mt-3 rounded-lg border border-white/[0.06] bg-white/[0.03]">
+                <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-white/70 [&::-webkit-details-marker]:hidden">
+                  Execution log
+                </summary>
+                <pre className="max-h-64 overflow-auto border-t border-white/[0.06] px-3 py-3 whitespace-pre-wrap font-mono text-xs leading-relaxed text-white/65">
+                  {sandboxDetail.run.execution_log || "Execution log pending."}
+                </pre>
+              </details>
             </div>
           ) : null}
 
-          <div className="mt-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-              Live event timeline
-            </p>
-            <div className="mt-3 max-h-96 space-y-3 overflow-auto pr-1">
-              {recentEvents.map((event) => (
-                <div
-                  key={event.id}
-                  className="rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 px-4 py-4"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-[#17385d]">
-                        {event.summary}
-                      </p>
-                      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-                        {event.event_type} • {event.phase}
-                      </p>
-                    </div>
-                    <span className="text-xs text-[#667085]">
-                      {formatTimestamp(event.created_at)}
-                    </span>
-                  </div>
-                  {event.decision?.selected_tool ? (
-                    <p className="mt-2 text-sm text-[#5f6470]">
-                      Tool: {event.decision.selected_tool}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
+          <details className="group mt-3 rounded-xl border border-white/[0.06] bg-black/15">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center justify-between gap-2">
+                Artifacts & links
+                <span className="text-white/35 transition group-open:rotate-180">▼</span>
+              </span>
+            </summary>
+            <div className="border-t border-white/[0.06] px-4 py-4">
+              <div className="grid gap-2 text-sm text-white/65">
+                <AutonomousMetaRow label="Snapshot" value={detail.artifact_paths.snapshot_path} />
+                <AutonomousMetaRow label="Transcript" value={detail.artifact_paths.events_path} />
+                <AutonomousMetaRow label="Outcome" value={detail.artifact_paths.outcome_path ?? "Pending"} />
+                <AutonomousMetaRow label="Promotion branch" value={detail.run.promotion_branch_name ?? "Pending"} />
+                <AutonomousMetaRow label="Promotion URL" value={detail.run.promotion_url ?? "Pending"} />
+              </div>
             </div>
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-[rgba(111,158,210,0.14)] bg-white/70 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#6380a3]">
-              Durable artifacts
-            </p>
-            <div className="mt-3 grid gap-3 text-sm text-[#5f6470]">
-              <AutonomousMetaRow
-                label="Snapshot"
-                value={detail.artifact_paths.snapshot_path}
-              />
-              <AutonomousMetaRow
-                label="Transcript"
-                value={detail.artifact_paths.events_path}
-              />
-              <AutonomousMetaRow
-                label="Outcome"
-                value={detail.artifact_paths.outcome_path ?? "Pending"}
-              />
-              <AutonomousMetaRow
-                label="Promotion URL"
-                value={detail.run.promotion_url ?? "Pending"}
-              />
-            </div>
-          </div>
+          </details>
 
           {detail.run.last_error ? (
-            <div className="mt-5 rounded-2xl border border-[rgba(233,89,80,0.18)] bg-[rgba(255,245,244,0.9)] p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[#b4453d]">
+            <div className="mt-4 rounded-xl border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.08)] px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">
                 Last error
               </p>
-              <p className="mt-2 text-sm leading-6 text-[#8b433c]">
-                {detail.run.last_error}
-              </p>
+              <p className="mt-2 text-sm leading-relaxed text-[#fecaca]">{detail.run.last_error}</p>
             </div>
           ) : null}
         </>
       ) : (
-        <div className="mt-4 space-y-4">
-          <p className="text-sm leading-6 text-[#746d66]">
-            No autonomous repair run has been persisted for this incident yet.
-            Launch one of the regulated run modes below to begin.
+        <div className="mt-5 space-y-4">
+          <p className="text-sm leading-relaxed text-white/55">
+            Start a regulated autonomous run to investigate or repair this incident. Progress streams here in real time.
           </p>
           <div className="flex flex-wrap gap-2">
-            <ActionButton
-              label="Investigate only"
-              disabled={activeAction !== null}
-              active={activeAction === "start:investigate_only"}
-              onClick={() => startRun("investigate_only")}
-            />
-            <ActionButton
-              label="Repair only"
-              disabled={activeAction !== null}
-              active={activeAction === "start:repair_only"}
-              onClick={() => startRun("repair_only")}
-            />
-            <ActionButton
-              label="Repair + PR/MR"
-              disabled={activeAction !== null}
-              active={activeAction === "start:repair_and_propose"}
-              onClick={() => startRun("repair_and_propose")}
-            />
+            <ActionButton label="Investigate only" disabled={activeAction !== null} active={activeAction === "start:investigate_only"} onClick={() => startRun("investigate_only")} />
+            <ActionButton label="Repair only" disabled={activeAction !== null} active={activeAction === "start:repair_only"} onClick={() => startRun("repair_only")} />
+            <ActionButton label="Repair + PR/MR" disabled={activeAction !== null} active={activeAction === "start:repair_and_propose"} onClick={() => startRun("repair_and_propose")} />
           </div>
-          {actionError ? (
-            <p className="text-sm text-[#b4453d]">{actionError}</p>
-          ) : null}
+          {actionError ? <p className="text-sm text-[#fca5a5]">{actionError}</p> : null}
         </div>
       )}
     </section>
   );
 }
 
-function AutonomousMetaRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function mergeRunEventsById(
+  prev: AutonomousRunEvent[],
+  incoming: AutonomousRunEvent[],
+): AutonomousRunEvent[] {
+  if (prev.length === 0) {
+    return [...incoming];
+  }
+  const byId = new Map<string, AutonomousRunEvent>();
+  for (const event of prev) {
+    byId.set(event.id, event);
+  }
+  let changed = false;
+  for (const event of incoming) {
+    const existing = byId.get(event.id);
+    if (!existing) {
+      byId.set(event.id, event);
+      changed = true;
+      continue;
+    }
+    if (existing !== event) {
+      byId.set(event.id, event);
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return prev;
+  }
+  return Array.from(byId.values());
+}
+
+function EventCard({ event }: { event: AutonomousRunEvent }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-[rgba(24,24,27,0.08)] py-2 last:border-b-0">
-      <span className="text-sm text-[#667085]">{label}</span>
-      <span className="break-all text-right text-sm font-semibold text-[#111827]">
-        {value}
-      </span>
+    <div className="rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-white/90">{event.summary}</p>
+          <p className="mt-1 text-[11px] text-white/45">
+            {event.event_type} · {formatAutonomousPhase(event.phase)}
+          </p>
+        </div>
+        <span className="shrink-0 text-[10px] text-white/35">
+          {formatTimestamp(event.created_at)}
+        </span>
+      </div>
+      {event.decision ? (
+        <div className="mt-3 rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+          <p className="text-xs font-medium text-white/85">
+            {event.decision.action.replace(/_/g, " ")}
+            {event.decision.selected_tool ? ` · ${event.decision.selected_tool}` : ""}
+          </p>
+          {event.decision.rationale ? (
+            <p className="mt-1 text-sm text-white/65">{event.decision.rationale}</p>
+          ) : null}
+          {Object.keys(event.decision.arguments).length > 0 ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] font-medium text-[#a5d4ff]">
+                Tool arguments
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap break-all rounded bg-black/25 p-2 font-mono text-[11px] text-[#a5d4ff]">
+                {JSON.stringify(event.decision.arguments, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+      {Object.keys(event.payload).length > 0 ? (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[11px] font-medium text-white/50">
+            Event payload
+          </summary>
+          <pre className="mt-2 whitespace-pre-wrap break-all rounded bg-black/25 p-2 font-mono text-[11px] text-white/60">
+            {JSON.stringify(event.payload, null, 2)}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function Banner({
+  children,
+  tone,
+  compact,
+}: {
+  children: React.ReactNode;
+  tone: "warning" | "danger";
+  compact?: boolean;
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.08)]"
+      : "border-[rgba(255,178,83,0.35)] bg-[rgba(255,178,83,0.08)]";
+  return (
+    <div
+      className={`${compact ? "mb-3 rounded-lg px-3 py-2.5" : "mb-5 rounded-xl px-4 py-3"} flex flex-col gap-3 border sm:flex-row sm:items-center sm:justify-between ${toneClass}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: AutonomousRunStatus }) {
+  const styles: Record<AutonomousRunStatus, string> = {
+    queued: "border-white/15 bg-white/[0.08] text-white/70",
+    running: "border-[rgba(59,130,246,0.4)] bg-[rgba(59,130,246,0.12)] text-[#93c5fd]",
+    succeeded: "border-[rgba(34,197,94,0.4)] bg-[rgba(34,197,94,0.1)] text-[#86efac]",
+    failed: "border-[rgba(248,113,113,0.4)] bg-[rgba(248,113,113,0.1)] text-[#fecaca]",
+    cancelled: "border-white/15 bg-white/[0.06] text-white/50",
+  };
+  return (
+    <span
+      className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider ${styles[status]}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function AutonomousMetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-white/[0.06] py-2 last:border-b-0">
+      <span className="text-white/45">{label}</span>
+      <span className="max-w-[65%] break-all text-right font-medium text-white/85">{value}</span>
     </div>
   );
 }
@@ -543,24 +893,31 @@ function ActionButton({
   disabled,
   active,
   onClick,
+  variant = "default",
 }: {
   label: string;
   disabled: boolean;
   active: boolean;
   onClick: () => void;
+  variant?: "default" | "danger";
 }) {
+  const isDanger = variant === "danger";
+  let cls =
+    "rounded-lg border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ";
+  if (active) {
+    cls += isDanger
+      ? "border-red-400/50 bg-red-500/25 text-white"
+      : "border-[rgba(255,106,61,0.45)] bg-[rgba(255,106,61,0.2)] text-white";
+  } else if (isDanger) {
+    cls +=
+      "border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.12)] text-[#fecaca] hover:bg-[rgba(248,113,113,0.18)]";
+  } else {
+    cls += "border-white/[0.12] bg-white/[0.06] text-white/90 hover:bg-white/[0.1]";
+  }
+
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
-        active
-          ? "bg-[#17385d] text-white"
-          : "bg-[#f4f8fd] text-[#35547d] hover:bg-[#e6eef8]"
-      } disabled:cursor-not-allowed disabled:opacity-60`}
-    >
-      {active ? "Working..." : label}
+    <button type="button" disabled={disabled} onClick={onClick} className={cls}>
+      {active ? "Working…" : label}
     </button>
   );
 }

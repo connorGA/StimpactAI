@@ -27,6 +27,15 @@ export type CaptureErrorInput = {
   environment?: StimpactEnvironment;
   service?: string;
   timestamp?: string | Date;
+  /**
+   * Whether the error was caught/handled by application code before being
+   * reported. When `true`, the backend treats this as a user-facing outcome
+   * (e.g. a wrong-password response) and is much less likely to trigger an
+   * autonomous repair run. When `false`, the error is treated as an
+   * uncaught/unhandled failure. If omitted, the backend falls back to its own
+   * heuristics.
+   */
+  handled?: boolean;
 };
 
 export type ErrorCaptureContext = Omit<CaptureErrorInput, "error">;

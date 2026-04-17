@@ -7,11 +7,17 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from api.core.config import get_openai_api_key, get_repository_root
+from api.core.config import (
+    get_openai_api_key,
+    get_openai_autonomous_model,
+    get_openai_rca_model,
+    get_repository_root,
+)
 from api.core.errors import APIError
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.autonomous_repository import AutonomousRunRepository
@@ -38,6 +44,7 @@ from harness.schemas.autonomous import (
     AutonomousPromotionStatus,
     AutonomousRepairRunRecord,
     AutonomousRunPhase,
+    AutonomousRunOutcome,
     AutonomousRunStatus,
     AutonomousRunSnapshot,
     AutonomousVerificationEvidence,
@@ -50,8 +57,15 @@ from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from services.autonomous_policy import AutonomousPolicyService
 from services.harness_profile_adapter import HarnessControlPlaneProfileAdapter
 from services.provider_integration_service import ProviderIntegrationService
+from services.resolution_narrative import ResolutionNarrativeService
 from services.repository_provider import get_provider_adapter
+from services.root_cause_analysis import (
+    RootCauseAnalysisService,
+    RootCauseAnalyzer,
+    RootCauseReasoner,
+)
 from services.sandbox_verification import SandboxVerificationService
+from services.failure_classifier import FailureClassifier
 
 
 @dataclass(slots=True)
@@ -140,6 +154,7 @@ class AutonomousRunService:
         policy_service: AutonomousPolicyService | None = None,
         profile_adapter: HarnessControlPlaneProfileAdapter | None = None,
         provider_integration_service: ProviderIntegrationService | None = None,
+        resolution_narrative_service: ResolutionNarrativeService | None = None,
     ) -> None:
         self._incident_repository = incident_repository
         self._async_job_repository = async_job_repository
@@ -155,6 +170,11 @@ class AutonomousRunService:
         self._policy_service = policy_service or AutonomousPolicyService()
         self._profile_adapter = profile_adapter or HarnessControlPlaneProfileAdapter()
         self._provider_integration_service = provider_integration_service
+        self._resolution_narrative_service = (
+            resolution_narrative_service
+            if resolution_narrative_service is not None
+            else self._build_resolution_narrative_service()
+        )
 
     async def start_run(
         self,
@@ -215,6 +235,7 @@ class AutonomousRunService:
             request=request,
             browser_verification_supported=browser_verification_supported,
         )
+        policy_block_reason = self._policy_block_reason(policy)
         snapshot = self._runner.bootstrap_run(
             incident_id=incident_id,
             repo_profile_id=repo_profile.id if repo_profile is not None else None,
@@ -260,6 +281,7 @@ class AutonomousRunService:
                 "benchmark_scenario_id": request.benchmark_scenario_id,
                 "benchmark_bug_class": request.benchmark_bug_class,
                 "policy": policy,
+                "policy_block_reason": policy_block_reason,
                 "loop_state": snapshot.run.loop_state.model_copy(update={"max_steps": request.max_steps}),
             }
         )
@@ -557,6 +579,9 @@ class AutonomousRunService:
                         finished=True,
                     )
                 if not self._should_retry_run(snapshot.run, attempt_number=attempt_number, attempt_budget=attempt_budget):
+                    await self._maybe_generate_resolution_narrative(
+                        self.get_run_detail_sync(incident_id, run_id)
+                    )
                     return self.get_run_detail_sync(incident_id, run_id)
 
                 retry_context = self._build_retry_context(snapshot.run, next_attempt_number=attempt_number + 1)
@@ -653,6 +678,9 @@ class AutonomousRunService:
                         "Marked incident resolved by autonomous agent after sandbox verification",
                         extra={"incident_id": record.incident_id, "run_id": updated_run.id},
                     )
+            await self._maybe_generate_resolution_narrative(
+                self.get_run_detail_sync(record.incident_id, updated_run.id)
+            )
 
     async def promote_run(self, incident_id: str, run_id: str) -> AutonomousRunDetailResponse:
         incident = await self._require_incident(incident_id)
@@ -1080,6 +1108,81 @@ class AutonomousRunService:
             "previous_failure_class": failure_class.value if failure_class is not None else None,
             "previous_tool_name": run.loop_state.last_tool_name,
         }
+
+    def _policy_block_reason(self, policy) -> str | None:
+        if policy.auto_run_allowed:
+            return None
+        reasons = [reason.strip() for reason in policy.reasons if reason.strip()]
+        if not reasons:
+            return "Autonomous execution is currently blocked by policy."
+        return " ".join(reasons)
+
+    async def _maybe_generate_resolution_narrative(
+        self,
+        detail: AutonomousRunDetailResponse,
+    ) -> AutonomousRunOutcome | None:
+        if (
+            self._resolution_narrative_service is None
+            or detail.outcome is None
+            or detail.run.incident_id is None
+            or detail.run.status is not AutonomousRunStatus.SUCCEEDED
+            or not detail.outcome.fresh_verification_satisfied
+            or detail.outcome.root_cause_explanation is not None
+        ):
+            return detail.outcome
+
+        try:
+            root_cause_explanation, solution_description = await self._resolution_narrative_service.build(
+                incident_id=detail.run.incident_id,
+                detail=detail,
+            )
+        except Exception:
+            logger.warning(
+                "Resolution narrative generation failed; continuing without narrative.",
+                exc_info=True,
+                extra={"incident_id": detail.run.incident_id, "run_id": detail.run.id},
+            )
+            return detail.outcome
+        updated_outcome = detail.outcome.model_copy(
+            update={
+                "root_cause_explanation": root_cause_explanation,
+                "solution_description": solution_description,
+                "narrative_generated_at": datetime.now(UTC),
+            }
+        )
+        self._artifact_store.write_outcome(detail.run.incident_id, detail.run.id, updated_outcome)
+        if self._autonomous_repository is not None:
+            persisted_record = await self._autonomous_repository.get_run(detail.run.id)
+            await self._autonomous_repository.update_run(
+                detail.run.id,
+                async_job_id=detail.run.async_job_id,
+                project_service_id=getattr(persisted_record, "project_service_id", None),
+                repo_profile_id=detail.run.repo_profile_id,
+                run=detail.run,
+                outcome=updated_outcome,
+            )
+        return updated_outcome
+
+    def _build_resolution_narrative_service(self) -> ResolutionNarrativeService | None:
+        api_key = get_openai_api_key()
+        if api_key is None or self._patch_repository is None:
+            return None
+        root_cause_client = AsyncOpenAI(api_key=api_key)
+        return ResolutionNarrativeService(
+            self._incident_repository,
+            patch_repository=self._patch_repository,
+            root_cause_service=RootCauseAnalysisService(
+                self._incident_repository,
+                classifier=FailureClassifier(),
+                analyzer=RootCauseAnalyzer(),
+                reasoner=RootCauseReasoner(
+                    client=root_cause_client,
+                    model=get_openai_rca_model(),
+                ),
+            ),
+            client=AsyncOpenAI(api_key=api_key),
+            model=get_openai_autonomous_model(),
+        )
 
     def _build_decision_engine(self) -> OpenAIAutonomousDecisionEngine:
         api_key = get_openai_api_key()

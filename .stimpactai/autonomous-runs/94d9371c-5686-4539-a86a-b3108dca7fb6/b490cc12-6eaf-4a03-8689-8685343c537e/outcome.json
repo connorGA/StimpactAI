@@ -1,0 +1,66 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-16T21:58:05.771084Z",
+  "created_at": "2026-04-16T21:57:04.960045Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "94d9371c-5686-4539-a86a-b3108dca7fb6",
+  "last_error": null,
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "c56c5ee3-2cf4-4832-82d2-4925e9ba26e0"
+    },
+    "passed": true,
+    "recorded_at": "2026-04-16T21:58:25.767072Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident, applied the patch, and verified the candidate fix."
+  },
+  "narrative_generated_at": "2026-04-16T21:58:51.623954Z",
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Request failed before the platform acknowledged it.' for service Soul Song Service.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-94d9371c-vp31gnlf/repo",
+  "root_cause_explanation": "The failure was caused by a client-side bug in `client/src/lib/requestService.ts` during request creation. The `createRequest` path contained an intentional dereference of `undefined` (`requestMetadata.id`), which threw a TypeError before the POST call could be sent, so the platform never had a chance to acknowledge the request.",
+  "run_id": "b490cc12-6eaf-4a03-8689-8685343c537e",
+  "solution_description": "The repair removed the invalid `undefined` property access from `createRequest`, allowing the code to call `xanoApi.post(...)` normally and submit the request as intended. The fix was reproduced and verified in the sandbox, and a fresh `npm run build` passed after the patch was applied.",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 9,
+  "total_tool_calls": 0
+}

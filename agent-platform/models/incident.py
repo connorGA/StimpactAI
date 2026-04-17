@@ -44,11 +44,25 @@ class TelemetryRecord(BaseModel):
     request_payload: dict[str, Any] | list[Any] | str | None = None
     response_payload: dict[str, Any] | list[Any] | str | None = None
     commit_sha: str | None = None
+    handled: bool | None = None
+    classification: str | None = None
+    classification_reason: str | None = None
+    classification_source: str | None = None
     occurred_at: datetime
     received_at: datetime
 
     @classmethod
     def from_db_row(cls, row: Any) -> "TelemetryRecord":
+        row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+
+        def _maybe(key: str) -> Any:
+            if not row_keys or key in row_keys:
+                try:
+                    return row[key]
+                except (KeyError, IndexError):
+                    return None
+            return None
+
         return cls(
             id=str(row["id"]),
             project_id=str(row["project_id"]),
@@ -60,6 +74,22 @@ class TelemetryRecord(BaseModel):
             request_payload=_decode_json_value(row["request_payload"]),
             response_payload=_decode_json_value(row["response_payload"]),
             commit_sha=row["commit_sha"],
+            handled=_maybe("handled"),
+            classification=(
+                str(_maybe("classification"))
+                if _maybe("classification") is not None
+                else None
+            ),
+            classification_reason=(
+                str(_maybe("classification_reason"))
+                if _maybe("classification_reason") is not None
+                else None
+            ),
+            classification_source=(
+                str(_maybe("classification_source"))
+                if _maybe("classification_source") is not None
+                else None
+            ),
             occurred_at=row["occurred_at"],
             received_at=row["received_at"],
         )
@@ -116,11 +146,16 @@ class IncidentRecord(BaseModel):
 class IncidentProcessingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    incident_id: str
+    incident_id: str | None = None
     created_new_incident: bool
     attached_telemetry: bool
     severity: IncidentSeverity
     event_count: int
+    suppressed: bool = False
+    classification: str | None = None
+    classification_reason: str | None = None
+    classification_source: str | None = None
+    requires_human_approval: bool = False
 
 
 class IncidentEventRecord(BaseModel):

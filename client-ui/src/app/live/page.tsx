@@ -24,7 +24,12 @@ export default async function LivePage() {
     );
   }
 
-  const onboarding = await getProjectOnboarding(projectId).catch(() => null);
+  const [onboarding, incidentList, reporting] = await Promise.all([
+    getProjectOnboarding(projectId).catch(() => null),
+    getIncidents({ projectId, limit: 50, offset: 0 }),
+    getIncidentReportingOverview(projectId),
+  ]);
+
   if (!onboarding || !isProjectOnboardingComplete(onboarding)) {
     return (
       <ProjectSetupState
@@ -35,13 +40,8 @@ export default async function LivePage() {
     );
   }
 
-  const [incidentList, reporting] = await Promise.all([
-    getIncidents({ projectId, limit: 50, offset: 0 }),
-    getIncidentReportingOverview(projectId),
-  ]);
-
   const incidents = incidentList.items;
-  const autonomousRuns = await loadLatestAutonomousRuns(incidents.slice(0, 12));
+  const autonomousRuns = await loadLatestAutonomousRuns(incidents);
 
   const heartbeats = onboarding.telemetry_heartbeats;
   const services = onboarding.project_services;
@@ -59,11 +59,18 @@ export default async function LivePage() {
   );
 }
 
+/** Open incidents first (badges + repair state), then recent others. Caps fan-out so the page is not N parallel API calls to the agent platform (was up to 12 every navigation). */
+const MAX_AUTONOMOUS_DETAIL_FETCHES = 8;
+
 async function loadLatestAutonomousRuns(
   incidents: IncidentSummary[],
 ): Promise<Record<string, IncidentAutonomousRunDetail | null>> {
+  const open = incidents.filter((i) => i.status === "open");
+  const rest = incidents.filter((i) => i.status !== "open");
+  const prioritized = [...open, ...rest].slice(0, MAX_AUTONOMOUS_DETAIL_FETCHES);
+
   const pairs = await Promise.all(
-    incidents.map(async (incident) => {
+    prioritized.map(async (incident) => {
       try {
         const detail = await getLatestIncidentAutonomousRunDetail(incident.id);
         return [incident.id, detail] as const;

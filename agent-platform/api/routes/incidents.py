@@ -18,9 +18,13 @@ from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.autonomous_repository import AutonomousRunRepository
 from api.repositories.control_plane_repository import ControlPlaneRepository
+from api.repositories.fingerprint_classification_repository import (
+    FingerprintClassificationRepository,
+)
 from api.repositories.incident_repository import IncidentRepository
 from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
+from api.repositories.telemetry_repository import PostgresTelemetryRepository
 from api.routes.control_plane import get_provider_integration_service
 from api.schemas.autonomous import (
     AutonomousRunApprovalRequest,
@@ -41,12 +45,17 @@ from api.schemas.incidents import (
     IncidentSandboxRunDetailResponse,
     IncidentSandboxRunResponse,
     IncidentListResponse,
+    ReclassifyFingerprintRequest,
+    ReclassifyFingerprintResponse,
     SandboxRunAttemptResponse,
     SandboxRunQueuedResponse,
     SandboxRunStepResponse,
     IncidentSummaryResponse,
+    SuppressedFingerprintListResponse,
+    SuppressedFingerprintResponse,
+    SuppressionSummaryResponse,
 )
-from harness.schemas.autonomous import AutonomousRepairRunRecord
+from harness.schemas.autonomous import AutonomousRepairRunRecord, AutonomousRunStatus
 from models.incident import IncidentStatus
 from services.autonomous_runs import AutonomousRunService
 from services.code_context import CodeContextService
@@ -103,6 +112,18 @@ def get_autonomous_repository(
     manager: PostgresConnectionManager = Depends(get_postgres_manager),
 ) -> AutonomousRunRepository:
     return AutonomousRunRepository(manager.pool)
+
+
+def get_telemetry_repository(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> PostgresTelemetryRepository:
+    return PostgresTelemetryRepository(manager.pool)
+
+
+def get_fingerprint_classification_repository(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> FingerprintClassificationRepository:
+    return FingerprintClassificationRepository(manager.pool)
 
 
 def get_failure_classifier() -> FailureClassifier:
@@ -293,6 +314,118 @@ async def reopen_incident(
 
 
 @router.get(
+    "/noise",
+    response_model=SuppressedFingerprintListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_suppressed_telemetry(
+    request: Request,
+    project_id: str = Query(min_length=1, max_length=128),
+    limit: int = Query(default=50, ge=1, le=200),
+    telemetry_repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> SuppressedFingerprintListResponse:
+    await require_project_read_access(request, project_id, repository=security_repository)
+    rows = await telemetry_repository.list_suppressed(
+        project_id=project_id,
+        limit=limit,
+    )
+    items = [
+        SuppressedFingerprintResponse(
+            project_id=str(row["project_id"]),
+            fingerprint=str(row["fingerprint"]),
+            classification=str(row["classification"]),
+            classification_reason=(
+                str(row["classification_reason"]) if row.get("classification_reason") else None
+            ),
+            classification_source=(
+                str(row["classification_source"]) if row.get("classification_source") else None
+            ),
+            service=str(row["service"]),
+            error_message=str(row["error_message"]),
+            first_occurred_at=row["first_occurred_at"],
+            last_occurred_at=row["last_occurred_at"],
+            occurrence_count=int(row["occurrence_count"]),
+            last_classified_at=row.get("last_classified_at"),
+        )
+        for row in rows
+    ]
+    return SuppressedFingerprintListResponse(items=items)
+
+
+@router.get(
+    "/noise/summary",
+    response_model=SuppressionSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_suppression_summary(
+    request: Request,
+    project_id: str = Query(min_length=1, max_length=128),
+    window_minutes: int = Query(default=60 * 24, ge=1, le=60 * 24 * 30),
+    telemetry_repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> SuppressionSummaryResponse:
+    await require_project_read_access(request, project_id, repository=security_repository)
+    since = datetime.now(UTC) - timedelta(minutes=window_minutes)
+    summary = await telemetry_repository.suppression_summary(
+        project_id=project_id,
+        since=since,
+    )
+    user_error = summary.get("user_error", {"event_count": 0, "unique_fingerprints": 0})
+    ambiguous = summary.get("code_ambiguous", {"event_count": 0, "unique_fingerprints": 0})
+    return SuppressionSummaryResponse(
+        project_id=project_id,
+        window_minutes=window_minutes,
+        user_error_event_count=int(user_error.get("event_count", 0)),
+        user_error_unique_fingerprints=int(user_error.get("unique_fingerprints", 0)),
+        code_ambiguous_event_count=int(ambiguous.get("event_count", 0)),
+        code_ambiguous_unique_fingerprints=int(ambiguous.get("unique_fingerprints", 0)),
+    )
+
+
+@router.post(
+    "/noise/{fingerprint}/reclassify",
+    response_model=ReclassifyFingerprintResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def reclassify_fingerprint(
+    request: Request,
+    fingerprint: str,
+    payload: ReclassifyFingerprintRequest,
+    fingerprint_repository: FingerprintClassificationRepository = Depends(
+        get_fingerprint_classification_repository
+    ),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> ReclassifyFingerprintResponse:
+    await require_project_read_access(
+        request,
+        payload.project_id,
+        repository=security_repository,
+    )
+    allowed = {"code_bug", "user_error", "code_ambiguous"}
+    classification = payload.classification.strip().lower()
+    if classification not in allowed:
+        raise APIError(
+            f"Unsupported classification '{payload.classification}'. Expected one of {sorted(allowed)}.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="invalid_classification",
+        )
+    await fingerprint_repository.put(
+        project_id=payload.project_id,
+        fingerprint=fingerprint,
+        classification=classification,
+        reason=payload.reason,
+        source="manual",
+    )
+    return ReclassifyFingerprintResponse(
+        project_id=payload.project_id,
+        fingerprint=fingerprint,
+        classification=classification,
+        reason=payload.reason,
+    )
+
+
+@router.get(
     "/reporting/overview",
     response_model=IncidentReportingOverviewResponse,
     status_code=status.HTTP_200_OK,
@@ -361,6 +494,22 @@ async def get_incident_reporting_overview(
         avg_agent_response_delta_seconds=avg_delta_sec,
         agent_resolution_percent_last_30d=agent_pct,
         agent_resolution_delta_pp=agent_delta_pp,
+    )
+
+
+async def _stream_incident_live_updates_impl(
+    request: Request,
+    project_id: str = Query(min_length=1, max_length=128),
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    autonomous_service: AutonomousRunService = Depends(get_autonomous_run_service),
+) -> StreamingResponse:
+    return await _stream_incident_live_updates_impl(
+        request=request,
+        project_id=project_id,
+        repository=repository,
+        security_repository=security_repository,
+        autonomous_service=autonomous_service,
     )
 
 
@@ -579,6 +728,26 @@ async def get_sandbox_run_detail(
     )
 
 
+async def _load_sandbox_run_detail_response(
+    *,
+    incident_id: str,
+    sandbox_run_id: str,
+    service: SandboxVerificationService,
+    sandbox_repository: SandboxRepository,
+    artifact_repository: ArtifactRepository,
+) -> IncidentSandboxRunDetailResponse:
+    run = await service.get_run(incident_id, sandbox_run_id)
+    steps = await sandbox_repository.list_sandbox_run_steps(sandbox_run_id)
+    attempts = await sandbox_repository.list_sandbox_run_attempts(sandbox_run_id)
+    artifacts = await artifact_repository.list_sandbox_run_artifacts(sandbox_run_id)
+    return IncidentSandboxRunDetailResponse(
+        run=IncidentSandboxRunResponse.from_record(run),
+        steps=[SandboxRunStepResponse.from_record(step) for step in steps],
+        attempts=[SandboxRunAttemptResponse.from_record(attempt) for attempt in attempts],
+        artifacts=[ArtifactResponse.from_record(artifact) for artifact in artifacts],
+    )
+
+
 @router.post(
     "/{incident_id}/autonomous-runs",
     response_model=AutonomousRunQueuedResponse,
@@ -753,6 +922,163 @@ async def stream_autonomous_run_events(
                 yield ": keep-alive\n\n"
             if service.is_terminal(detail.run):
                 break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get(
+    "/{incident_id}/sandbox-runs/{sandbox_run_id}/events",
+    status_code=status.HTTP_200_OK,
+)
+async def stream_sandbox_run_events(
+    incident_id: str,
+    sandbox_run_id: str,
+    request: Request,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    service: SandboxVerificationService = Depends(get_sandbox_verification_service),
+    sandbox_repository: SandboxRepository = Depends(get_sandbox_repository),
+    artifact_repository: ArtifactRepository = Depends(get_artifact_repository),
+) -> StreamingResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
+    initial_detail = await _load_sandbox_run_detail_response(
+        incident_id=incident_id,
+        sandbox_run_id=sandbox_run_id,
+        service=service,
+        sandbox_repository=sandbox_repository,
+        artifact_repository=artifact_repository,
+    )
+
+    async def event_generator():
+        yield _format_sse(initial_detail.model_dump(mode="json"))
+        if initial_detail.run.status in {SandboxRunStatus.SUCCEEDED, SandboxRunStatus.FAILED}:
+            return
+        last_updated_at = initial_detail.run.updated_at
+        last_step_count = len(initial_detail.steps)
+        last_attempt_count = len(initial_detail.attempts)
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(1)
+            try:
+                detail = await _load_sandbox_run_detail_response(
+                    incident_id=incident_id,
+                    sandbox_run_id=sandbox_run_id,
+                    service=service,
+                    sandbox_repository=sandbox_repository,
+                    artifact_repository=artifact_repository,
+                )
+            except APIError:
+                break
+            if (
+                detail.run.updated_at != last_updated_at
+                or len(detail.steps) != last_step_count
+                or len(detail.attempts) != last_attempt_count
+            ):
+                yield _format_sse(detail.model_dump(mode="json"))
+                last_updated_at = detail.run.updated_at
+                last_step_count = len(detail.steps)
+                last_attempt_count = len(detail.attempts)
+            else:
+                yield ": keep-alive\n\n"
+            if detail.run.status in {SandboxRunStatus.SUCCEEDED, SandboxRunStatus.FAILED}:
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/live-stream", status_code=status.HTTP_200_OK)
+async def stream_incident_live_updates(
+    request: Request,
+    project_id: str = Query(min_length=1, max_length=128),
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    autonomous_service: AutonomousRunService = Depends(get_autonomous_run_service),
+) -> StreamingResponse:
+    await require_project_list_access(request, project_id, repository=security_repository)
+
+    async def build_snapshot() -> dict[str, object]:
+        incidents, _total = await repository.list_incidents(
+            project_id=project_id,
+            status=None,
+            limit=100,
+            offset=0,
+        )
+        transitions: list[dict[str, object]] = []
+        open_incidents = 0
+        repairing_incidents = 0
+        for incident in incidents:
+            if incident.status is IncidentStatus.OPEN:
+                open_incidents += 1
+            try:
+                detail = await autonomous_service.get_latest_run_detail(incident.id)
+            except APIError:
+                continue
+            if detail.run.status in {
+                AutonomousRunStatus.RUNNING,
+                AutonomousRunStatus.QUEUED,
+            }:
+                repairing_incidents += 1
+            transitions.append(
+                {
+                    "incident_id": incident.id,
+                    "incident_title": incident.title,
+                    "run_id": detail.run.id,
+                    "status": detail.run.status.value,
+                    "phase": detail.run.phase.value,
+                    "updated_at": detail.run.updated_at.isoformat(),
+                    "last_event": detail.events[-1].summary if detail.events else None,
+                    "promotion_url": detail.run.promotion_url,
+                }
+            )
+        transitions.sort(key=lambda item: str(item["updated_at"]), reverse=True)
+        return {
+            "project_id": project_id,
+            "open_incidents": open_incidents,
+            "repairing_incidents": repairing_incidents,
+            "recent_transitions": transitions[:8],
+        }
+
+    initial_snapshot = await build_snapshot()
+
+    async def event_generator():
+        yield _format_sse(initial_snapshot)
+        last_serialized = json.dumps(initial_snapshot, sort_keys=True)
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(1)
+            try:
+                snapshot = await build_snapshot()
+            except APIError:
+                break
+            serialized = json.dumps(snapshot, sort_keys=True)
+            if serialized != last_serialized:
+                yield _format_sse(snapshot)
+                last_serialized = serialized
+            else:
+                yield ": keep-alive\n\n"
 
     return StreamingResponse(
         event_generator(),

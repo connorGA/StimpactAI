@@ -32,9 +32,13 @@ import type {
   ProviderIntegration,
   ProviderRepository,
   ProjectSummary,
+  ReclassifyFingerprintResponse,
   RepoProfile,
   SandboxRunQueuedResponse,
   SecretRef,
+  SuppressedFingerprintListResponse,
+  SuppressionSummary,
+  TelemetryClassification,
 } from "@/lib/types";
 import { SESSION_COOKIE_NAME } from "@/lib/auth-session";
 
@@ -327,6 +331,51 @@ export async function createIncidentDetailChat(
     path: `/incidents/${incidentId}/chat`,
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function listSuppressedTelemetry(
+  projectId: string,
+  options?: { limit?: number },
+): Promise<SuppressedFingerprintListResponse> {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (options?.limit) {
+    params.set("limit", String(options.limit));
+  }
+  return fetchFromAgentPlatform<SuppressedFingerprintListResponse>({
+    path: `/incidents/noise?${params.toString()}`,
+    method: "GET",
+  });
+}
+
+export async function getSuppressionSummary(
+  projectId: string,
+  options?: { windowMinutes?: number },
+): Promise<SuppressionSummary> {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (options?.windowMinutes) {
+    params.set("window_minutes", String(options.windowMinutes));
+  }
+  return fetchFromAgentPlatform<SuppressionSummary>({
+    path: `/incidents/noise/summary?${params.toString()}`,
+    method: "GET",
+  });
+}
+
+export async function reclassifyFingerprint(input: {
+  projectId: string;
+  fingerprint: string;
+  classification: TelemetryClassification;
+  reason?: string;
+}): Promise<ReclassifyFingerprintResponse> {
+  return fetchFromAgentPlatform<ReclassifyFingerprintResponse>({
+    path: `/incidents/noise/${encodeURIComponent(input.fingerprint)}/reclassify`,
+    method: "POST",
+    body: JSON.stringify({
+      project_id: input.projectId,
+      classification: input.classification,
+      reason: input.reason ?? null,
+    }),
   });
 }
 

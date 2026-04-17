@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from api.repositories.control_plane_repository import ControlPlaneRepository
 from api.repositories.incident_repository import IncidentRepository
+from api.repositories.telemetry_repository import PostgresTelemetryRepository
 from models.incident import IncidentProcessingResult, IncidentSeverity, TelemetryRecord
+from models.normalized_telemetry import NormalizedTelemetry
+from services.telemetry_classifier import (
+    Classification,
+    ClassificationResult,
+    TelemetryClassifier,
+)
 from shared.events.incident_events import IncidentEvent
-from shared.types.telemetry import Environment
+from shared.types.telemetry import Environment, HttpRequestContext, HttpResponseContext
+
+logger = logging.getLogger(__name__)
 
 
 class IncidentCreationService:
@@ -14,13 +24,46 @@ class IncidentCreationService:
         self,
         repository: IncidentRepository,
         control_plane_repository: ControlPlaneRepository | None = None,
+        *,
+        classifier: TelemetryClassifier | None = None,
+        telemetry_repository: PostgresTelemetryRepository | None = None,
     ) -> None:
         self._repository = repository
         self._control_plane_repository = control_plane_repository
+        self._classifier = classifier
+        self._telemetry_repository = telemetry_repository
 
     async def process_telemetry_received(self, payload: dict[str, Any]) -> IncidentProcessingResult:
         event = IncidentEvent.model_validate(payload)
         telemetry = await self._repository.get_telemetry(event.telemetry_id)
+
+        verdict = await self._run_classifier(telemetry)
+        if verdict is not None:
+            await self._persist_classification(telemetry.id, verdict)
+
+        if verdict is not None and verdict.classification == Classification.USER_ERROR:
+            logger.info(
+                "telemetry_suppressed_as_user_error",
+                extra={
+                    "telemetry_id": telemetry.id,
+                    "project_id": telemetry.project_id,
+                    "fingerprint": telemetry.fingerprint,
+                    "classifier_source": verdict.source,
+                    "classifier_reason": verdict.reason,
+                },
+            )
+            return IncidentProcessingResult(
+                incident_id=None,
+                created_new_incident=False,
+                attached_telemetry=False,
+                severity=determine_incident_severity(telemetry),
+                event_count=0,
+                suppressed=True,
+                classification=verdict.classification.value,
+                classification_reason=verdict.reason,
+                classification_source=verdict.source,
+            )
+
         severity = determine_incident_severity(telemetry)
         title = build_incident_title(telemetry)
         project_service_id = None
@@ -35,7 +78,7 @@ class IncidentCreationService:
                 project_service_id = resolved_service.id
                 repo_profile_id = resolved_service.repo_profile_id
 
-        return await self._repository.attach_to_incident(
+        result = await self._repository.attach_to_incident(
             telemetry=telemetry,
             event_type=event.event_type.value,
             event_payload=event.model_dump(mode="json"),
@@ -44,6 +87,105 @@ class IncidentCreationService:
             project_service_id=project_service_id,
             repo_profile_id=repo_profile_id,
         )
+
+        if verdict is not None:
+            result = result.model_copy(
+                update={
+                    "classification": verdict.classification.value,
+                    "classification_reason": verdict.reason,
+                    "classification_source": verdict.source,
+                    "requires_human_approval": (
+                        verdict.classification == Classification.CODE_AMBIGUOUS
+                    ),
+                }
+            )
+        return result
+
+    async def _run_classifier(
+        self, telemetry: TelemetryRecord
+    ) -> ClassificationResult | None:
+        if self._classifier is None:
+            return None
+        normalized = _telemetry_record_to_normalized(telemetry)
+        try:
+            verdict = await self._classifier.classify(normalized)
+        except Exception:
+            logger.exception(
+                "telemetry_classifier_failed_open",
+                extra={
+                    "telemetry_id": telemetry.id,
+                    "project_id": telemetry.project_id,
+                    "fingerprint": telemetry.fingerprint,
+                },
+            )
+            return None
+        logger.info(
+            "telemetry_classification",
+            extra={
+                "telemetry_id": telemetry.id,
+                "project_id": telemetry.project_id,
+                "fingerprint": telemetry.fingerprint,
+                "classification": verdict.classification.value,
+                "source": verdict.source,
+                "classifier_source": verdict.source,
+                "classifier_confidence": verdict.confidence,
+                "suppressed": verdict.classification == Classification.USER_ERROR,
+                "requires_human_approval": (
+                    verdict.classification == Classification.CODE_AMBIGUOUS
+                ),
+            },
+        )
+        return verdict
+
+    async def _persist_classification(
+        self, telemetry_id: str, verdict: ClassificationResult
+    ) -> None:
+        if self._telemetry_repository is None:
+            return
+        try:
+            await self._telemetry_repository.update_classification(
+                telemetry_id,
+                classification=verdict.classification.value,
+                reason=verdict.reason,
+                source=verdict.source,
+            )
+        except Exception:
+            logger.exception(
+                "telemetry_classification_persist_failed",
+                extra={"telemetry_id": telemetry_id},
+            )
+
+
+def _telemetry_record_to_normalized(telemetry: TelemetryRecord) -> NormalizedTelemetry:
+    request_payload = telemetry.request_payload
+    response_payload = telemetry.response_payload
+    request_context: HttpRequestContext | None = None
+    response_context: HttpResponseContext | None = None
+    if isinstance(request_payload, dict):
+        try:
+            request_context = HttpRequestContext.model_validate(request_payload)
+        except Exception:
+            request_context = None
+    if isinstance(response_payload, dict):
+        try:
+            response_context = HttpResponseContext.model_validate(response_payload)
+        except Exception:
+            response_context = None
+    return NormalizedTelemetry(
+        id=telemetry.id,
+        project_id=telemetry.project_id,
+        environment=telemetry.environment,
+        service=telemetry.service,
+        error_message=telemetry.error_message,
+        stacktrace=telemetry.stacktrace,
+        fingerprint=telemetry.fingerprint,
+        request=request_context,
+        response=response_context,
+        commit_sha=telemetry.commit_sha,
+        handled=telemetry.handled,
+        occurred_at=telemetry.occurred_at,
+        received_at=telemetry.received_at,
+    )
 
 
 def determine_incident_severity(telemetry: TelemetryRecord) -> IncidentSeverity:

@@ -1,0 +1,66 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-16T18:17:29.006754Z",
+  "created_at": "2026-04-16T18:16:31.290471Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "c9dd11d4-573d-4ddc-b683-b5129d92162c",
+  "last_error": null,
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "4efa3394-4e8e-434f-9035-4c01f033227d"
+    },
+    "passed": true,
+    "recorded_at": "2026-04-16T18:17:43.591583Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident, applied the patch, and verified the candidate fix."
+  },
+  "narrative_generated_at": "2026-04-16T18:18:11.859937Z",
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Invalid Credentials.' for service Soul Song Service.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-c9dd11d4-ro0uux8t/repo",
+  "root_cause_explanation": "The issue was in the login page\u2019s error-handling path, not confirmed as a real credential rejection by the authentication provider. When an async login request failed, the frontend assumed the thrown value always had a `.message` field, which could surface the wrong \u201cInvalid Credentials\u201d style error or mishandle non-Error exceptions in `client/src/pages/Login.tsx`.",
+  "run_id": "b5b5d2e1-dbde-4e94-bc4f-c9616f10c461",
+  "solution_description": "The repair updated the login failure handling to safely process unknown exceptions by checking whether the caught value is a real `Error` before reading its message, and otherwise falling back to a clear default login failure message. This makes the Soul Song Service show reliable authentication errors without breaking on unexpected async error shapes, and the fix was verified successfully with a production-targeted sandbox build (`npm run build`).",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 7,
+  "total_tool_calls": 0
+}

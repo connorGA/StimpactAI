@@ -360,3 +360,53 @@ class IncidentSandboxRunDetailResponse(BaseModel):
     steps: list[SandboxRunStepResponse] = Field(default_factory=list)
     attempts: list[SandboxRunAttemptResponse] = Field(default_factory=list)
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
+
+
+class SuppressedFingerprintResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    fingerprint: str
+    classification: str
+    classification_reason: str | None = None
+    classification_source: str | None = None
+    service: str
+    error_message: str
+    first_occurred_at: datetime
+    last_occurred_at: datetime
+    occurrence_count: int
+    last_classified_at: datetime | None = None
+
+
+class SuppressedFingerprintListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SuppressedFingerprintResponse] = Field(default_factory=list)
+
+
+class SuppressionSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    window_minutes: int
+    user_error_event_count: int = 0
+    user_error_unique_fingerprints: int = 0
+    code_ambiguous_event_count: int = 0
+    code_ambiguous_unique_fingerprints: int = 0
+
+
+class ReclassifyFingerprintRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    classification: str = Field(min_length=1, max_length=32)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ReclassifyFingerprintResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    fingerprint: str
+    classification: str
+    reason: str | None = None

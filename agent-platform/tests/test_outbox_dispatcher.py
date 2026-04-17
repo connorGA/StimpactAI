@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from models.incident import IncidentProcessingResult, IncidentSeverity
 from workers.outbox_dispatcher import OutboxDispatcher
 
@@ -34,16 +36,17 @@ class StubOutboxRepository:
 class StubIncidentCreationService:
     def __init__(self) -> None:
         self.payloads: list[dict[str, object]] = []
-
-    async def process_telemetry_received(self, payload: dict[str, object]) -> IncidentProcessingResult:
-        self.payloads.append(payload)
-        return IncidentProcessingResult(
+        self.result = IncidentProcessingResult(
             incident_id="incident-1",
             created_new_incident=True,
             attached_telemetry=True,
             severity=IncidentSeverity.CRITICAL,
             event_count=1,
         )
+
+    async def process_telemetry_received(self, payload: dict[str, object]) -> IncidentProcessingResult:
+        self.payloads.append(payload)
+        return self.result
 
 
 async def test_outbox_dispatcher_processes_supported_events() -> None:
@@ -91,3 +94,92 @@ async def test_outbox_dispatcher_marks_invalid_payloads_as_failed() -> None:
     assert retry_delay == 30
     assert "Expecting value" in error_message
     assert repository.reclaimed_with == [300]
+
+
+class StubAutonomousRunService:
+    pass
+
+
+@pytest.mark.asyncio
+async def test_outbox_dispatcher_does_not_trigger_autonomous_run_for_suppressed_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = StubOutboxRepository(
+        [
+            {
+                "id": "event-3",
+                "event_type": "telemetry.received",
+                "payload": {"telemetry_id": "telemetry-1"},
+            }
+        ]
+    )
+    service = StubIncidentCreationService()
+    service.result = IncidentProcessingResult(
+        incident_id=None,
+        created_new_incident=False,
+        attached_telemetry=False,
+        severity=IncidentSeverity.HIGH,
+        event_count=0,
+        suppressed=True,
+        classification="user_error",
+        classification_source="rules",
+    )
+    trigger_calls: list[dict[str, object]] = []
+
+    async def _fake_trigger(**kwargs):
+        trigger_calls.append(kwargs)
+
+    monkeypatch.setattr("workers.outbox_dispatcher.trigger_autonomous_run_for_new_incident", _fake_trigger)
+
+    dispatcher = OutboxDispatcher(repository, service, autonomous_run_service=StubAutonomousRunService())
+    processed = await dispatcher.run_once()
+
+    assert processed == 1
+    assert repository.processed_ids == ["event-3"]
+    assert trigger_calls == []
+
+
+@pytest.mark.asyncio
+async def test_outbox_dispatcher_propagates_human_approval_requirement_to_autonomous_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = StubOutboxRepository(
+        [
+            {
+                "id": "event-4",
+                "event_type": "telemetry.received",
+                "payload": {"telemetry_id": "telemetry-1"},
+            }
+        ]
+    )
+    service = StubIncidentCreationService()
+    service.result = IncidentProcessingResult(
+        incident_id="incident-7",
+        created_new_incident=True,
+        attached_telemetry=True,
+        severity=IncidentSeverity.MEDIUM,
+        event_count=1,
+        classification="code_ambiguous",
+        classification_source="llm",
+        requires_human_approval=True,
+    )
+    trigger_calls: list[dict[str, object]] = []
+
+    async def _fake_trigger(**kwargs):
+        trigger_calls.append(kwargs)
+
+    monkeypatch.setattr("workers.outbox_dispatcher.trigger_autonomous_run_for_new_incident", _fake_trigger)
+    autonomous_service = StubAutonomousRunService()
+
+    dispatcher = OutboxDispatcher(repository, service, autonomous_run_service=autonomous_service)
+    processed = await dispatcher.run_once()
+
+    assert processed == 1
+    assert repository.processed_ids == ["event-4"]
+    assert trigger_calls == [
+        {
+            "incident_id": "incident-7",
+            "autonomous_run_service": autonomous_service,
+            "processing_result": service.result,
+        }
+    ]

@@ -1,0 +1,66 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-17T03:46:19.677504Z",
+  "created_at": "2026-04-17T03:44:38.331506Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": false,
+  "incident_id": "40828d67-b504-41af-baab-a1ffa418343c",
+  "last_error": "Sandbox reproduced the incident but failed to apply the generated patch.",
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": false,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "add57744-258d-430c-9dd5-47e8ec6de522"
+    },
+    "passed": false,
+    "recorded_at": "2026-04-17T03:46:34.472096Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident but failed to apply the generated patch."
+  },
+  "narrative_generated_at": null,
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON' for service Soul Song Service.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "blocked",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-40828d67-vk10cjqr/repo",
+  "root_cause_explanation": null,
+  "run_id": "536b82c3-cdf1-4603-b666-8301028ba775",
+  "solution_description": null,
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 16,
+  "total_tool_calls": 0
+}

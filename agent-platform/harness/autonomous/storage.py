@@ -37,7 +37,7 @@ class AutonomousRunArtifactStore:
     def persist_outcome(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunOutcome:
         artifact_paths = self.get_artifact_paths(snapshot.run.incident_id, snapshot.run.id)
         outcome = self.build_outcome(snapshot)
-        self._write_json(Path(artifact_paths.outcome_path or self._outcome_path(snapshot.run.incident_id, snapshot.run.id)), outcome.model_dump(mode="json"))
+        self.write_outcome(snapshot.run.incident_id, snapshot.run.id, outcome)
         return outcome
 
     def list_runs(self, incident_id: str) -> list[AutonomousRepairRunRecord]:
@@ -78,9 +78,21 @@ class AutonomousRunArtifactStore:
         if outcome_path.exists():
             outcome_path.unlink()
 
+    def write_outcome(
+        self,
+        incident_id: str | None,
+        run_id: str,
+        outcome: AutonomousRunOutcome,
+    ) -> None:
+        self._write_json(
+            Path(self._outcome_path(incident_id, run_id)),
+            outcome.model_dump(mode="json"),
+        )
+
     def build_outcome(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunOutcome:
         run = snapshot.run
         events = snapshot.events
+        preserved_outcome = self.get_outcome(run.incident_id, run.id)
         return AutonomousRunOutcome(
             run_id=run.id,
             incident_id=run.incident_id,
@@ -102,6 +114,15 @@ class AutonomousRunArtifactStore:
             total_events=len(events),
             last_error=run.last_error,
             latest_verification=run.latest_verification,
+            root_cause_explanation=(
+                preserved_outcome.root_cause_explanation if preserved_outcome is not None else None
+            ),
+            solution_description=(
+                preserved_outcome.solution_description if preserved_outcome is not None else None
+            ),
+            narrative_generated_at=(
+                preserved_outcome.narrative_generated_at if preserved_outcome is not None else None
+            ),
             final_success=run.status is AutonomousRunStatus.SUCCEEDED and run.latest_verification is not None and run.latest_verification.passed,
             fresh_verification_satisfied=run.latest_verification is not None and run.latest_verification.passed,
             failure_class=run.loop_state.last_failure.failure_class if run.loop_state.last_failure is not None else None,

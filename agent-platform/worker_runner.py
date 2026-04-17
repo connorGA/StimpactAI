@@ -16,6 +16,10 @@ from api.core.config import (
     get_kubernetes_monitor_interval_seconds,
     get_openai_api_key,
     get_openai_patch_model,
+    get_telemetry_classifier_enabled,
+    get_telemetry_classifier_frequency_threshold,
+    get_telemetry_classifier_model,
+    get_telemetry_classifier_window_minutes,
     get_worker_idle_seconds,
     validate_runtime_configuration,
 )
@@ -27,16 +31,21 @@ from api.repositories.artifact_repository import ArtifactRepository
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.autonomous_repository import AutonomousRunRepository
 from api.repositories.control_plane_repository import ControlPlaneRepository
+from api.repositories.fingerprint_classification_repository import (
+    FingerprintClassificationRepository,
+)
 from api.repositories.incident_repository import IncidentRepository
 from api.repositories.outbox_repository import OutboxRepository
 from api.repositories.patch_repository import PatchRepository
 from api.repositories.sandbox_repository import SandboxRepository
+from api.repositories.telemetry_repository import PostgresTelemetryRepository
 from services.autonomous_runs import AutonomousRunService
 from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter
 from services.code_context import CodeContextService
 from services.failure_classifier import FailureClassifier
 from services.incident_creation import IncidentCreationService
 from services.patch_generation import PatchGenerationService
+from services.telemetry_classifier import TelemetryClassifier
 from services.provider_integration_service import ProviderIntegrationService
 from services.sandbox_verification import SandboxVerificationService
 from workers.autonomous_job_dispatcher import AutonomousJobDispatcher
@@ -171,11 +180,29 @@ async def _run_outbox_worker(stop_event: asyncio.Event) -> None:
                 patch_repository=patch_repository,
                 provider_integration_service=provider_integration_service,
             )
+            telemetry_repository = PostgresTelemetryRepository(manager.pool)
+            classifier: TelemetryClassifier | None = None
+            if get_telemetry_classifier_enabled():
+                openai_key = get_openai_api_key()
+                classifier = TelemetryClassifier(
+                    fingerprint_repository=FingerprintClassificationRepository(manager.pool),
+                    telemetry_repository=telemetry_repository,
+                    openai_client=AsyncOpenAI(api_key=openai_key) if openai_key else None,
+                    openai_model=get_telemetry_classifier_model() if openai_key else None,
+                    frequency_window_minutes=get_telemetry_classifier_window_minutes(),
+                    frequency_threshold=get_telemetry_classifier_frequency_threshold(),
+                )
+                logger.info("telemetry_classifier_enabled window_minutes=%s threshold=%s llm=%s",
+                            get_telemetry_classifier_window_minutes(),
+                            get_telemetry_classifier_frequency_threshold(),
+                            bool(openai_key))
             dispatcher = OutboxDispatcher(
                 repository,
                 IncidentCreationService(
                     incident_repository,
                     control_plane_repository=control_plane_repository,
+                    classifier=classifier,
+                    telemetry_repository=telemetry_repository,
                 ),
                 signal_bus=outbox_signal_bus,
                 autonomous_run_service=autonomous_run_service,

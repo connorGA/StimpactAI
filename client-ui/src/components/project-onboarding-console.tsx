@@ -2146,10 +2146,10 @@ export function ProjectOnboardingConsole() {
       }
       setTelemetryCreateOriginDraft("");
       setTelemetryKeyPlaintext(created.plaintext_key);
-      if (telemetryUsesBrowserCredential) {
+      if (telemetryUsesBrowserCredential && "browser_key" in created) {
         setTelemetryGeneratedBrowserKeyId(created.browser_key.id);
         setTelemetryGeneratedApiKeyId(null);
-      } else {
+      } else if ("api_key" in created) {
         setTelemetryGeneratedApiKeyId(created.api_key.id);
         setTelemetryGeneratedBrowserKeyId(null);
       }

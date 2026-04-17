@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 type AppShellNavProps = {
   mobile?: boolean;
   compact?: boolean;
   pendingHref?: string | null;
   onNavigate?: (href: string) => void;
+  /** Refetch open-incident count when the active project changes. */
+  currentProjectId?: string | null;
 };
 
 const navItems = [
@@ -66,8 +69,10 @@ export function AppShellNav({
   compact = false,
   pendingHref = null,
   onNavigate,
+  currentProjectId = null,
 }: AppShellNavProps) {
   const pathname = usePathname();
+  const openIncidentCount = useOpenIncidentCount(currentProjectId);
 
   if (mobile) {
     return (
@@ -83,11 +88,14 @@ export function AppShellNav({
               key={item.href}
               href={item.href}
               onClick={() => onNavigate?.(item.href)}
-              className={`vault-nav-link min-w-fit rounded-xl border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#f5f8ff,#e8f0fb)] px-4 py-2 text-sm font-medium shadow-[0_8px_20px_rgba(15,23,42,0.04)] transition ${
+              className={`vault-nav-link flex min-w-fit items-center gap-2 rounded-xl border border-[rgba(17,24,39,0.08)] bg-[linear-gradient(180deg,#f5f8ff,#e8f0fb)] px-4 py-2 text-sm font-medium shadow-[0_8px_20px_rgba(15,23,42,0.04)] transition ${
                 isActive ? "vault-nav-link-active" : ""
               }`}
             >
-              {item.label}
+              <span>{item.label}</span>
+              {item.href === "/incidents" ? (
+                <OpenIncidentsBadge count={openIncidentCount} />
+              ) : null}
             </Link>
           );
         })}
@@ -115,8 +123,13 @@ export function AppShellNav({
                 }`}
               >
                 <div className={`flex items-center justify-between gap-3 ${compact ? "justify-center" : ""}`}>
-                  <div className={compact ? "hidden" : "block"}>
-                    <p className="text-sm font-semibold">{item.label}</p>
+                  <div className={compact ? "hidden" : "block min-w-0 flex-1"}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold">{item.label}</p>
+                      {item.href === "/incidents" ? (
+                        <OpenIncidentsBadge count={openIncidentCount} />
+                      ) : null}
+                    </div>
                     <p className="mt-1 text-xs opacity-70">{item.description}</p>
                   </div>
                   {compact ? (
@@ -135,6 +148,54 @@ export function AppShellNav({
         </nav>
       </div>
     </div>
+  );
+}
+
+function useOpenIncidentCount(currentProjectId: string | null) {
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const response = await fetch("/api/incidents/reporting/overview", { cache: "no-store" });
+        const data = (await response.json()) as { open_incidents?: number };
+        if (!cancelled && typeof data.open_incidents === "number") {
+          setCount(data.open_incidents);
+        }
+      } catch {
+        if (!cancelled) {
+          setCount(null);
+        }
+      }
+    }
+
+    void load();
+    const interval = window.setInterval(load, 45_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [currentProjectId]);
+
+  return count;
+}
+
+function OpenIncidentsBadge({ count }: { count: number | null }) {
+  if (count === null || count < 1) {
+    return null;
+  }
+
+  const label = count > 99 ? "99+" : String(count);
+
+  return (
+    <span
+      title={`${count} open incident${count === 1 ? "" : "s"} in this project`}
+      className="inline-flex min-h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full border border-[rgba(255,106,61,0.45)] bg-[rgba(255,106,61,0.22)] px-1.5 text-[10px] font-bold tabular-nums leading-none text-[#ffd0bc]"
+    >
+      {label}
+    </span>
   );
 }
 
