@@ -1,4 +1,4 @@
-export type IncidentStatus = "open" | "resolved";
+export type IncidentStatus = "open" | "acknowledged" | "resolved";
 export type IncidentSeverity = "low" | "medium" | "high" | "critical";
 export type Environment = "production" | "staging" | "development" | "test";
 export type FailureCategory =

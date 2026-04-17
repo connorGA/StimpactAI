@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Protocol
@@ -101,6 +103,17 @@ class LocalSandboxRunner:
                         summary="Sandbox failed to restore the requested baseline before verification.",
                         execution_log="\n\n".join(logs),
                     )
+                current_head_result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=workspace,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                # region agent log
+                with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
+                    debug_log.write(json.dumps({"sessionId": "31f43d", "runId": patch_run_id, "hypothesisId": "H3", "location": "agent-platform/sandbox/runner.py:105", "message": "sandbox workspace prepared", "data": {"incidentId": incident_id, "repositoryRoot": str(repository_root), "workspace": str(workspace), "baselineRef": baseline_ref, "workspaceHead": current_head_result.stdout.strip() if current_head_result.returncode == 0 else None, "checkoutReturncode": checkout_result.returncode}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
+                # endregion
             materialized_secret_files = self._materialize_secret_files(
                 workspace=workspace,
                 secret_files=secret_files or {},
@@ -170,6 +183,10 @@ class LocalSandboxRunner:
             )
             logs.append(apply_result.log_text)
             if apply_result.returncode != 0:
+                # region agent log
+                with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
+                    debug_log.write(json.dumps({"sessionId": "31f43d", "runId": patch_run_id, "hypothesisId": "H4", "location": "agent-platform/sandbox/runner.py:173", "message": "sandbox patch apply failed", "data": {"incidentId": incident_id, "workspace": str(workspace), "returncode": apply_result.returncode, "logExcerpt": apply_result.log_text[-3000:], "patchHeader": patch_diff.splitlines()[:12]}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
+                # endregion
                 return SandboxExecutionResult(
                     reproduction_succeeded=reproduction_observed,
                     patch_applied=False,

@@ -57,6 +57,7 @@ from api.schemas.incidents import (
 )
 from harness.schemas.autonomous import AutonomousRepairRunRecord, AutonomousRunStatus
 from models.incident import IncidentStatus
+from models.sandbox import SandboxRunStatus
 from services.autonomous_runs import AutonomousRunService
 from services.code_context import CodeContextService
 from services.failure_classifier import FailureClassifier
@@ -269,6 +270,30 @@ async def list_incidents(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch(
+    "/{incident_id}/acknowledge",
+    response_model=IncidentSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def acknowledge_incident(
+    request: Request,
+    incident_id: str,
+    repository: IncidentRepository = Depends(get_incident_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+) -> IncidentSummaryResponse:
+    await _require_incident_access(
+        request=request,
+        incident_id=incident_id,
+        incident_repository=repository,
+        security_repository=security_repository,
+    )
+    updated = await repository.update_incident_status(
+        incident_id,
+        IncidentStatus.ACKNOWLEDGED,
+    )
+    return IncidentSummaryResponse.from_record(updated)
 
 
 @router.patch(

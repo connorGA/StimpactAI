@@ -324,6 +324,39 @@ class SandboxVerificationService:
             attempt_started_at=run_attempt.started_at,
         )
 
+    async def reconcile_async_job_failure(
+        self,
+        job: AsyncJobRecord,
+        *,
+        error_message: str,
+    ) -> SandboxRunRecord | None:
+        if job.job_type is not AsyncJobType.SANDBOX_RUN:
+            return None
+        incident_id = str(job.payload.get("incident_id") or "")
+        if not incident_id:
+            return None
+        sandbox_run = await self._find_run_by_async_job(job.id, incident_id)
+        if sandbox_run is None:
+            return None
+        if sandbox_run.status is SandboxRunStatus.FAILED:
+            return sandbox_run
+        await self._sandbox_repository.create_sandbox_run_step(
+            sandbox_run_id=sandbox_run.id,
+            step_name="dispatcher-failure",
+            status=SandboxRunStatus.FAILED,
+            command="sandbox worker dispatcher",
+            summary=error_message,
+            artifact_id=None,
+            exit_code=1,
+            finished=True,
+        )
+        return await self._sandbox_repository.update_sandbox_run(
+            sandbox_run.id,
+            status=SandboxRunStatus.FAILED,
+            summary=error_message,
+            execution_log=(sandbox_run.execution_log + "\n\n" if sandbox_run.execution_log else "") + error_message,
+        )
+
     async def poll_kubernetes_runs(self, *, limit: int = 50) -> list[SandboxRunRecord]:
         runs = await self._sandbox_repository.list_active_kubernetes_runs(limit=limit)
         updated_runs: list[SandboxRunRecord] = []

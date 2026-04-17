@@ -47,13 +47,15 @@ WHERE incident_events.telemetry_id = $1
 LIMIT 1;
 """
 
-SELECT_OPEN_INCIDENT_FOR_UPDATE_SQL = """
+SELECT_ACTIVE_INCIDENT_FOR_UPDATE_SQL = """
 SELECT *
 FROM incidents
 WHERE project_id = $1
   AND fingerprint = $2
-  AND status = 'open'
-ORDER BY created_at ASC
+  AND status IN ('open', 'acknowledged')
+ORDER BY
+    CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+    created_at ASC
 FOR UPDATE
 LIMIT 1;
 """
@@ -88,6 +90,9 @@ SET last_seen_at = GREATEST(last_seen_at, $2),
     severity = $4,
     project_service_id = COALESCE($5, project_service_id),
     repo_profile_id = COALESCE($6, repo_profile_id),
+    status = CASE WHEN status = 'acknowledged' THEN 'open' ELSE status END,
+    resolved_at = NULL,
+    resolution_source = NULL,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -286,7 +291,7 @@ class IncidentRepository:
                         )
 
                     incident_row = await connection.fetchrow(
-                        SELECT_OPEN_INCIDENT_FOR_UPDATE_SQL,
+                        SELECT_ACTIVE_INCIDENT_FOR_UPDATE_SQL,
                         telemetry.project_id,
                         telemetry.fingerprint,
                     )
@@ -312,7 +317,7 @@ class IncidentRepository:
                             created_new_incident = True
                         except asyncpg.UniqueViolationError:
                             incident_row = await connection.fetchrow(
-                                SELECT_OPEN_INCIDENT_FOR_UPDATE_SQL,
+                                SELECT_ACTIVE_INCIDENT_FOR_UPDATE_SQL,
                                 telemetry.project_id,
                                 telemetry.fingerprint,
                             )

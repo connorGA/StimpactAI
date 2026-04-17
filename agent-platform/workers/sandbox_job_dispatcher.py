@@ -48,6 +48,12 @@ class SandboxJobDispatcher:
                     status=AsyncJobStatus.FAILED,
                     last_error=str(exc),
                 )
+                failed_run = await self._service.reconcile_async_job_failure(
+                    job,
+                    error_message=str(exc),
+                )
+                if failed_run is not None and self._autonomous_run_service is not None:
+                    await self._autonomous_run_service.record_sandbox_result(failed_run)
                 await self._repository.create_job_attempt(
                     async_job_id=job.id,
                     worker_id=self._worker_id,

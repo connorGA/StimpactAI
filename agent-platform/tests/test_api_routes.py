@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from api.core.errors import APIError, register_exception_handlers
 from api.middleware.telemetry_cors import install_telemetry_cors_middleware
@@ -86,7 +88,13 @@ from models.control_plane import (
     SecretRefRecord,
 )
 from models.failure_classification import FailureCategory, FailureClassification
-from models.incident import IncidentEventRecord, IncidentRecord, IncidentSeverity, IncidentStatus
+from models.incident import (
+    IncidentEventRecord,
+    IncidentProcessingResult,
+    IncidentRecord,
+    IncidentSeverity,
+    IncidentStatus,
+)
 from models.live_operations_metrics import LiveOperationsMetricsRecord
 from models.patch import PatchRunRecord, PatchRunStatus, PatchTargetFile
 from models.root_cause import RootCauseAnalysis, RootCauseEvidence, RootCauseReasoning
@@ -183,6 +191,7 @@ class StubIncidentRepository:
             )
         ]
         self.last_list_kwargs: dict[str, object] | None = None
+        self.status_updates: list[IncidentStatus] = []
 
     async def list_incidents(
         self,
@@ -219,6 +228,19 @@ class StubIncidentRepository:
             agent_resolution_percent_last_30d=50.0,
             agent_resolution_percent_prior_30d=40.0,
         )
+
+    async def update_incident_status(
+        self,
+        incident_id: str,
+        new_status: IncidentStatus,
+        *,
+        resolution_source: str | None = None,
+    ) -> IncidentRecord:
+        _ = resolution_source
+        assert incident_id == self.incident.id
+        self.status_updates.append(new_status)
+        self.incident = self.incident.model_copy(update={"status": new_status})
+        return self.incident
 
 
 class StubFailureClassifier:
@@ -1399,6 +1421,129 @@ def test_ingest_error_returns_accepted_response_and_signals_outbox(caplog) -> No
     assert any("telemetry_error_accepted" in message for message in caplog.messages)
 
 
+@pytest.mark.asyncio
+async def test_process_telemetry_outbox_inline_triggers_for_existing_incident_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telemetry_module = importlib.import_module("api.routes.telemetry")
+    trigger_module = importlib.import_module("services.autonomous_trigger")
+    incident_repo_module = importlib.import_module("api.repositories.incident_repository")
+    control_repo_module = importlib.import_module("api.repositories.control_plane_repository")
+    async_job_module = importlib.import_module("api.repositories.async_job_repository")
+    autonomous_repo_module = importlib.import_module("api.repositories.autonomous_repository")
+    patch_repo_module = importlib.import_module("api.repositories.patch_repository")
+    telemetry_repo_module = importlib.import_module("api.repositories.telemetry_repository")
+    outbox_repo_module = importlib.import_module("api.repositories.outbox_repository")
+    provider_module = importlib.import_module("services.provider_integration_service")
+    asm_module = importlib.import_module("services.aws_secrets_manager")
+    autonomous_runs_module = importlib.import_module("services.autonomous_runs")
+    incident_creation_module = importlib.import_module("services.incident_creation")
+
+    trigger_calls: list[dict[str, object]] = []
+    marked_processed: list[str] = []
+
+    class StubIncidentRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubControlPlaneRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubTelemetryRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubAsyncJobRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubAutonomousRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubPatchRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+    class StubOutboxRepository:
+        def __init__(self, pool) -> None:
+            self.pool = pool
+
+        async def mark_processed(self, event_id: str) -> None:
+            marked_processed.append(event_id)
+
+    class StubProviderIntegrationService:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class StubSecretsWriter:
+        pass
+
+    class StubSecretsReader:
+        pass
+
+    class StubAutonomousRunServiceInline:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class StubIncidentCreationService:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        async def process_telemetry_received(self, payload):
+            assert payload == {"telemetry_id": "telemetry-1"}
+            return IncidentProcessingResult(
+                incident_id="incident-1",
+                created_new_incident=False,
+                attached_telemetry=True,
+                severity=IncidentSeverity.HIGH,
+                event_count=2,
+            )
+
+    async def _fake_trigger(**kwargs):
+        trigger_calls.append(kwargs)
+
+    monkeypatch.setattr(telemetry_module, "get_telemetry_classifier_enabled", lambda: False, raising=False)
+    monkeypatch.setattr(incident_repo_module, "IncidentRepository", StubIncidentRepository)
+    monkeypatch.setattr(control_repo_module, "ControlPlaneRepository", StubControlPlaneRepository)
+    monkeypatch.setattr(telemetry_repo_module, "PostgresTelemetryRepository", StubTelemetryRepository)
+    monkeypatch.setattr(async_job_module, "AsyncJobRepository", StubAsyncJobRepository)
+    monkeypatch.setattr(autonomous_repo_module, "AutonomousRunRepository", StubAutonomousRepository)
+    monkeypatch.setattr(patch_repo_module, "PatchRepository", StubPatchRepository)
+    monkeypatch.setattr(outbox_repo_module, "OutboxRepository", StubOutboxRepository)
+    monkeypatch.setattr(provider_module, "ProviderIntegrationService", StubProviderIntegrationService)
+    monkeypatch.setattr(asm_module, "AwsSecretsManagerWriter", StubSecretsWriter)
+    monkeypatch.setattr(asm_module, "AwsSecretsManagerReader", StubSecretsReader)
+    monkeypatch.setattr(autonomous_runs_module, "AutonomousRunService", StubAutonomousRunServiceInline)
+    monkeypatch.setattr(incident_creation_module, "IncidentCreationService", StubIncidentCreationService)
+    monkeypatch.setattr(trigger_module, "trigger_autonomous_run_for_new_incident", _fake_trigger)
+
+    await telemetry_module._process_telemetry_outbox_inline(
+        pool=object(),
+        outbox_event_id="outbox-1",
+        incident_payload={"telemetry_id": "telemetry-1"},
+    )
+
+    assert marked_processed == ["outbox-1"]
+    assert trigger_calls == [
+        {
+            "incident_id": "incident-1",
+            "autonomous_run_service": trigger_calls[0]["autonomous_run_service"],
+            "processing_result": IncidentProcessingResult(
+                incident_id="incident-1",
+                created_new_incident=False,
+                attached_telemetry=True,
+                severity=IncidentSeverity.HIGH,
+                event_count=2,
+            ),
+        }
+    ]
+
+
 def test_ingest_heartbeat_updates_project_telemetry_verification(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PLATFORM_ADMIN_TOKEN", "super-admin-token")
     app = build_test_app()
@@ -1889,6 +2034,33 @@ def test_get_incident_returns_detail_payload() -> None:
     body = response.json()
     assert body["incident"]["id"] == "incident-1"
     assert body["events"][0]["telemetry_id"] == "telemetry-2"
+
+
+def test_acknowledge_incident_updates_status() -> None:
+    app = build_test_app()
+    repository = StubIncidentRepository()
+    app.dependency_overrides[get_incident_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.patch("/incidents/incident-1/acknowledge")
+
+    assert response.status_code == 200
+    assert repository.status_updates == [IncidentStatus.ACKNOWLEDGED]
+    assert response.json()["status"] == "acknowledged"
+
+
+def test_reopen_incident_updates_status() -> None:
+    app = build_test_app()
+    repository = StubIncidentRepository()
+    repository.incident = repository.incident.model_copy(update={"status": IncidentStatus.ACKNOWLEDGED})
+    app.dependency_overrides[get_incident_repository] = lambda: repository
+
+    client = TestClient(app)
+    response = client.patch("/incidents/incident-1/reopen")
+
+    assert response.status_code == 200
+    assert repository.status_updates == [IncidentStatus.OPEN]
+    assert response.json()["status"] == "open"
 
 
 def test_get_missing_incident_returns_not_found() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from api.schemas.autonomous import AutonomousRunApprovalRequest, AutonomousRunCreateRequest
 from harness.autonomous.runner import AutonomousRepairRunner
 from harness.autonomous.events import PersistentAutonomousRunEventStream
+from harness.git_ops.checkpoints import GitCheckpointManager
 from harness.autonomous.storage import AutonomousRunArtifactStore
 from harness.schemas.autonomous import (
     AutonomousApprovalStatus,
@@ -30,6 +32,7 @@ from models.control_plane import (
     RuntimeKind,
 )
 from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus, TelemetryRecord
+from models.patch import PatchProposal, PatchRunRecord, PatchRunStatus
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from services.autonomous_runs import AutonomousRunService
 from shared.types.telemetry import Environment
@@ -38,6 +41,7 @@ from shared.types.telemetry import Environment
 class StubIncidentRepository:
     def __init__(self, incident: IncidentRecord) -> None:
         self.incident = incident
+        self.status_updates: list[IncidentStatus] = []
         now = datetime.now(UTC)
         self.telemetry = TelemetryRecord(
             id=incident.latest_telemetry_id,
@@ -73,6 +77,20 @@ class StubIncidentRepository:
     async def mark_resolved_by_autonomous_agent(self, incident_id: str) -> IncidentRecord | None:
         if incident_id != self.incident.id:
             return None
+        return self.incident
+
+    async def update_incident_status(
+        self,
+        incident_id: str,
+        new_status: IncidentStatus,
+        *,
+        resolution_source: str | None = None,
+    ) -> IncidentRecord:
+        _ = resolution_source
+        if incident_id != self.incident.id:
+            raise AssertionError(f"unknown incident id {incident_id}")
+        self.status_updates.append(new_status)
+        self.incident = self.incident.model_copy(update={"status": new_status})
         return self.incident
 
 
@@ -154,10 +172,20 @@ class StubAutonomousRunRepository:
 
 
 class StubRetryRunner:
-    def __init__(self, event_stream, *, failure_class: AutonomousToolFailureClass, include_last_failure: bool = True) -> None:
+    def __init__(
+        self,
+        event_stream,
+        *,
+        failure_class: AutonomousToolFailureClass,
+        include_last_failure: bool = True,
+        first_error: str | None = None,
+        first_verification: AutonomousVerificationEvidence | None = None,
+    ) -> None:
         self._event_stream = event_stream
         self.failure_class = failure_class
         self.include_last_failure = include_last_failure
+        self.first_error = first_error
+        self.first_verification = first_verification
         self.continue_calls = 0
         self.retry_contexts: list[dict[str, object]] = []
 
@@ -211,12 +239,17 @@ class StubRetryRunner:
                     "status": AutonomousRunStatus.FAILED,
                     "phase": AutonomousRunPhase.FAILED,
                     "last_error": (
-                        "Tool execution failed: 1 validation error for FileViewRequest\n"
-                        "page_size\n"
-                        "  Input should be less than or equal to 100"
-                        if not self.include_last_failure
-                        else "Tool execution failed."
+                        self.first_error
+                        if self.first_error is not None
+                        else (
+                            "Tool execution failed: 1 validation error for FileViewRequest\n"
+                            "page_size\n"
+                            "  Input should be less than or equal to 100"
+                            if not self.include_last_failure
+                            else "Tool execution failed."
+                        )
                     ),
+                    "latest_verification": self.first_verification,
                     "loop_state": loop_state,
                 }
             )
@@ -323,6 +356,9 @@ class StubMissingRepoProfileControlPlaneRepository:
 
 
 class StubPatchRepository:
+    def __init__(self) -> None:
+        self.created_runs: list[PatchRunRecord] = []
+
     async def get_patch_run(self, patch_run_id: str):
         return SimpleNamespace(
             id=patch_run_id,
@@ -335,6 +371,60 @@ class StubPatchRepository:
                 "+print('fixed')\n"
             ),
         )
+
+    async def create_patch_run(self, **kwargs):
+        now = datetime.now(UTC)
+        proposal: PatchProposal = kwargs["proposal"]
+        record = PatchRunRecord(
+            id="patch-generated-1",
+            incident_id=kwargs["incident_id"],
+            repo_profile_id=kwargs["repo_profile_id"],
+            status=PatchRunStatus.GENERATED,
+            patch_summary=proposal.patch_summary,
+            rationale=proposal.rationale,
+            target_files=proposal.target_files,
+            unified_diff=proposal.unified_diff,
+            verification_steps=proposal.verification_steps,
+            confidence=proposal.confidence,
+            model_name=kwargs["model_name"],
+            based_on_commit_sha=kwargs["based_on_commit_sha"],
+            diff_line_count=kwargs["diff_line_count"],
+            file_count=kwargs["file_count"],
+            created_at=now,
+            updated_at=now,
+        )
+        self.created_runs.append(record)
+        return record
+
+
+class StubSandboxVerificationService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def queue_sandbox_run(self, incident_id: str, **kwargs):
+        self.calls.append({"incident_id": incident_id, **kwargs})
+        now = datetime.now(UTC)
+        run = SandboxRunRecord(
+            id="sandbox-generated-1",
+            incident_id=incident_id,
+            patch_run_id=str(kwargs["patch_run_id"]),
+            repo_profile_id="profile-1",
+            async_job_id="job-sandbox-1",
+            status=SandboxRunStatus.QUEUED,
+            executor_backend="local",
+            external_job_id=None,
+            install_command="npm install",
+            reproduce_command="npm test",
+            verify_command="npm run build",
+            reproduction_succeeded=False,
+            patch_applied=False,
+            verification_succeeded=False,
+            summary="queued",
+            execution_log="",
+            created_at=now,
+            updated_at=now,
+        )
+        return run, SimpleNamespace(id="job-sandbox-1")
 
 
 class StubProviderIntegrationService:
@@ -578,6 +668,194 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
 
 
 @pytest.mark.asyncio
+async def test_autonomous_run_service_excludes_lockfile_only_install_drift_from_sandbox_patch(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    patch_repository = StubPatchRepository()
+    sandbox_service = StubSandboxVerificationService()
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=patch_repository,
+        sandbox_verification_service=sandbox_service,
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+    )
+
+    (tmp_path / "server").mkdir(parents=True, exist_ok=True)
+    tracked_file = tmp_path / "server" / "routes.ts"
+    tracked_file.write_text(
+        "export async function registerRoutes(app: Express): Promise<Server> {\n"
+        "  // Internal secured endpoints for webhook operations\n"
+        "  // These endpoints require the INTERNAL_WEBHOOK_SECRET header\n"
+        "  return {} as Server;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    package_json = tmp_path / "package.json"
+    package_json.write_text(
+        '{\n'
+        '  "name": "demo",\n'
+        '  "dependencies": {\n'
+        '    "@stimpact/sdk": "^0.1.0"\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    lockfile = tmp_path / "package-lock.json"
+    lockfile.write_text('{"name":"demo","lockfileVersion":3}\n', encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "add", "server/routes.ts", "package.json", "package-lock.json"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    checkpoint = GitCheckpointManager().create_checkpoint(
+        repository_root=str(tmp_path),
+        label="autonomous-baseline",
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    tracked_file.write_text(
+        "export async function registerRoutes(app: Express): Promise<Server> {\n"
+        "  app.post(\"/api/stimpact-token\", async (_req, res) => {\n"
+        "    return res.status(200).json({ ok: true });\n"
+        "  });\n"
+        "\n"
+        "  // Internal secured endpoints for webhook operations\n"
+        "  // These endpoints require the INTERNAL_WEBHOOK_SECRET header\n"
+        "  return {} as Server;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    lockfile.write_text('{"name":"demo","lockfileVersion":3,"packages":{"":{}}}\n', encoding="utf-8")
+
+    updated_run = detail.run.model_copy(
+        update={
+            "status": AutonomousRunStatus.SUCCEEDED,
+            "phase": AutonomousRunPhase.COMPLETED,
+            "loop_state": detail.run.loop_state.model_copy(update={"checkpoint_ref": checkpoint.checkpoint.tag_name}),
+        }
+    )
+    service._event_stream.upsert_run(updated_run)  # noqa: SLF001
+
+    snapshot = service._event_stream.get_snapshot(updated_run.id)  # noqa: SLF001
+    processed = await service._postprocess_completed_run(snapshot)  # noqa: SLF001
+
+    expected_diff = GitCheckpointManager().diff_since_checkpoint(
+        repository_root=str(tmp_path),
+        checkpoint_ref=checkpoint.checkpoint.tag_name,
+        paths=["server/routes.ts"],
+    ).diff
+    assert expected_diff is not None
+    assert len(patch_repository.created_runs) == 1
+    assert patch_repository.created_runs[0].unified_diff == expected_diff.patch
+    assert patch_repository.created_runs[0].file_count == 1
+    assert [target.path for target in patch_repository.created_runs[0].target_files] == [
+        "server/routes.ts",
+    ]
+    assert len(sandbox_service.calls) == 1
+    assert sandbox_service.calls[0]["patch_run_id"] == patch_repository.created_runs[0].id
+    assert processed.run.patch_run_id == patch_repository.created_runs[0].id
+    assert processed.run.sandbox_run_id == "sandbox-generated-1"
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_preserves_lockfile_when_manifest_changes(tmp_path: Path) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    patch_repository = StubPatchRepository()
+    sandbox_service = StubSandboxVerificationService()
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=patch_repository,
+        sandbox_verification_service=sandbox_service,
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+    )
+
+    package_json = tmp_path / "package.json"
+    package_json.write_text('{"name":"demo","dependencies":{"react":"^18.0.0"}}\n', encoding="utf-8")
+    lockfile = tmp_path / "package-lock.json"
+    lockfile.write_text('{"name":"demo","lockfileVersion":3}\n', encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "add", "package.json", "package-lock.json"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    checkpoint = GitCheckpointManager().create_checkpoint(
+        repository_root=str(tmp_path),
+        label="autonomous-baseline",
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    package_json.write_text(
+        '{"name":"demo","dependencies":{"react":"^18.0.0","@stimpact/sdk":"^0.1.0"}}\n',
+        encoding="utf-8",
+    )
+    lockfile.write_text('{"name":"demo","lockfileVersion":3,"packages":{"":{"dependencies":{"@stimpact/sdk":"^0.1.0"}}}}\n', encoding="utf-8")
+
+    updated_run = detail.run.model_copy(
+        update={
+            "status": AutonomousRunStatus.SUCCEEDED,
+            "phase": AutonomousRunPhase.COMPLETED,
+            "loop_state": detail.run.loop_state.model_copy(update={"checkpoint_ref": checkpoint.checkpoint.tag_name}),
+        }
+    )
+    service._event_stream.upsert_run(updated_run)  # noqa: SLF001
+
+    snapshot = service._event_stream.get_snapshot(updated_run.id)  # noqa: SLF001
+    processed = await service._postprocess_completed_run(snapshot)  # noqa: SLF001
+
+    expected_diff = GitCheckpointManager().diff_since_checkpoint(
+        repository_root=str(tmp_path),
+        checkpoint_ref=checkpoint.checkpoint.tag_name,
+        paths=["package.json", "package-lock.json"],
+    ).diff
+    assert expected_diff is not None
+    assert len(patch_repository.created_runs) == 1
+    assert patch_repository.created_runs[0].unified_diff == expected_diff.patch
+    assert patch_repository.created_runs[0].file_count == 2
+    assert [target.path for target in patch_repository.created_runs[0].target_files] == [
+        "package-lock.json",
+        "package.json",
+    ]
+    assert len(sandbox_service.calls) == 1
+    assert sandbox_service.calls[0]["patch_run_id"] == patch_repository.created_runs[0].id
+    assert processed.run.patch_run_id == patch_repository.created_runs[0].id
+
+
+@pytest.mark.asyncio
 async def test_autonomous_run_service_recommend_mode_disables_writeback(
     tmp_path: Path,
 ) -> None:
@@ -796,6 +1074,63 @@ async def test_autonomous_run_service_retries_retryable_failed_run(
 
 
 @pytest.mark.asyncio
+async def test_autonomous_run_service_retries_patch_apply_failure(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    async_jobs = StubAsyncJobRepository()
+    repository = StubAutonomousRunRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=repository,
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=event_stream,
+        runner=AutonomousRepairRunner(event_stream=event_stream),
+        decision_engine_factory=lambda: object(),  # type: ignore[arg-type]
+    )
+
+    await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    retry_runner = StubRetryRunner(
+        event_stream,
+        failure_class=AutonomousToolFailureClass.UNKNOWN,
+        include_last_failure=False,
+        first_error="Sandbox reproduced the incident but failed to apply the generated patch.",
+        first_verification=AutonomousVerificationEvidence(
+            source="sandbox",
+            kind="sandbox",
+            summary="Sandbox reproduced the incident but failed to apply the generated patch.",
+            passed=False,
+            command="npm run build",
+            recorded_at=now,
+            metadata={"patch_applied": False, "reproduction_succeeded": True},
+        ),
+    )
+    service._runner = retry_runner  # noqa: SLF001
+
+    final_detail = await service.process_async_job(async_jobs.jobs[0])
+
+    assert retry_runner.continue_calls == 2
+    assert len(retry_runner.retry_contexts) == 1
+    assert retry_runner.retry_contexts[0]["retry_driver"] == "patch_apply_recovery"
+    assert retry_runner.retry_contexts[0]["previous_patch_applied"] is False
+    assert retry_runner.retry_contexts[0]["previous_reproduction_succeeded"] is True
+    assert final_detail.run.status is AutonomousRunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
 async def test_autonomous_run_service_does_not_retry_non_retryable_failed_run(
     tmp_path: Path,
 ) -> None:
@@ -834,6 +1169,94 @@ async def test_autonomous_run_service_does_not_retry_non_retryable_failed_run(
     assert retry_runner.retry_contexts == []
     assert final_detail.run.status is AutonomousRunStatus.FAILED
     assert [call["attempt_number"] for call in repository.attempt_calls] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_does_not_retry_repository_setup_failure(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    async_jobs = StubAsyncJobRepository()
+    repository = StubAutonomousRunRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=repository,
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=event_stream,
+        runner=AutonomousRepairRunner(event_stream=event_stream),
+        decision_engine_factory=lambda: object(),  # type: ignore[arg-type]
+    )
+
+    await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    retry_runner = StubRetryRunner(
+        event_stream,
+        failure_class=AutonomousToolFailureClass.UNKNOWN,
+        include_last_failure=False,
+        first_error="Repository root does not exist for sandbox execution.",
+        first_verification=AutonomousVerificationEvidence(
+            source="sandbox",
+            kind="sandbox",
+            summary="Repository root does not exist for sandbox execution.",
+            passed=False,
+            command="npm run build",
+            recorded_at=now,
+            metadata={"patch_applied": False, "reproduction_succeeded": False},
+        ),
+    )
+    service._runner = retry_runner  # noqa: SLF001
+
+    final_detail = await service.process_async_job(async_jobs.jobs[0])
+
+    assert retry_runner.continue_calls == 1
+    assert retry_runner.retry_contexts == []
+    assert final_detail.run.status is AutonomousRunStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_reopens_acknowledged_incident_on_start(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    incident = incident.model_copy(update={"status": IncidentStatus.ACKNOWLEDGED})
+    repository = StubIncidentRepository(incident)
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    service = AutonomousRunService(
+        repository,
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=event_stream,
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    assert repository.status_updates == [IncidentStatus.OPEN]
+    assert repository.incident.status is IncidentStatus.OPEN
+    assert detail.run.incident_id == "incident-1"
 
 
 @pytest.mark.asyncio

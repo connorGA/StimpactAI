@@ -1,0 +1,66 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-17T21:35:39.914402Z",
+  "created_at": "2026-04-17T21:33:35.830998Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": true,
+  "fresh_verification_satisfied": true,
+  "incident_id": "40828d67-b504-41af-baab-a1ffa418343c",
+  "last_error": null,
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "sandbox",
+    "metadata": {
+      "executor_backend": "local",
+      "patch_applied": true,
+      "reproduction_succeeded": true,
+      "sandbox_run_id": "662d729d-377f-40a0-8a1e-98aa6be12a92"
+    },
+    "passed": true,
+    "recorded_at": "2026-04-17T21:35:55.475560Z",
+    "source": "sandbox",
+    "summary": "Sandbox reproduced the incident, applied the patch, and verified the candidate fix."
+  },
+  "narrative_generated_at": "2026-04-17T21:36:21.808260Z",
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON' for service Soul Song Service.",
+  "phase": "completed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 2,
+    "max_retry_budget": 2,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "ready",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-40828d67-zcnkziq5/repo",
+  "root_cause_explanation": "The failure happened because the client code in `client/src/lib/xanoClient.ts` assumed every successful HTTP response was JSON and called JSON parsing unconditionally. In production, at least one upstream response came back as HTML beginning with `<!DOCTYPE`, which usually means an error page, redirect, fallback page, or misrouted endpoint response. That HTML/JSON content mismatch triggered the `Unexpected token '<'` parsing error.",
+  "run_id": "673f68eb-6c0f-4cdf-9377-8d4593de5340",
+  "solution_description": "The repair added a safer response parser in `client/src/lib/xanoClient.ts` that reads the response body first, checks the `content-type`, and only parses it as JSON when the server actually returns JSON. Empty bodies are handled safely, and non-JSON or malformed responses now raise a controlled user-facing error and are reported through the existing handled-error path instead of crashing on `response.json()`. The fix was reproduced and verified successfully with `npm run build` in the sandbox.",
+  "stagnation_count": 0,
+  "status": "succeeded",
+  "total_decisions": 0,
+  "total_events": 0,
+  "total_steps": 15,
+  "total_tool_calls": 0
+}

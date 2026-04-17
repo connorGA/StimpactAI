@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { AutonomousRunPanel } from "@/components/autonomous-run-panel";
 import { ChatPanel } from "@/components/chat-panel";
+import { IncidentStatusActions } from "@/components/incident-status-actions";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -168,6 +169,9 @@ export default async function IncidentDetailPage({
               {incident.service}
             </span>
           </div>
+        </div>
+        <div className="mt-4">
+          <IncidentStatusActions incidentId={incident.id} status={incident.status} />
         </div>
 
         {run?.policy_block_reason ? (

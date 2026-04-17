@@ -68,6 +68,45 @@ def test_git_checkpoint_manager_returns_diff_since_checkpoint(tmp_path: Path) ->
     assert "new_module.py" in diff_result.diff.patch
 
 
+def test_git_checkpoint_manager_preserves_patch_trailing_newline(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    package_lock = tmp_path / "package-lock.json"
+    package_lock.write_text('{\n  "name": "demo"\n}\n', encoding="utf-8")
+    _git(tmp_path, "add", "package-lock.json")
+    _git(tmp_path, "commit", "-m", "initial commit")
+
+    manager = GitCheckpointManager()
+    checkpoint = manager.create_checkpoint(repository_root=str(tmp_path), label="known good").checkpoint
+    assert checkpoint is not None
+
+    package_lock.write_text(
+        '{\n  "name": "demo",\n  "packages": {\n    "node_modules/example": {\n      "version": "1.0.0"\n    }\n  }\n}\n',
+        encoding="utf-8",
+    )
+
+    diff_result = manager.diff_since_checkpoint(
+        repository_root=str(tmp_path),
+        checkpoint_ref=checkpoint.tag_name,
+    )
+
+    assert diff_result.diff is not None
+    assert diff_result.diff.patch.endswith("\n")
+
+    patch_path = tmp_path / "patch.diff"
+    patch_path.write_text(diff_result.diff.patch, encoding="utf-8")
+    verify_repo = tmp_path / "verify"
+    _git(tmp_path, "clone", "--quiet", "--no-local", str(tmp_path), str(verify_repo))
+    _git(verify_repo, "checkout", "--quiet", checkpoint.tag_name)
+    apply_result = subprocess.run(
+        ["git", "apply", "--check", str(patch_path)],
+        cwd=verify_repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert apply_result.returncode == 0, apply_result.stderr
+
+
 def test_git_checkpoint_manager_discards_failed_work_using_latest_checkpoint(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     tracked_file = tmp_path / "app.txt"

@@ -119,12 +119,30 @@ class GitCheckpointManager:
         *,
         repository_root: str,
         checkpoint_ref: str | None = None,
+        paths: list[str] | None = None,
     ) -> GitActionResult:
         root = Path(repository_root).resolve()
         resolved_checkpoint_ref = self._resolve_checkpoint_ref(root, checkpoint_ref)
         branch_info = self._build_branch_info(root)
-        name_status_output = self._git(root, "diff", "--name-status", resolved_checkpoint_ref, "--")
-        patch_output = self._git(root, "diff", "--binary", "--no-ext-diff", resolved_checkpoint_ref, "--")
+        scoped_paths = [path for path in (paths or []) if path]
+        name_status_output = self._git(
+            root,
+            "diff",
+            "--name-status",
+            resolved_checkpoint_ref,
+            "--",
+            *scoped_paths,
+        )
+        patch_output = self._git(
+            root,
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            resolved_checkpoint_ref,
+            "--",
+            *scoped_paths,
+            preserve_output=True,
+        )
         diff = GitDiffInspection(
             checkpoint_ref=resolved_checkpoint_ref,
             changed_files=self._parse_name_status_output(name_status_output),
@@ -245,7 +263,7 @@ class GitCheckpointManager:
         sanitized = "".join(pieces).strip("-")
         return sanitized or "checkpoint"
 
-    def _git(self, repository_root: Path, *args: str) -> str:
+    def _git(self, repository_root: Path, *args: str, preserve_output: bool = False) -> str:
         result = subprocess.run(
             ["git", *args],
             cwd=repository_root,
@@ -253,7 +271,10 @@ class GitCheckpointManager:
             capture_output=True,
             text=True,
         )
-        return (result.stdout + result.stderr).strip()
+        output = result.stdout + result.stderr
+        if preserve_output:
+            return output
+        return output.strip()
 
     def _git_optional(self, repository_root: Path, *args: str) -> str | None:
         result = subprocess.run(

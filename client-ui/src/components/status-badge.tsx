@@ -2,6 +2,7 @@ import type { IncidentStatus } from "@/lib/types";
 
 const statusConfig: Record<IncidentStatus, { className: string; dot: string }> = {
   open: { className: "text-[#dc2626]", dot: "bg-[#dc2626]" },
+  acknowledged: { className: "text-[#f59e0b]", dot: "bg-[#f59e0b]" },
   resolved: { className: "text-[#16a34a]", dot: "bg-[#16a34a]" },
 };
 

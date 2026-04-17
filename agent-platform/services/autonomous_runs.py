@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import shutil
 import subprocess
@@ -52,6 +53,7 @@ from harness.schemas.autonomous import (
 from harness.schemas.initializer import FeatureSeed
 from harness.schemas.verification import VerificationKind
 from models.async_job import AsyncJobStatus, AsyncJobType
+from models.incident import IncidentStatus
 from models.patch import PatchProposal, PatchTargetFile
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
 from services.autonomous_policy import AutonomousPolicyService
@@ -183,6 +185,11 @@ class AutonomousRunService:
     ) -> AutonomousRunDetailResponse:
         service_context = await self._resolve_incident_service_context(incident_id)
         incident = service_context.incident
+        if incident.status is IncidentStatus.ACKNOWLEDGED:
+            incident = await self._incident_repository.update_incident_status(
+                incident_id,
+                IncidentStatus.OPEN,
+            )
         repo_profile = service_context.repo_profile
         repository_root = request.repository_root or str(self._repository_root)
         latest_telemetry = await self._incident_repository.get_telemetry(incident.latest_telemetry_id)
@@ -948,6 +955,15 @@ class AutonomousRunService:
         "Gemfile.lock",
         "composer.lock",
     })
+    _LOCKFILE_MANIFESTS = {
+        "package-lock.json": frozenset({"package.json"}),
+        "yarn.lock": frozenset({"package.json"}),
+        "pnpm-lock.yaml": frozenset({"package.json"}),
+        "poetry.lock": frozenset({"pyproject.toml", "poetry.toml"}),
+        "Pipfile.lock": frozenset({"Pipfile"}),
+        "Gemfile.lock": frozenset({"Gemfile", "gems.rb"}),
+        "composer.lock": frozenset({"composer.json"}),
+    }
 
     async def _postprocess_completed_run(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunSnapshot:
         run = snapshot.run
@@ -970,8 +986,9 @@ class AutonomousRunService:
         if diff is None or not diff.patch.strip():
             return snapshot
 
+        selected_changes = self._select_sandbox_patch_files(diff.changed_files)
         code_changes = [
-            f for f in diff.changed_files
+            f for f in selected_changes
             if f.path.rsplit("/", 1)[-1] not in self._NON_CODE_FILENAMES
         ]
         if not code_changes:
@@ -981,9 +998,20 @@ class AutonomousRunService:
             )
             return snapshot
 
-        filtered_patch = self._filter_patch_hunks(diff.patch, self._NON_CODE_FILENAMES)
-        if not filtered_patch.strip():
+        selected_paths = [changed_file.path for changed_file in selected_changes]
+        selected_diff_result = GitCheckpointManager().diff_since_checkpoint(
+            repository_root=run.repository_root,
+            checkpoint_ref=checkpoint_ref,
+            paths=selected_paths,
+        )
+        selected_diff = selected_diff_result.diff
+        patch_diff = selected_diff.patch if selected_diff is not None else ""
+        if not patch_diff.strip():
             return snapshot
+        # region agent log
+        with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
+            debug_log.write(json.dumps({"sessionId": "31f43d", "runId": str(run.id), "hypothesisId": "H1", "location": "agent-platform/services/autonomous_runs.py:994", "message": "autonomous run prepared sandbox patch", "data": {"checkpointRef": checkpoint_ref, "repositoryRoot": str(run.repository_root), "basedOnCommitSha": diff_result.branch_info.head_sha if diff_result.branch_info is not None else None, "changedFiles": [changed_file.path for changed_file in diff.changed_files], "selectedFiles": selected_paths, "codeTargetFiles": [changed_file.path for changed_file in code_changes], "diffFileCount": len(selected_changes), "patchLineCount": sum(1 for line in patch_diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))), "patchHeader": patch_diff.splitlines()[:12]}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
+        # endregion
 
         patch_proposal = PatchProposal(
             patch_summary="Autonomous repair candidate generated from the harness working tree.",
@@ -993,9 +1021,9 @@ class AutonomousRunService:
                     path=changed_file.path,
                     reason=f"Autonomous harness modified this file as part of the repair attempt ({changed_file.status.value}).",
                 )
-                for changed_file in code_changes
+                for changed_file in selected_changes
             ],
-            unified_diff=filtered_patch,
+            unified_diff=patch_diff,
             verification_steps=["Run the configured sandbox reproduce and verify commands."],
             confidence=0.9,
         )
@@ -1005,8 +1033,8 @@ class AutonomousRunService:
             proposal=patch_proposal,
             model_name="autonomous-harness",
             based_on_commit_sha=diff_result.branch_info.head_sha if diff_result.branch_info is not None else None,
-            diff_line_count=sum(1 for line in diff.patch.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))),
-            file_count=max(1, len(diff.changed_files)),
+            diff_line_count=sum(1 for line in patch_diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))),
+            file_count=max(1, len(selected_changes)),
         )
         sandbox_run, _job = await self._sandbox_verification_service.queue_sandbox_run(
             run.incident_id or "",
@@ -1020,6 +1048,10 @@ class AutonomousRunService:
                 diff_result.branch_info.upstream_branch if diff_result.branch_info is not None else None
             ),
         )
+        # region agent log
+        with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
+            debug_log.write(json.dumps({"sessionId": "31f43d", "runId": str(run.id), "hypothesisId": "H2", "location": "agent-platform/services/autonomous_runs.py:1030", "message": "autonomous run queued sandbox verification", "data": {"patchRunId": str(patch_run.id), "sandboxRunId": str(sandbox_run.id), "repositoryRoot": str(run.repository_root), "baselineCommitSha": patch_run.based_on_commit_sha, "repositoryBranch": diff_result.branch_info.branch_name if diff_result.branch_info is not None else None, "repositoryUpstreamBranch": diff_result.branch_info.upstream_branch if diff_result.branch_info is not None else None}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
+        # endregion
         updated_run = run.model_copy(
             update={
                 "patch_run_id": patch_run.id,
@@ -1043,20 +1075,16 @@ class AutonomousRunService:
             )
         return self._event_stream.get_snapshot(run.id)
 
-    @staticmethod
-    def _filter_patch_hunks(patch_text: str, exclude_filenames: frozenset[str]) -> str:
-        """Strip diff hunks for files whose basename is in *exclude_filenames*."""
-        kept_lines: list[str] = []
-        skip = False
-        for line in patch_text.splitlines(keepends=True):
-            if line.startswith("diff --git "):
-                parts = line.split()
-                path_b = parts[-1] if len(parts) >= 4 else ""
-                basename = path_b.rsplit("/", 1)[-1]
-                skip = basename in exclude_filenames
-            if not skip:
-                kept_lines.append(line)
-        return "".join(kept_lines)
+    def _select_sandbox_patch_files(self, changed_files: list[GitChangedFile]) -> list[GitChangedFile]:
+        changed_paths = {changed_file.path for changed_file in changed_files}
+        selected_changes: list[GitChangedFile] = []
+        for changed_file in changed_files:
+            filename = changed_file.path.rsplit("/", 1)[-1]
+            related_manifests = self._LOCKFILE_MANIFESTS.get(filename)
+            if related_manifests is not None and not any(manifest in changed_paths for manifest in related_manifests):
+                continue
+            selected_changes.append(changed_file)
+        return selected_changes
 
     def _should_retry_run(
         self,
@@ -1070,12 +1098,18 @@ class AutonomousRunService:
         if attempt_number >= attempt_budget:
             return False
         failure_class = self._failure_class_for_run(run)
-        return failure_class in {
+        if failure_class in {
             AutonomousToolFailureClass.VALIDATION,
             AutonomousToolFailureClass.TOOL_ERROR,
             AutonomousToolFailureClass.EXCEPTION,
             AutonomousToolFailureClass.STAGNATION,
-        }
+        }:
+            return True
+        if self._is_retryable_patch_apply_failure(run):
+            return True
+        if self._is_retryable_sandbox_failure(run):
+            return True
+        return False
 
     def _failure_class_for_run(self, run: AutonomousRepairRunRecord) -> AutonomousToolFailureClass | None:
         if run.loop_state.last_failure is not None:
@@ -1107,7 +1141,85 @@ class AutonomousRunService:
             "previous_error": run.last_error,
             "previous_failure_class": failure_class.value if failure_class is not None else None,
             "previous_tool_name": run.loop_state.last_tool_name,
+            "previous_verification_summary": (
+                run.latest_verification.summary if run.latest_verification is not None else None
+            ),
+            "previous_verification_passed": (
+                run.latest_verification.passed if run.latest_verification is not None else None
+            ),
+            "previous_patch_applied": self._latest_verification_bool(run, "patch_applied"),
+            "previous_reproduction_succeeded": self._latest_verification_bool(
+                run,
+                "reproduction_succeeded",
+            ),
+            "retry_driver": self._retry_driver_label(run, failure_class),
         }
+
+    @staticmethod
+    def _latest_verification_bool(
+        run: AutonomousRepairRunRecord,
+        key: str,
+    ) -> bool | None:
+        if run.latest_verification is None:
+            return None
+        value = run.latest_verification.metadata.get(key)
+        return value if isinstance(value, bool) else None
+
+    def _is_retryable_patch_apply_failure(self, run: AutonomousRepairRunRecord) -> bool:
+        verification = run.latest_verification
+        if verification is None:
+            return False
+        patch_applied = self._latest_verification_bool(run, "patch_applied")
+        reproduction_succeeded = self._latest_verification_bool(
+            run,
+            "reproduction_succeeded",
+        )
+        summary = verification.summary.lower()
+        message = (run.last_error or "").lower()
+        return bool(
+            patch_applied is False
+            and reproduction_succeeded is True
+            and (
+                "patch" in summary
+                or "patch" in message
+                or "apply" in summary
+                or "apply" in message
+            )
+        )
+
+    def _is_retryable_sandbox_failure(self, run: AutonomousRepairRunRecord) -> bool:
+        summary = (
+            run.latest_verification.summary.lower()
+            if run.latest_verification is not None
+            else ""
+        )
+        message = (run.last_error or "").lower()
+        retryable_markers = (
+            "sandbox install step failed before reproduction",
+            "sandbox failed to restore the requested baseline before verification",
+            "timed out",
+            "timeout",
+        )
+        blocked_markers = (
+            "repository root does not exist",
+            "not a git checkout",
+            "no active repo profile",
+            "policy",
+        )
+        if any(marker in summary or marker in message for marker in blocked_markers):
+            return False
+        return any(marker in summary or marker in message for marker in retryable_markers)
+
+    def _retry_driver_label(
+        self,
+        run: AutonomousRepairRunRecord,
+        failure_class: AutonomousToolFailureClass | None,
+    ) -> str:
+        if self._is_retryable_patch_apply_failure(run):
+            return "patch_apply_recovery"
+        if self._is_retryable_sandbox_failure(run):
+            return "sandbox_recovery"
+        return failure_class.value if failure_class is not None else "unknown"
 
     def _policy_block_reason(self, policy) -> str | None:
         if policy.auto_run_allowed:

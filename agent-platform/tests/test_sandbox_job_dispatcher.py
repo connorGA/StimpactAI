@@ -78,10 +78,15 @@ class StubAsyncJobRepository:
 class StubSandboxVerificationService:
     def __init__(self) -> None:
         self.processed_job_ids: list[str] = []
+        self.reconciled_failures: list[tuple[str, str]] = []
 
     async def process_async_job(self, job: AsyncJobRecord):
         self.processed_job_ids.append(job.id)
         return None
+
+    async def reconcile_async_job_failure(self, job: AsyncJobRecord, *, error_message: str):
+        self.reconciled_failures.append((job.id, error_message))
+        return type("SandboxRun", (), {"id": "sandbox-failed-1"})()
 
 
 class StubAutonomousRunService:
@@ -119,6 +124,28 @@ async def test_sandbox_job_dispatcher_processes_async_jobs() -> None:
     assert repository.marked_statuses == [("job-1", AsyncJobStatus.SUCCEEDED, None)]
     assert repository.attempts == [("job-1", AsyncJobStatus.SUCCEEDED)]
     assert repository.reclaimed_calls == [(300, AsyncJobType.SANDBOX_RUN)]
+
+
+async def test_sandbox_job_dispatcher_reconciles_failed_runs() -> None:
+    repository = StubAsyncJobRepository()
+    autonomous_service = StubAutonomousRunService()
+
+    class FailingSandboxVerificationService(StubSandboxVerificationService):
+        async def process_async_job(self, job: AsyncJobRecord):
+            self.processed_job_ids.append(job.id)
+            raise RuntimeError("sandbox exploded")
+
+    service = FailingSandboxVerificationService()
+    dispatcher = SandboxJobDispatcher(repository, service, autonomous_run_service=autonomous_service)
+
+    processed = await dispatcher.run_once()
+
+    assert processed == 1
+    assert service.processed_job_ids == ["job-1"]
+    assert service.reconciled_failures == [("job-1", "sandbox exploded")]
+    assert repository.marked_statuses == [("job-1", AsyncJobStatus.FAILED, "sandbox exploded")]
+    assert repository.attempts == [("job-1", AsyncJobStatus.FAILED)]
+    assert autonomous_service.recorded_sandbox_ids == ["sandbox-failed-1"]
 
 
 async def test_autonomous_job_dispatcher_processes_async_jobs() -> None:

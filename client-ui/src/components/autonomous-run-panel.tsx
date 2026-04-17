@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatTimestamp } from "@/lib/dashboard";
@@ -31,6 +32,7 @@ export function AutonomousRunPanel({
   initialSandboxDetail = null,
   variant = "default",
 }: AutonomousRunPanelProps) {
+  const router = useRouter();
   const [detail, setDetail] = useState<IncidentAutonomousRunDetail | null>(initialDetail);
   const [stickyEvents, setStickyEvents] = useState<AutonomousRunEvent[]>(
     () => initialDetail?.events ?? [],
@@ -95,6 +97,7 @@ export function AutonomousRunPanel({
         }),
       });
       await refreshLatestDetail();
+      router.refresh();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to start autonomous run.");
     } finally {
@@ -278,6 +281,7 @@ export function AutonomousRunPanel({
       : detail
         ? `Step index ${stepIndex}${maxSteps > 0 ? ` · budget ${maxSteps}` : ""}`
         : null;
+  const failureInsight = useMemo(() => deriveFailureInsight(detail), [detail]);
 
   const panelRing =
     detail &&
@@ -385,6 +389,9 @@ export function AutonomousRunPanel({
                 {actionError ? <p className="mt-2 text-sm text-[#fca5a5]">{actionError}</p> : null}
               </div>
             </details>
+            {failureInsight ? (
+              <FailureInsightCard insight={failureInsight} compact />
+            ) : null}
             {detail.run.last_error ? (
               <div className="mt-3 rounded-lg border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.08)] px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">Last error</p>
@@ -735,6 +742,8 @@ export function AutonomousRunPanel({
             </div>
           </details>
 
+          {failureInsight ? <FailureInsightCard insight={failureInsight} /> : null}
+
           {detail.run.last_error ? (
             <div className="mt-4 rounded-xl border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.08)] px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">
@@ -838,6 +847,136 @@ function EventCard({ event }: { event: AutonomousRunEvent }) {
       ) : null}
     </div>
   );
+}
+
+type FailureInsight = {
+  label: string;
+  summary: string;
+  retryNote: string;
+};
+
+function FailureInsightCard({
+  insight,
+  compact = false,
+}: {
+  insight: FailureInsight;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border border-[rgba(248,113,113,0.28)] bg-[rgba(248,113,113,0.08)] ${
+        compact ? "mt-3 px-3 py-2.5" : "mt-4 px-4 py-3"
+      }`}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">
+        Failure analysis
+      </p>
+      <p className="mt-1 text-sm font-medium text-[#fee2e2]">{insight.label}</p>
+      <p className="mt-1 text-sm leading-relaxed text-white/70">{insight.summary}</p>
+      <p className="mt-2 text-xs leading-relaxed text-white/50">{insight.retryNote}</p>
+    </div>
+  );
+}
+
+function deriveFailureInsight(detail: IncidentAutonomousRunDetail | null): FailureInsight | null {
+  if (!detail) {
+    return null;
+  }
+
+  const run = detail.run;
+  const lastFailure = run.loop_state.last_failure;
+  const derivedFailureClass = detail.outcome?.failure_class ?? lastFailure?.failure_class ?? null;
+  const latestVerification = run.latest_verification;
+  const verificationSummary = latestVerification?.summary ?? "";
+  const verificationSummaryLower = verificationSummary.toLowerCase();
+  const lastError = run.last_error ?? "";
+  const lastErrorLower = lastError.toLowerCase();
+  const patchApplied = latestVerification?.metadata?.patch_applied;
+  const reproductionSucceeded = latestVerification?.metadata?.reproduction_succeeded;
+  const isRetryable =
+    derivedFailureClass === "validation" ||
+    derivedFailureClass === "tool_error" ||
+    derivedFailureClass === "exception" ||
+    derivedFailureClass === "stagnation" ||
+    (patchApplied === false && reproductionSucceeded === true) ||
+    verificationSummaryLower.includes("sandbox install step failed before reproduction") ||
+    verificationSummaryLower.includes("sandbox failed to restore the requested baseline before verification");
+
+  if (patchApplied === false && reproductionSucceeded === true) {
+    return {
+      label: "Patch apply failed",
+      summary:
+        "The sandbox reproduced the bug, but the generated patch could not be applied cleanly against the verification workspace.",
+      retryNote:
+        "Automatic retry budget is exhausted for this run. Use Retry after reviewing the patch target or repository baseline.",
+    };
+  }
+
+  if (lastErrorLower.includes("repository root does not exist")) {
+    return {
+      label: "Repository setup unavailable",
+      summary:
+        "The sandbox could not locate a valid repository root for this service, so verification could not start.",
+      retryNote:
+        "Automatic retry is blocked until the repo connection or repository-root configuration is fixed.",
+    };
+  }
+
+  if (run.policy_block_reason) {
+    return {
+      label: "Policy blocked autonomous repair",
+      summary: run.policy_block_reason,
+      retryNote:
+        "Automatic retry is blocked by project policy. Adjust the policy or repo linkage before trying again.",
+    };
+  }
+
+  if (
+    verificationSummaryLower.includes("sandbox install step failed before reproduction") ||
+    verificationSummaryLower.includes("sandbox failed to restore the requested baseline before verification")
+  ) {
+    return {
+      label: "Sandbox setup failed",
+      summary:
+        verificationSummary ||
+        lastError ||
+        "The sandbox could not complete setup before verification began.",
+      retryNote:
+        "Automatic retry budget is exhausted for this run. Retry may succeed if the sandbox environment was transiently unstable.",
+    };
+  }
+
+  if (derivedFailureClass != null) {
+    return {
+      label: formatFailureClassLabel(derivedFailureClass),
+      summary:
+        lastFailure?.message ||
+        verificationSummary ||
+        lastError ||
+        "The autonomous run stopped after a classified tool or verification failure.",
+      retryNote: isRetryable
+        ? "Automatic retry budget is exhausted for this run. You can try again from the latest incident state."
+        : "Automatic retry is blocked for this failure type. Review the failure details before trying again.",
+    };
+  }
+
+  if (run.status === "failed" && (verificationSummary || lastError)) {
+    return {
+      label: "Run failed",
+      summary: verificationSummary || lastError,
+      retryNote:
+        "Automatic retry was not attempted because the failure did not match a retryable class. Use Retry after reviewing the failure details.",
+    };
+  }
+
+  return null;
+}
+
+function formatFailureClassLabel(failureClass: string): string {
+  return failureClass
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
 }
 
 function Banner({

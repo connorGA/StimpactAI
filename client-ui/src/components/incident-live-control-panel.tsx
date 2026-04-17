@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AutonomousRunPanel } from "@/components/autonomous-run-panel";
+import { IncidentStatusActions } from "@/components/incident-status-actions";
 import { SeverityBadge } from "@/components/severity-badge";
 import { StatusBadge } from "@/components/status-badge";
 import { autonomousResolutionHeadline, formatAutonomousPhase } from "@/lib/incident-resolution-copy";
@@ -87,11 +88,15 @@ export function IncidentLiveControlPanel({
   const phaseSteps = useMemo(() => buildPhaseSteps(detail), [detail]);
   const runStatus = detail?.run.status ?? null;
   const isLiveRun = runStatus === "running" || runStatus === "queued";
+  const failedStepIndex = phaseSteps.findIndex((step) => step.state === "failed");
+  const isResolutionFailed = failedStepIndex >= 0;
   const currentStepIndex = phaseSteps.findIndex((step) => step.state === "current");
   const isResolutionComplete =
     phaseSteps.length > 0 && phaseSteps.every((step) => step.state === "done");
   const activeSegmentIndex =
-    isResolutionComplete || currentStepIndex < 0 ? null : Math.max(0, currentStepIndex - 1);
+    isResolutionComplete || isResolutionFailed || currentStepIndex < 0
+      ? null
+      : Math.max(0, currentStepIndex - 1);
 
   const headline = detail
     ? autonomousResolutionHeadline({
@@ -123,6 +128,18 @@ export function IncidentLiveControlPanel({
     [phaseSteps, runStatus, isResolutionComplete],
   );
 
+  const connectorStateAt = (index: number): PhaseConnectorState => {
+    if (index === phaseSteps.length - 1) return null;
+    if (isResolutionComplete) return "complete";
+    if (isResolutionFailed) {
+      if (index < failedStepIndex) return "done";
+      return "upcoming";
+    }
+    if (activeSegmentIndex === index) return "current";
+    if (index < (activeSegmentIndex ?? -1)) return "done";
+    return "upcoming";
+  };
+
   return (
     <section className="overflow-hidden rounded-2xl border border-white/[0.06] bg-[linear-gradient(180deg,rgba(16,20,30,0.95),rgba(10,14,22,0.98))]">
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5 sm:py-5">
@@ -152,6 +169,7 @@ export function IncidentLiveControlPanel({
             >
               Details →
             </Link>
+            <IncidentStatusActions incidentId={incident.id} status={incident.status} compact />
             <IncidentResponseTimer
               firstSeenAt={incident.first_seen_at}
               detail={detail}
@@ -169,17 +187,7 @@ export function IncidentLiveControlPanel({
                 index={index}
                 isLast={index === phaseSteps.length - 1}
                 compact
-                connectorState={
-                  index === phaseSteps.length - 1
-                    ? null
-                    : isResolutionComplete
-                      ? "complete"
-                      : activeSegmentIndex === index
-                        ? "current"
-                        : index < (activeSegmentIndex ?? -1)
-                          ? "done"
-                          : "upcoming"
-                }
+                connectorState={connectorStateAt(index)}
               />
             ))}
           </div>
@@ -195,17 +203,7 @@ export function IncidentLiveControlPanel({
                 index={index}
                 isLast={index === phaseSteps.length - 1}
                 compact
-                connectorState={
-                  index === phaseSteps.length - 1
-                    ? null
-                    : isResolutionComplete
-                      ? "complete"
-                      : activeSegmentIndex === index
-                        ? "current"
-                        : index < (activeSegmentIndex ?? -1)
-                          ? "done"
-                          : "upcoming"
-                }
+                connectorState={connectorStateAt(index)}
               />
             ))}
           </div>
@@ -224,11 +222,14 @@ export function IncidentLiveControlPanel({
   );
 }
 
+type PhaseStepState = "done" | "current" | "upcoming" | "failed";
+type PhaseConnectorState = "done" | "current" | "upcoming" | "complete" | "failed" | null;
+
 const IDLE_HUB_PHASE_STEPS: Array<{
   label: string;
   title: string;
   detail: string;
-  state: "done" | "current" | "upcoming";
+  state: PhaseStepState;
 }> = [
   { label: "Signal", title: "Detected", detail: "", state: "upcoming" },
   { label: "Analyze", title: "Analyze", detail: "", state: "upcoming" },
@@ -409,8 +410,9 @@ function runRingProgress(
   const n = phaseSteps.length;
   const done = phaseSteps.filter((step) => step.state === "done").length;
   const hasCurrent = phaseSteps.some((step) => step.state === "current");
+  const hasFailed = phaseSteps.some((step) => step.state === "failed");
   const segment = 1 / n;
-  const partial = hasCurrent ? segment * 0.42 : 0;
+  const partial = hasCurrent ? segment * 0.42 : hasFailed ? segment * 0.75 : 0;
   return Math.min(0.96, done * segment + partial);
 }
 
@@ -656,27 +658,12 @@ function buildPhaseSteps(detail: IncidentAutonomousRunDetail | null): Array<{
   label: string;
   title: string;
   detail: string;
-  state: "done" | "current" | "upcoming";
+  state: PhaseStepState;
 }> {
   const currentPhase = detail?.run.phase ?? "initializer";
   const status = detail?.run.status ?? null;
   const isCompleted = status === "succeeded" || currentPhase === "completed";
-
-  const doneThrough = isCompleted
-    ? 4
-    : currentPhase === "verification"
-      ? 2
-      : currentPhase === "failed"
-        ? 2
-        : 1;
-
-  const currentIndex = isCompleted
-    ? -1
-    : currentPhase === "verification"
-      ? 2
-      : currentPhase === "failed"
-        ? 2
-        : 1;
+  const isFailed = status === "failed" || status === "cancelled";
 
   const steps = [
     { label: "Signal", title: "Detected", detail: "" },
@@ -685,11 +672,62 @@ function buildPhaseSteps(detail: IncidentAutonomousRunDetail | null): Array<{
     { label: "Deliver", title: "Deliver", detail: "" },
   ];
 
+  if (isCompleted) {
+    return steps.map((step) => ({ ...step, state: "done" as const }));
+  }
+
+  const reachedIndex = inferReachedStepIndex(detail, currentPhase);
+
+  if (isFailed) {
+    return steps.map((step, index) => ({
+      ...step,
+      state:
+        index < reachedIndex ? "done" : index === reachedIndex ? "failed" : "upcoming",
+    }));
+  }
+
   return steps.map((step, index) => ({
     ...step,
     state:
-      index < doneThrough ? "done" : index === currentIndex ? "current" : "upcoming",
+      index < reachedIndex
+        ? "done"
+        : index === reachedIndex
+          ? "current"
+          : "upcoming",
   }));
+}
+
+function inferReachedStepIndex(
+  detail: IncidentAutonomousRunDetail | null,
+  currentPhase: string,
+): number {
+  const phaseToIndex = (phase: string | null | undefined): number | null => {
+    if (phase === "completed") return 3;
+    if (phase === "verification" || phase === "recovery") return 2;
+    if (phase === "initializer" || phase === "coding") return 1;
+    return null;
+  };
+
+  const fromCurrent = phaseToIndex(currentPhase);
+  if (fromCurrent !== null) return fromCurrent;
+
+  const events = detail?.events ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const mapped = phaseToIndex(events[i].phase);
+    if (mapped !== null) return mapped;
+  }
+
+  const error = (detail?.run.last_error ?? "").toLowerCase();
+  if (
+    error.includes("sandbox") ||
+    error.includes("verification") ||
+    error.includes("patch") ||
+    error.includes("repository")
+  ) {
+    return 2;
+  }
+
+  return 1;
 }
 
 function PhaseRailStep({
@@ -703,26 +741,35 @@ function PhaseRailStep({
     label: string;
     title: string;
     detail: string;
-    state: "done" | "current" | "upcoming";
+    state: PhaseStepState;
   };
   index: number;
   isLast: boolean;
   compact?: boolean;
-  connectorState: "done" | "current" | "upcoming" | "complete" | null;
+  connectorState: PhaseConnectorState;
 }) {
+  const nodeContent =
+    step.state === "failed" ? (
+      <span aria-hidden className="text-sm leading-none">!</span>
+    ) : (
+      <>{index + 1}</>
+    );
+
   return (
     <div className="relative flex flex-1 flex-col items-start lg:items-center">
       <div className="flex flex-col items-center">
         <span
           className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${
-            step.state === "current"
-              ? "border-[#ff6a3d] bg-[#ff6a3d]/18 text-white"
-              : step.state === "done"
-                ? "border-[rgba(32,201,51,0.36)] bg-[rgba(32,201,51,0.12)] text-[#86efac]"
-                : "border-white/[0.08] bg-white/[0.03] text-white/45"
+            step.state === "failed"
+              ? "border-[#ef4444] bg-[#ef4444]/20 text-[#fecaca] shadow-[0_0_0_3px_rgba(239,68,68,0.12)]"
+              : step.state === "current"
+                ? "border-[#ff6a3d] bg-[#ff6a3d]/18 text-white"
+                : step.state === "done"
+                  ? "border-[rgba(32,201,51,0.36)] bg-[rgba(32,201,51,0.12)] text-[#86efac]"
+                  : "border-white/[0.08] bg-white/[0.03] text-white/45"
           }`}
         >
-          {index + 1}
+          {nodeContent}
         </span>
         {!isLast ? (
           <span
@@ -731,7 +778,9 @@ function PhaseRailStep({
                 ? "bg-[#20c933]/50"
                 : connectorState === "current"
                   ? "bg-[#ff6a3d]/55"
-                  : "bg-white/[0.08]"
+                  : connectorState === "failed"
+                    ? "bg-[#ef4444]/55"
+                    : "bg-white/[0.08]"
             }`}
           />
         ) : null}
@@ -744,7 +793,9 @@ function PhaseRailStep({
                 ? "bg-[#20c933]/28"
                 : connectorState === "current"
                   ? "bg-[#ff6a3d]/22"
-                  : "bg-white/[0.08]"
+                  : connectorState === "failed"
+                    ? "bg-[#ef4444]/22"
+                    : "bg-white/[0.08]"
             }`}
           >
             {connectorState === "complete" || connectorState === "done" ? (
@@ -752,7 +803,7 @@ function PhaseRailStep({
             ) : null}
             {connectorState === "current" || connectorState === "complete" ? (
               <div
-                className={`incident-wire-flow absolute inset-y-0 left-0 w-14 rounded-full ${
+                className={`incident-wire-flow pointer-events-none absolute inset-y-0 w-14 rounded-full ${
                   connectorState === "complete"
                     ? "bg-[linear-gradient(90deg,rgba(255,255,255,0),rgba(32,201,51,0.95),rgba(255,255,255,0))]"
                     : "bg-[linear-gradient(90deg,rgba(255,255,255,0),rgba(255,106,61,0.95),rgba(255,255,255,0))]"
@@ -763,8 +814,20 @@ function PhaseRailStep({
         </div>
       ) : null}
       <div className={`mt-2 min-w-0 ${compact ? "lg:px-1" : "lg:px-2"} lg:text-center`}>
-        <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">{step.label}</p>
-        <p className="mt-0.5 text-xs font-medium text-white/85">{step.title}</p>
+        <p
+          className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${
+            step.state === "failed" ? "text-[#fca5a5]" : "text-white/35"
+          }`}
+        >
+          {step.state === "failed" ? `${step.label} · Failed` : step.label}
+        </p>
+        <p
+          className={`mt-0.5 text-xs font-medium ${
+            step.state === "failed" ? "text-[#fecaca]" : "text-white/85"
+          }`}
+        >
+          {step.title}
+        </p>
         {!compact && step.detail ? (
           <p className="mt-1 max-w-[14rem] text-[11px] leading-relaxed text-white/40">{step.detail}</p>
         ) : null}

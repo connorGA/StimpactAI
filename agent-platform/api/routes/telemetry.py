@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import logging
 
 import asyncpg
@@ -87,7 +88,11 @@ async def _process_telemetry_outbox_inline(
         telemetry_repository=telemetry_repository,
     )
     result = await creation.process_telemetry_received(incident_payload)
-    if result.created_new_incident and result.incident_id is not None:
+    # region agent log
+    with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
+        debug_log.write(json.dumps({"sessionId": "31f43d", "runId": result.incident_id or "suppressed", "hypothesisId": "H6", "location": "agent-platform/api/routes/telemetry.py:90", "message": "inline telemetry evaluated for autonomous trigger", "data": {"outboxEventId": outbox_event_id, "incidentId": result.incident_id, "createdNewIncident": result.created_new_incident, "attachedTelemetry": result.attached_telemetry, "suppressed": result.suppressed}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
+    # endregion
+    if result.attached_telemetry and result.incident_id is not None:
         autonomous_service = AutonomousRunService(
             incident_repository,
             async_job_repository=AsyncJobRepository(pool),

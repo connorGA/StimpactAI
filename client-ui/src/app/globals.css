@@ -1282,21 +1282,26 @@ body:has(.landing-page-canvas) {
 
 @keyframes incident-wire-flow {
   0% {
-    transform: translateX(-30%);
+    left: -20%;
     opacity: 0;
   }
 
-  20% {
+  15% {
+    opacity: 1;
+  }
+
+  85% {
     opacity: 1;
   }
 
   100% {
-    transform: translateX(220%);
+    left: 100%;
     opacity: 0;
   }
 }
 
 .incident-wire-flow {
+  left: -20%;
   animation: incident-wire-flow 1.8s linear infinite;
 }
 

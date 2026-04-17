@@ -12,6 +12,7 @@ from shared.types.telemetry import Environment
 
 class IncidentStatus(StrEnum):
     OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
     RESOLVED = "resolved"
 
 
