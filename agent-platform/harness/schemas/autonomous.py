@@ -57,6 +57,7 @@ class AutonomousEventType(StrEnum):
     VERIFICATION_STATE_UPDATED = "verification_state_updated"
     GIT_CHECKPOINT_CREATED = "git_checkpoint_created"
     RECOVERY_INVOKED = "recovery_invoked"
+    REVIEW_COMPLETED = "review_completed"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
 
@@ -104,6 +105,8 @@ class AutonomousLoopState(BaseModel):
     last_tool_result: dict[str, Any] = Field(default_factory=dict)
     last_failure: AutonomousToolFailure | None = None
     recent_failure_signatures: list[str] = Field(default_factory=list, max_length=8)
+    repair_attempt_count: int = Field(ge=0, default=0)
+    last_retry_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AutonomousToolFailureClass(StrEnum):
@@ -137,6 +140,38 @@ class AutonomousVerificationEvidence(BaseModel):
     command: str | None = Field(default=None, max_length=8_000)
     recorded_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AutonomousSolutionReviewVerdict(StrEnum):
+    APPROVE = "approve"
+    NEEDS_CHANGES = "needs_changes"
+    UNCERTAIN = "uncertain"
+
+
+class AutonomousSolutionReviewRiskSeverity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class AutonomousSolutionReviewRisk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    area: str = Field(min_length=1, max_length=256)
+    severity: AutonomousSolutionReviewRiskSeverity
+    reasoning: str = Field(min_length=1, max_length=2_000)
+
+
+class AutonomousSolutionReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: AutonomousSolutionReviewVerdict
+    summary: str = Field(min_length=1, max_length=2_000)
+    risks: list[AutonomousSolutionReviewRisk] = Field(default_factory=list)
+    requested_checks: list[str] = Field(default_factory=list, max_length=12)
+    feedback_for_repair: list[str] = Field(default_factory=list, max_length=12)
+    reviewed_at: datetime
+    model_name: str = Field(min_length=1, max_length=128)
 
 
 class AutonomousPolicyDecision(BaseModel):
@@ -195,6 +230,7 @@ class AutonomousRepairRunRecord(BaseModel):
     benchmark_scenario_id: str | None = Field(default=None, max_length=128)
     benchmark_bug_class: str | None = Field(default=None, max_length=128)
     latest_verification: AutonomousVerificationEvidence | None = None
+    latest_review: AutonomousSolutionReview | None = None
     policy_block_reason: str | None = Field(default=None, max_length=2_000)
     policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
     loop_state: AutonomousLoopState = Field(default_factory=AutonomousLoopState)
@@ -245,6 +281,7 @@ class AutonomousRunOutcome(BaseModel):
     total_events: int = Field(ge=0, default=0)
     last_error: str | None = Field(default=None, max_length=4_000)
     latest_verification: AutonomousVerificationEvidence | None = None
+    latest_review: AutonomousSolutionReview | None = None
     root_cause_explanation: str | None = Field(default=None, max_length=8_000)
     solution_description: str | None = Field(default=None, max_length=8_000)
     narrative_generated_at: datetime | None = None

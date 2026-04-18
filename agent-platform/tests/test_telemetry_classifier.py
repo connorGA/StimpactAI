@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -8,7 +8,6 @@ import pytest
 from models.normalized_telemetry import NormalizedTelemetry
 from services.telemetry_classifier import (
     Classification,
-    ClassificationResult,
     TelemetryClassifier,
 )
 from shared.types.telemetry import Environment, HttpRequestContext, HttpResponseContext
@@ -153,6 +152,52 @@ async def test_invalid_credentials_message_without_http_context_is_user_error() 
         handled=None,
         request=None,
         response=None,
+    )
+    result = await classifier.classify(telemetry)
+    assert result.classification == Classification.USER_ERROR
+    assert result.source == "rules"
+
+
+@pytest.mark.asyncio
+async def test_session_expired_message_without_http_context_is_user_error() -> None:
+    classifier = TelemetryClassifier()
+    telemetry = build_normalized(
+        error_message="Soul Song Service: Your session has expired. Please log in again.",
+        stacktrace="Error: session expired\n    at refreshSession",
+        handled=None,
+        request=None,
+        response=None,
+    )
+    result = await classifier.classify(telemetry)
+    assert result.classification == Classification.USER_ERROR
+    assert result.source == "rules"
+
+
+@pytest.mark.asyncio
+async def test_session_expired_message_with_stacktrace_still_beats_no_http_bug_rule() -> None:
+    classifier = TelemetryClassifier()
+    telemetry = build_normalized(
+        error_message="Your session has expired. Please log in again.",
+        stacktrace="TypeError: auth token missing\n    at resumePlayback",
+        handled=None,
+        request=None,
+        response=None,
+    )
+    result = await classifier.classify(telemetry)
+    assert result.classification == Classification.USER_ERROR
+    assert result.source == "rules"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_session_expired_message_on_non_auth_url_is_user_error(status_code: int) -> None:
+    classifier = TelemetryClassifier()
+    telemetry = build_normalized(
+        error_message="Your session has expired. Please log in again.",
+        request=HttpRequestContext(
+            method="GET", url="https://api.example.com/api/music/songs"
+        ),
+        response=HttpResponseContext(status_code=status_code),
     )
     result = await classifier.classify(telemetry)
     assert result.classification == Classification.USER_ERROR

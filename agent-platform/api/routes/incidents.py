@@ -45,6 +45,8 @@ from api.schemas.incidents import (
     IncidentSandboxRunDetailResponse,
     IncidentSandboxRunResponse,
     IncidentListResponse,
+    EscalateNoiseFingerprintRequest,
+    EscalateNoiseFingerprintResponse,
     ReclassifyFingerprintRequest,
     ReclassifyFingerprintResponse,
     SandboxRunAttemptResponse,
@@ -59,6 +61,8 @@ from harness.schemas.autonomous import AutonomousRepairRunRecord, AutonomousRunS
 from models.incident import IncidentStatus
 from models.sandbox import SandboxRunStatus
 from services.autonomous_runs import AutonomousRunService
+from services.autonomous_trigger import trigger_autonomous_run_for_new_incident
+from services.incident_creation import IncidentCreationService
 from services.code_context import CodeContextService
 from services.failure_classifier import FailureClassifier
 from services.patch_generation import PatchGenerationService
@@ -69,6 +73,7 @@ from services.root_cause_analysis import (
     RootCauseReasoner,
 )
 from services.sandbox_verification import SandboxVerificationService
+from shared.events.incident_events import IncidentEvent
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -422,6 +427,14 @@ async def reclassify_fingerprint(
     ),
     security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
 ) -> ReclassifyFingerprintResponse:
+    """Persist a manual classification override for this fingerprint.
+
+    The classifier consults this table on future telemetry; it does **not** enqueue
+    an autonomous repair by itself. Treat-as-bug removes the fingerprint from the
+    suppressed-telemetry list (noise UI) and causes matching future events to be
+    classified as ``code_bug``, which can then open incidents per normal ingest rules.
+    """
+
     await require_project_read_access(
         request,
         payload.project_id,
@@ -447,6 +460,97 @@ async def reclassify_fingerprint(
         fingerprint=fingerprint,
         classification=classification,
         reason=payload.reason,
+    )
+
+
+@router.post(
+    "/noise/{fingerprint}/escalate",
+    response_model=EscalateNoiseFingerprintResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def escalate_noise_fingerprint(
+    request: Request,
+    fingerprint: str,
+    payload: EscalateNoiseFingerprintRequest,
+    fingerprint_repository: FingerprintClassificationRepository = Depends(
+        get_fingerprint_classification_repository
+    ),
+    incident_repository: IncidentRepository = Depends(get_incident_repository),
+    telemetry_repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
+    security_repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    autonomous_run_service: AutonomousRunService = Depends(get_autonomous_run_service),
+) -> EscalateNoiseFingerprintResponse:
+    """Treat fingerprint as ``code_bug``, open or refresh an incident from latest telemetry, queue repair."""
+
+    await require_project_read_access(
+        request,
+        payload.project_id,
+        repository=security_repository,
+    )
+    await fingerprint_repository.put(
+        project_id=payload.project_id,
+        fingerprint=fingerprint,
+        classification="code_bug",
+        reason=payload.reason,
+        source="manual",
+    )
+    telemetry_id = await telemetry_repository.get_latest_telemetry_id_for_fingerprint(
+        project_id=payload.project_id,
+        fingerprint=fingerprint,
+    )
+    if telemetry_id is None:
+        raise APIError(
+            "No telemetry events exist for this fingerprint in the project.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="telemetry_not_found",
+        )
+    telemetry = await incident_repository.get_telemetry(telemetry_id)
+    event = IncidentEvent(
+        telemetry_id=telemetry.id,
+        project_id=telemetry.project_id,
+        fingerprint=telemetry.fingerprint,
+        occurred_at=telemetry.occurred_at,
+        payload={
+            "environment": telemetry.environment.value,
+            "service": telemetry.service,
+            "error_message": telemetry.error_message,
+            "occurred_at": telemetry.occurred_at.isoformat(),
+        },
+    )
+    creation = IncidentCreationService(
+        incident_repository,
+        control_plane_repository=security_repository,
+        classifier=None,
+        telemetry_repository=None,
+    )
+    result = await creation.process_telemetry_received(event.model_dump(mode="json"))
+    if result.suppressed or result.incident_id is None:
+        raise APIError(
+            "Could not open an incident for this fingerprint after reclassification.",
+            status_code=status.HTTP_409_CONFLICT,
+            code="noise_escalate_failed",
+        )
+    incident_id = result.incident_id
+    runs_before = {run.id for run in await autonomous_run_service.list_runs(incident_id)}
+    await trigger_autonomous_run_for_new_incident(
+        incident_id=incident_id,
+        autonomous_run_service=autonomous_run_service,
+        processing_result=result,
+    )
+    runs_after = await autonomous_run_service.list_runs(incident_id)
+    new_runs = [run for run in runs_after if run.id not in runs_before]
+    new_run = new_runs[0] if new_runs else None
+    trigger_skipped = new_run is None and bool(runs_after)
+    return EscalateNoiseFingerprintResponse(
+        project_id=payload.project_id,
+        fingerprint=fingerprint,
+        incident_id=incident_id,
+        telemetry_id=telemetry_id,
+        created_new_incident=result.created_new_incident,
+        attached_telemetry=result.attached_telemetry,
+        autonomous_run_id=new_run.id if new_run is not None else None,
+        async_job_id=new_run.async_job_id if new_run is not None else None,
+        autonomous_trigger_skipped=trigger_skipped,
     )
 
 

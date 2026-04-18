@@ -74,6 +74,15 @@ class AutonomousPolicyService:
                 if not service_allowed:
                     reasons.append("Project policy blocks autonomous actions for this service.")
         auto_run_allowed = auto_run_allowed and service_allowed
+        max_repair_attempts, max_retry_budget = self._adaptive_retry_budgets(
+            incident=incident,
+            request=request,
+            require_browser_verification=require_browser_verification,
+        )
+        if max_repair_attempts > 2:
+            reasons.append(
+                "Adaptive repair policy expanded the retry budget to give complex incidents more room to converge safely."
+            )
 
         decision = AutonomousPolicyDecision(
             auto_run_allowed=auto_run_allowed,
@@ -89,8 +98,8 @@ class AutonomousPolicyService:
                 else ["search", "view", "edit", "command", "browser", "git"]
             ),
             require_browser_verification=require_browser_verification,
-            max_repair_attempts=2,
-            max_retry_budget=2,
+            max_repair_attempts=max_repair_attempts,
+            max_retry_budget=max_retry_budget,
             reasons=reasons,
         )
         approval_status = (
@@ -99,3 +108,23 @@ class AutonomousPolicyService:
             else AutonomousApprovalStatus.NOT_REQUIRED
         )
         return decision, approval_status
+
+    def _adaptive_retry_budgets(
+        self,
+        *,
+        incident: IncidentRecord,
+        request: AutonomousRunCreateRequest,
+        require_browser_verification: bool,
+    ) -> tuple[int, int]:
+        max_repair_attempts = 2
+        max_retry_budget = 2
+        if request.execution_mode is AutonomousExecutionMode.REPAIR_AND_PROPOSE:
+            max_repair_attempts = max(max_repair_attempts, 3)
+            max_retry_budget = max(max_retry_budget, 3)
+        if incident.severity in {IncidentSeverity.HIGH, IncidentSeverity.CRITICAL}:
+            max_repair_attempts = max(max_repair_attempts, 3)
+            max_retry_budget = max(max_retry_budget, 3)
+        if require_browser_verification:
+            max_repair_attempts = max(max_repair_attempts, 4)
+            max_retry_budget = max(max_retry_budget, 4)
+        return max_repair_attempts, max_retry_budget

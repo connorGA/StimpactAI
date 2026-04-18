@@ -410,3 +410,25 @@ class ReclassifyFingerprintResponse(BaseModel):
     fingerprint: str
     classification: str
     reason: str | None = None
+
+
+class EscalateNoiseFingerprintRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class EscalateNoiseFingerprintResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    fingerprint: str
+    classification: str = "code_bug"
+    incident_id: str
+    telemetry_id: str
+    created_new_incident: bool
+    attached_telemetry: bool
+    autonomous_run_id: str | None = None
+    async_job_id: str | None = None
+    autonomous_trigger_skipped: bool = False

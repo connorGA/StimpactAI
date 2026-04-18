@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import {
+  AgentPlatformError,
   getSuppressionSummary,
   listSuppressedTelemetry,
 } from "@/lib/agent-platform";
@@ -49,12 +50,22 @@ export default async function NoisePage({ searchParams }: NoisePageProps) {
     );
   }
 
-  const [listResponse, summary] = await Promise.all([
-    listSuppressedTelemetry(projectId, { limit: 100 }).catch(() => ({ items: [] as SuppressedFingerprint[] })),
-    getSuppressionSummary(projectId, { windowMinutes: 60 * 24 }).catch<SuppressionSummary | null>(
-      () => null,
-    ),
-  ]);
+  let listLoadError: string | null = null;
+  let listResponse: { items: SuppressedFingerprint[] };
+  try {
+    listResponse = await listSuppressedTelemetry(projectId, { limit: 100 });
+  } catch (caught) {
+    const message =
+      caught instanceof AgentPlatformError
+        ? caught.message
+        : "Unable to load suppressed telemetry.";
+    listLoadError = message;
+    listResponse = { items: [] };
+  }
+
+  const summary = await getSuppressionSummary(projectId, {
+    windowMinutes: 60 * 24,
+  }).catch<SuppressionSummary | null>(() => null);
 
   const items = listResponse.items;
 
@@ -105,13 +116,21 @@ export default async function NoisePage({ searchParams }: NoisePageProps) {
         </div>
       ) : null}
 
-      {items.length === 0 ? (
+      {listLoadError ? (
+        <p className="rounded-xl border border-[#ff6a3d]/35 bg-[#ff6a3d]/[0.06] px-4 py-4 text-sm text-[#ffb099]">
+          {listLoadError}
+        </p>
+      ) : null}
+
+      {!listLoadError && items.length === 0 ? (
         <p className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-6 text-sm text-white/60">
           No suppressed telemetry in the window. This list fills in as the classifier
           filters out expected user errors.
         </p>
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-white/10">
+      ) : null}
+
+      {!listLoadError && items.length > 0 ? (
+        <div className="overflow-visible rounded-xl border border-white/10">
           <table className="min-w-full divide-y divide-white/5 text-sm">
             <thead className="bg-white/[0.03] text-[11px] uppercase tracking-wide text-white/50">
               <tr>
@@ -172,7 +191,7 @@ export default async function NoisePage({ searchParams }: NoisePageProps) {
             </tbody>
           </table>
         </div>
-      )}
+      ) : null}
     </main>
   );
 }

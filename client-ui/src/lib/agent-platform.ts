@@ -32,6 +32,7 @@ import type {
   ProviderIntegration,
   ProviderRepository,
   ProjectSummary,
+  EscalateNoiseFingerprintResponse,
   ReclassifyFingerprintResponse,
   RepoProfile,
   SandboxRunQueuedResponse,
@@ -374,6 +375,21 @@ export async function reclassifyFingerprint(input: {
     body: JSON.stringify({
       project_id: input.projectId,
       classification: input.classification,
+      reason: input.reason ?? null,
+    }),
+  });
+}
+
+export async function escalateNoiseFingerprint(input: {
+  projectId: string;
+  fingerprint: string;
+  reason?: string;
+}): Promise<EscalateNoiseFingerprintResponse> {
+  return fetchFromAgentPlatform<EscalateNoiseFingerprintResponse>({
+    path: `/incidents/noise/${encodeURIComponent(input.fingerprint)}/escalate`,
+    method: "POST",
+    body: JSON.stringify({
+      project_id: input.projectId,
       reason: input.reason ?? null,
     }),
   });

@@ -332,6 +332,29 @@ export type AutonomousVerificationEvidence = {
   metadata: Record<string, unknown>;
 };
 
+export type AutonomousSolutionReviewVerdict =
+  | "approve"
+  | "needs_changes"
+  | "uncertain";
+
+export type AutonomousSolutionReviewRiskSeverity = "low" | "medium" | "high";
+
+export type AutonomousSolutionReviewRisk = {
+  area: string;
+  severity: AutonomousSolutionReviewRiskSeverity;
+  reasoning: string;
+};
+
+export type AutonomousSolutionReview = {
+  verdict: AutonomousSolutionReviewVerdict;
+  summary: string;
+  risks: AutonomousSolutionReviewRisk[];
+  requested_checks: string[];
+  feedback_for_repair: string[];
+  reviewed_at: string;
+  model_name: string;
+};
+
 export type AutonomousLoopState = {
   step_index: number;
   max_steps: number;
@@ -345,6 +368,8 @@ export type AutonomousLoopState = {
   last_tool_result: Record<string, unknown>;
   last_failure: AutonomousToolFailure | null;
   recent_failure_signatures: string[];
+  repair_attempt_count: number;
+  last_retry_context: Record<string, unknown>;
 };
 
 export type AutonomousPolicyDecision = {
@@ -397,6 +422,7 @@ export type AutonomousRun = {
   coding_session_id: string | null;
   last_error: string | null;
   latest_verification: AutonomousVerificationEvidence | null;
+  latest_review: AutonomousSolutionReview | null;
   policy_block_reason: string | null;
   policy: AutonomousPolicyDecision;
   loop_state: AutonomousLoopState;
@@ -434,6 +460,7 @@ export type AutonomousRunOutcome = {
   total_events: number;
   last_error: string | null;
   latest_verification: AutonomousVerificationEvidence | null;
+  latest_review: AutonomousSolutionReview | null;
   root_cause_explanation: string | null;
   solution_description: string | null;
   narrative_generated_at: string | null;
@@ -1047,4 +1074,17 @@ export type ReclassifyFingerprintResponse = {
   fingerprint: string;
   classification: TelemetryClassification | string;
   reason: string | null;
+};
+
+export type EscalateNoiseFingerprintResponse = {
+  project_id: string;
+  fingerprint: string;
+  classification: string;
+  incident_id: string;
+  telemetry_id: string;
+  created_new_incident: boolean;
+  attached_telemetry: boolean;
+  autonomous_run_id: string | null;
+  async_job_id: string | null;
+  autonomous_trigger_skipped: boolean;
 };

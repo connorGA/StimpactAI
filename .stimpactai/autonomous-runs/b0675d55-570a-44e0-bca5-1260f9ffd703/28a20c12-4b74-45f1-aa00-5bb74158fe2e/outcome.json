@@ -1,0 +1,67 @@
+{
+  "approval_status": "not_required",
+  "benchmark_bug_class": null,
+  "benchmark_scenario_id": null,
+  "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+  "completed_at": "2026-04-18T15:33:53.659940Z",
+  "created_at": "2026-04-18T15:32:42.107778Z",
+  "execution_mode": "repair_and_propose",
+  "failure_class": null,
+  "final_success": false,
+  "fresh_verification_satisfied": true,
+  "incident_id": "b0675d55-570a-44e0-bca5-1260f9ffd703",
+  "last_error": "Autonomous repair cannot complete without producing a code change relative to the baseline checkpoint.",
+  "latest_review": null,
+  "latest_verification": {
+    "command": "npm run build",
+    "kind": "integration",
+    "metadata": {
+      "feature_id": "soul-song-service-your-session-has-expired-please-log-in-again",
+      "tool_name": "run_command",
+      "turn_id": 7
+    },
+    "passed": true,
+    "recorded_at": "2026-04-18T15:33:21.122581Z",
+    "source": "tool",
+    "summary": "Command completed successfully."
+  },
+  "narrative_generated_at": null,
+  "objective": "Investigate, repair, and verify incident 'Soul Song Service: Your session has expired. Please log in again.' for service Soul Song Service.",
+  "phase": "failed",
+  "policy": {
+    "allow_writeback": true,
+    "allowed_execution_backends": [
+      "kubernetes",
+      "local"
+    ],
+    "allowed_tool_categories": [
+      "search",
+      "view",
+      "edit",
+      "command",
+      "browser",
+      "git"
+    ],
+    "auto_run_allowed": true,
+    "max_repair_attempts": 3,
+    "max_retry_budget": 3,
+    "reasons": [
+      "Repair-and-propose mode enables write-back eligibility.",
+      "Adaptive repair policy expanded the retry budget to give complex incidents more room to converge safely."
+    ],
+    "require_browser_verification": false,
+    "requires_human_approval": false
+  },
+  "promotion_status": "not_requested",
+  "recovery_attempts": 0,
+  "repository_root": "/var/folders/jf/7rw3rp79673bvfds731q7fb00000gn/T/stimpact-agent-b0675d55-vpcl_h9w/repo",
+  "root_cause_explanation": null,
+  "run_id": "28a20c12-4b74-45f1-aa00-5bb74158fe2e",
+  "solution_description": null,
+  "stagnation_count": 0,
+  "status": "failed",
+  "total_decisions": 6,
+  "total_events": 37,
+  "total_steps": 5,
+  "total_tool_calls": 8
+}

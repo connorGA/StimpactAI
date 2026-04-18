@@ -89,6 +89,17 @@ def get_openai_autonomous_model() -> str:
     )
 
 
+def get_openai_solution_review_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_SOLUTION_REVIEW_MODEL",
+        "OPENAI_AUTONOMOUS_MODEL",
+        "OPENAI_PATCH_MODEL",
+        "OPENAI_RCA_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
 def get_repository_root() -> Path:
     value = os.getenv("AGENT_PLATFORM_REPOSITORY_ROOT")
     if value is None or not value.strip():
@@ -406,7 +417,9 @@ def get_telemetry_classifier_enabled() -> bool:
 
     Disabled by default so the existing behaviour is preserved during rollout;
     flip via the ``AGENT_PLATFORM_TELEMETRY_CLASSIFIER_ENABLED`` environment
-    variable once production accuracy has been validated.
+    variable once production accuracy has been validated. Note that cached
+    fingerprint classifications can continue to suppress or promote a known
+    event shape until those cached rows are cleared or replaced.
     """
 
     return get_bool_env("AGENT_PLATFORM_TELEMETRY_CLASSIFIER_ENABLED", False)

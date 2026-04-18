@@ -64,33 +64,58 @@ SELECT_SUPPRESSED_TELEMETRY_SQL = """
 SELECT
     te.project_id,
     te.fingerprint,
-    te.classification,
-    te.classification_reason,
-    te.classification_source,
-    MIN(te.service) AS service,
-    MIN(te.error_message) AS error_message,
+    COALESCE(
+        MAX(tfc.classification),
+        (array_agg(te.classification ORDER BY te.occurred_at DESC NULLS LAST))[1]
+    ) AS classification,
+    COALESCE(
+        MAX(tfc.reason),
+        (array_agg(te.classification_reason ORDER BY te.occurred_at DESC NULLS LAST))[1]
+    ) AS classification_reason,
+    COALESCE(
+        MAX(tfc.source),
+        (array_agg(te.classification_source ORDER BY te.occurred_at DESC NULLS LAST))[1]
+    ) AS classification_source,
+    (array_agg(te.service ORDER BY te.occurred_at DESC NULLS LAST))[1] AS service,
+    (array_agg(te.error_message ORDER BY te.occurred_at DESC NULLS LAST))[1] AS error_message,
     MAX(te.occurred_at) AS last_occurred_at,
     MIN(te.occurred_at) AS first_occurred_at,
     COUNT(*)::BIGINT AS occurrence_count,
     MAX(te.classified_at) AS last_classified_at
   FROM telemetry_events te
+  LEFT JOIN telemetry_fingerprint_classifications tfc
+    ON tfc.project_id = te.project_id AND tfc.fingerprint = te.fingerprint
  WHERE te.project_id = $1
-   AND te.classification IN ('user_error', 'code_ambiguous')
- GROUP BY te.project_id, te.fingerprint, te.classification, te.classification_reason, te.classification_source
- ORDER BY last_occurred_at DESC
+ GROUP BY te.project_id, te.fingerprint
+HAVING COALESCE(
+    MAX(tfc.classification),
+    (array_agg(te.classification ORDER BY te.occurred_at DESC NULLS LAST))[1]
+) IN ('user_error', 'code_ambiguous')
+ ORDER BY MAX(te.occurred_at) DESC
  LIMIT $2;
 """
 
 SELECT_SUPPRESSED_SUMMARY_SQL = """
 SELECT
-    classification,
+    COALESCE(tfc.classification, te.classification) AS classification,
     COUNT(*)::BIGINT AS event_count,
-    COUNT(DISTINCT fingerprint)::BIGINT AS unique_fingerprints
+    COUNT(DISTINCT te.fingerprint)::BIGINT AS unique_fingerprints
+  FROM telemetry_events te
+  LEFT JOIN telemetry_fingerprint_classifications tfc
+    ON tfc.project_id = te.project_id AND tfc.fingerprint = te.fingerprint
+ WHERE te.project_id = $1
+   AND te.occurred_at >= $2
+   AND COALESCE(tfc.classification, te.classification) IN ('user_error', 'code_ambiguous')
+ GROUP BY COALESCE(tfc.classification, te.classification);
+"""
+
+SELECT_LATEST_TELEMETRY_ID_BY_FINGERPRINT_SQL = """
+SELECT id
   FROM telemetry_events
  WHERE project_id = $1
-   AND classification IN ('user_error', 'code_ambiguous')
-   AND occurred_at >= $2
- GROUP BY classification;
+   AND fingerprint = $2
+ ORDER BY occurred_at DESC
+ LIMIT 1;
 """
 
 
@@ -229,3 +254,24 @@ class PostgresTelemetryRepository:
             }
             for row in rows
         }
+
+    async def get_latest_telemetry_id_for_fingerprint(
+        self,
+        *,
+        project_id: str,
+        fingerprint: str,
+    ) -> str | None:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for telemetry reads.")
+        try:
+            async with self._pool.acquire() as connection:
+                row = await connection.fetchrow(
+                    SELECT_LATEST_TELEMETRY_ID_BY_FINGERPRINT_SQL,
+                    project_id,
+                    fingerprint,
+                )
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to resolve latest telemetry for fingerprint.") from exc
+        if row is None:
+            return None
+        return str(row["id"])

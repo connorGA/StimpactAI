@@ -15,6 +15,7 @@
     "staging:drill": "PYTHONPATH=agent-platform .venv/bin/python -m staging_drill",
     "test": "npm run test:backend && npm run test:frontend",
     "test:backend": ".venv/bin/python -m pytest agent-platform/tests",
+    "test:backend:e2e": ".venv/bin/python -m pytest agent-platform/tests/test_e2e_complex_autonomous_flows.py -v",
     "test:backend:coverage": ".venv/bin/python -m pytest --cov=api --cov=models --cov=services --cov=workers --cov=shared --cov-report=term-missing agent-platform/tests",
     "test:frontend": "npm --prefix client-ui run lint && npm --prefix client-ui run build",
     "test:e2e": "npm --prefix client-ui run test:e2e",

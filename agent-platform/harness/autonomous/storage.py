@@ -114,6 +114,7 @@ class AutonomousRunArtifactStore:
             total_events=len(events),
             last_error=run.last_error,
             latest_verification=run.latest_verification,
+            latest_review=run.latest_review,
             root_cause_explanation=(
                 preserved_outcome.root_cause_explanation if preserved_outcome is not None else None
             ),

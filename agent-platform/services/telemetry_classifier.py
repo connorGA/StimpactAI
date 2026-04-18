@@ -103,6 +103,15 @@ AUTH_MESSAGE_HINTS = (
     "authentication failed",
     "wrong password",
     "incorrect password",
+    "session has expired",
+    "session expired",
+    "missing session",
+    "not authenticated",
+    "authentication required",
+    "please log in",
+    "please login",
+    "log in again",
+    "login again",
 )
 
 DEFAULT_FREQUENCY_WINDOW_MINUTES = 5
@@ -116,7 +125,11 @@ class _RuleVerdict:
 
 
 class TelemetryClassifier:
-    """Three-layer classifier: rules \u2192 LLM (cached) \u2192 frequency escalation."""
+    """Three-layer classifier: rules \u2192 LLM (cached) \u2192 frequency escalation.
+
+    Cached fingerprint verdicts can outlive rule changes, so operators may need
+    to clear or override a bad cached classification after rollout.
+    """
 
     def __init__(
         self,
@@ -174,6 +187,7 @@ class TelemetryClassifier:
         url = _request_url(telemetry)
         method = _request_method(telemetry)
         error_message = telemetry.error_message or ""
+        auth_message_matched = _matches_auth_user_error_message(error_message)
         stacktrace = telemetry.stacktrace or ""
         response_body = _response_body(telemetry)
 
@@ -202,6 +216,13 @@ class TelemetryClassifier:
                 "Expected outcome for invalid credentials / missing session.",
             )
 
+        if status_code in AUTH_STATUS_CODES and auth_message_matched:
+            return _decisive(
+                Classification.USER_ERROR,
+                f"HTTP {status_code} with a session/authentication message; "
+                "expected protected-resource outcome rather than a code defect.",
+            )
+
         if (
             status_code == 422
             and isinstance(response_body, dict)
@@ -215,7 +236,7 @@ class TelemetryClassifier:
         if (
             status_code is None
             and url is None
-            and any(hint in error_message.lower() for hint in AUTH_MESSAGE_HINTS)
+            and auth_message_matched
         ):
             return _decisive(
                 Classification.USER_ERROR,
@@ -465,6 +486,13 @@ def _looks_like_unhandled_exception(message: str) -> bool:
         return False
     normalized = message.strip()
     return any(pattern in normalized for pattern in UNHANDLED_EXCEPTION_PATTERNS)
+
+
+def _matches_auth_user_error_message(message: str) -> bool:
+    if not message:
+        return False
+    normalized = message.lower()
+    return any(hint in normalized for hint in AUTH_MESSAGE_HINTS)
 
 
 def _decisive(classification: Classification, reason: str) -> _RuleVerdict:

@@ -18,6 +18,10 @@ from harness.schemas.autonomous import (
     AutonomousPromotionStatus,
     AutonomousRunPhase,
     AutonomousRunStatus,
+    AutonomousSolutionReview,
+    AutonomousSolutionReviewRisk,
+    AutonomousSolutionReviewRiskSeverity,
+    AutonomousSolutionReviewVerdict,
     AutonomousToolFailure,
     AutonomousToolFailureClass,
     AutonomousVerificationEvidence,
@@ -362,6 +366,12 @@ class StubPatchRepository:
     async def get_patch_run(self, patch_run_id: str):
         return SimpleNamespace(
             id=patch_run_id,
+            patch_summary="Fix billing timeout handling.",
+            rationale="Retry the downstream call with a shorter lock window.",
+            target_files=[SimpleNamespace(path="app.py", reason="Repair logic changed.")],
+            verification_steps=["pytest tests/test_billing.py::test_timeout_fixed"],
+            diff_line_count=2,
+            file_count=1,
             unified_diff=(
                 "diff --git a/app.py b/app.py\n"
                 "--- a/app.py\n"
@@ -395,6 +405,46 @@ class StubPatchRepository:
         )
         self.created_runs.append(record)
         return record
+
+
+class StubSolutionReviewService:
+    def __init__(self, review: AutonomousSolutionReview) -> None:
+        self.review = review
+        self.calls: list[dict[str, object]] = []
+
+    async def review_solution(self, **kwargs) -> AutonomousSolutionReview:
+        self.calls.append(kwargs)
+        return self.review
+
+
+class StubPostVerificationRetryRunner:
+    def __init__(self, event_stream) -> None:
+        self._event_stream = event_stream
+        self.retry_contexts: list[dict[str, object]] = []
+
+    def prepare_for_retry(self, *, run_id: str, retry_context: dict[str, object] | None = None):
+        self.retry_contexts.append(retry_context or {})
+        snapshot = self._event_stream.get_snapshot(run_id)
+        run = snapshot.run
+        retried_run = run.model_copy(
+            update={
+                "status": AutonomousRunStatus.QUEUED,
+                "phase": AutonomousRunPhase.CODING,
+                "last_error": None,
+                "latest_verification": None,
+                "latest_review": None,
+                "patch_run_id": None,
+                "sandbox_run_id": None,
+                "promotion_status": AutonomousPromotionStatus.NOT_REQUESTED,
+                "loop_state": run.loop_state.model_copy(
+                    update={
+                        "last_retry_context": retry_context or {},
+                    }
+                ),
+            }
+        )
+        self._event_stream.upsert_run(retried_run)
+        return self._event_stream.get_snapshot(run_id)
 
 
 class StubSandboxVerificationService:
@@ -570,6 +620,17 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
     )
     artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
     provider_service = StubProviderIntegrationService()
+    approving_reviewer = StubSolutionReviewService(
+        AutonomousSolutionReview(
+            verdict=AutonomousSolutionReviewVerdict.APPROVE,
+            summary="The patch looks appropriately scoped.",
+            risks=[],
+            requested_checks=[],
+            feedback_for_repair=[],
+            reviewed_at=now,
+            model_name="gpt-test",
+        )
+    )
     service = AutonomousRunService(
         StubIncidentRepository(incident),
         async_job_repository=StubAsyncJobRepository(),
@@ -580,6 +641,7 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
         artifact_store=artifact_store,
         event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
         provider_integration_service=provider_service,
+        solution_review_service=approving_reviewer,
     )
 
     detail = await service.start_run(
@@ -1478,3 +1540,229 @@ async def test_autonomous_run_service_prefers_newer_persisted_snapshot_over_stal
     refreshed = service.get_run_detail_sync("incident-1", detail.run.id)
     assert refreshed.run.status is AutonomousRunStatus.SUCCEEDED
     assert refreshed.run.phase is AutonomousRunPhase.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_applies_adaptive_policy_and_step_budgets(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=StubPatchRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+            max_steps=20,
+        ),
+    )
+
+    assert detail.run.policy.max_repair_attempts >= 3
+    assert detail.run.policy.max_retry_budget >= 3
+    assert detail.run.loop_state.max_steps >= 32
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_retry_context_includes_diff_and_review_memory(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    patch_repository = StubPatchRepository()
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=patch_repository,
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    run = detail.run.model_copy(
+        update={
+            "patch_run_id": "patch-1",
+            "last_error": "Reviewer requested a narrower patch.",
+            "latest_verification": AutonomousVerificationEvidence(
+                source="sandbox",
+                kind="sandbox",
+                summary="Patch passed verification, but follow-up review flagged risk.",
+                passed=False,
+                command="pytest tests/test_billing.py::test_timeout_fixed",
+                recorded_at=now,
+                metadata={"patch_applied": True, "reproduction_succeeded": True},
+            ),
+            "latest_review": AutonomousSolutionReview(
+                verdict=AutonomousSolutionReviewVerdict.NEEDS_CHANGES,
+                summary="The patch may affect unrelated checkout paths.",
+                risks=[
+                    AutonomousSolutionReviewRisk(
+                        area="checkout flow",
+                        severity=AutonomousSolutionReviewRiskSeverity.MEDIUM,
+                        reasoning="The diff broadens retry logic beyond the failing path.",
+                    )
+                ],
+                requested_checks=["pytest tests/test_checkout.py"],
+                feedback_for_repair=["Limit the retry branch to the checkout timeout path only."],
+                reviewed_at=now,
+                model_name="gpt-test",
+            ),
+            "loop_state": detail.run.loop_state.model_copy(
+                update={
+                    "repair_attempt_count": 1,
+                    "last_retry_context": {"retry_driver": "sandbox_recovery"},
+                }
+            ),
+        }
+    )
+
+    retry_context = await service._build_retry_context(  # noqa: SLF001
+        run,
+        next_attempt_number=2,
+        sandbox_excerpt="sandbox output excerpt",
+    )
+
+    assert retry_context["previous_diff_fingerprint"] == {
+        "patch_run_id": "patch-1",
+        "file_count": 1,
+        "diff_line_count": 2,
+        "target_files": ["app.py"],
+    }
+    assert retry_context["previous_review_summary"] == "The patch may affect unrelated checkout paths."
+    assert retry_context["review_feedback_for_repair"] == [
+        "Limit the retry branch to the checkout timeout path only."
+    ]
+    assert retry_context["previous_sandbox_excerpt"] == "sandbox output excerpt"
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_retries_after_reviewer_requests_changes(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    async_jobs = StubAsyncJobRepository()
+    repository = StubAutonomousRunRepository()
+    patch_repository = StubPatchRepository()
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    reviewer = StubSolutionReviewService(
+        AutonomousSolutionReview(
+            verdict=AutonomousSolutionReviewVerdict.NEEDS_CHANGES,
+            summary="The fix should be narrowed to the incident path before promotion.",
+            risks=[
+                AutonomousSolutionReviewRisk(
+                    area="billing-api",
+                    severity=AutonomousSolutionReviewRiskSeverity.MEDIUM,
+                    reasoning="The current diff appears broader than the failing timeout path.",
+                )
+            ],
+            requested_checks=["pytest tests/test_billing.py::test_timeout_fixed"],
+            feedback_for_repair=["Scope the retry logic to the checkout timeout code path only."],
+            reviewed_at=now,
+            model_name="gpt-test",
+        )
+    )
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=repository,
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=patch_repository,
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=event_stream,
+        solution_review_service=reviewer,
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    run_with_patch = detail.run.model_copy(
+        update={
+            "patch_run_id": "patch-1",
+            "loop_state": detail.run.loop_state.model_copy(
+                update={
+                    "checkpoint_ref": "stimpact-checkpoint/autonomous-baseline",
+                    "repair_attempt_count": 1,
+                }
+            ),
+        }
+    )
+    service._event_stream.upsert_run(run_with_patch)  # noqa: SLF001
+    await repository.update_run(
+        run_with_patch.id,
+        async_job_id=run_with_patch.async_job_id,
+        repo_profile_id=run_with_patch.repo_profile_id,
+        run=run_with_patch,
+        outcome=None,
+    )
+    retry_runner = StubPostVerificationRetryRunner(service._event_stream)  # noqa: SLF001
+    service._runner = retry_runner  # type: ignore[assignment]  # noqa: SLF001
+
+    await service.record_sandbox_result(
+        SandboxRunRecord(
+            id="sandbox-1",
+            incident_id="incident-1",
+            patch_run_id="patch-1",
+            repo_profile_id="profile-1",
+            async_job_id="job-sandbox-1",
+            status=SandboxRunStatus.SUCCEEDED,
+            executor_backend="kubernetes",
+            external_job_id="sandbox-ext-1",
+            install_command="pip install -r requirements.txt",
+            reproduce_command="pytest tests/test_billing.py::test_timeout",
+            verify_command="pytest tests/test_billing.py::test_timeout_fixed",
+            reproduction_succeeded=True,
+            patch_applied=True,
+            verification_succeeded=True,
+            summary="Sandbox verified the autonomous repair.",
+            execution_log="sandbox execution log",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    refreshed = await service.get_run_detail("incident-1", detail.run.id)
+    assert refreshed.run.status is AutonomousRunStatus.QUEUED
+    assert refreshed.run.phase is AutonomousRunPhase.CODING
+    assert refreshed.run.async_job_id == "job-2"
+    assert refreshed.run.loop_state.last_retry_context["previous_review_summary"] == (
+        "The fix should be narrowed to the incident path before promotion."
+    )
+    assert refreshed.run.loop_state.last_retry_context["review_feedback_for_repair"] == [
+        "Scope the retry logic to the checkout timeout code path only."
+    ]
+    assert refreshed.run.loop_state.last_retry_context["previous_diff_fingerprint"] == {
+        "patch_run_id": "patch-1",
+        "file_count": 1,
+        "diff_line_count": 2,
+        "target_files": ["app.py"],
+    }
+    assert retry_runner.retry_contexts
+    assert reviewer.calls

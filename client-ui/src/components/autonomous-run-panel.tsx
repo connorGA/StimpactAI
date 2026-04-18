@@ -257,6 +257,9 @@ export function AutonomousRunPanel({
   const runStatus = detail?.run.status;
   const stepIndex = detail?.run.loop_state.step_index ?? 0;
   const maxSteps = detail?.run.loop_state.max_steps ?? 0;
+  const attemptCount = detail?.run.loop_state.repair_attempt_count ?? 0;
+  const maxAttempts = detail?.run.policy.max_repair_attempts ?? 0;
+  const latestReview = detail?.run.latest_review ?? detail?.outcome?.latest_review ?? null;
   const progressPct =
     detail && runStatus
       ? runStatus === "succeeded" || runStatus === "failed" || runStatus === "cancelled"
@@ -517,6 +520,11 @@ export function AutonomousRunPanel({
             <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-white/[0.06] pt-3 text-[11px] text-white/50">
               <span>Approval: {formatAutonomousApprovalStatus(detail.run.approval_status)}</span>
               <span className="capitalize">Promotion: {detail.run.promotion_status.replace(/_/g, " ")}</span>
+              {maxAttempts > 0 ? (
+                <span>
+                  Attempt: {Math.max(attemptCount, 1)} / {maxAttempts}
+                </span>
+              ) : null}
               {detail.run.loop_state.recovery_attempts > 0 ? (
                 <span>Recovery attempts: {detail.run.loop_state.recovery_attempts}</span>
               ) : null}
@@ -524,6 +532,29 @@ export function AutonomousRunPanel({
                 <span>Stagnation count: {detail.run.loop_state.stagnation_count}</span>
               ) : null}
             </div>
+            {detail.run.loop_state.last_retry_context &&
+            Object.keys(detail.run.loop_state.last_retry_context).length > 0 ? (
+              <div className="mt-3 rounded-lg border border-[rgba(45,127,249,0.24)] bg-[rgba(45,127,249,0.08)] px-3 py-2.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-[#93c5fd]">
+                  Retry memory
+                </p>
+                <p className="mt-1 text-sm text-white/80">
+                  {formatRetryDriver(
+                    String(detail.run.loop_state.last_retry_context.retry_driver ?? "unknown"),
+                  )}
+                </p>
+                {typeof detail.run.loop_state.last_retry_context.previous_review_summary === "string" ? (
+                  <p className="mt-1 text-sm text-white/60">
+                    {detail.run.loop_state.last_retry_context.previous_review_summary}
+                  </p>
+                ) : typeof detail.run.loop_state.last_retry_context.previous_verification_summary ===
+                    "string" ? (
+                  <p className="mt-1 text-sm text-white/60">
+                    {detail.run.loop_state.last_retry_context.previous_verification_summary}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {detail.run.loop_state.last_failure ? (
               <div className="mt-3 rounded-lg border border-[rgba(248,113,113,0.25)] bg-[rgba(248,113,113,0.06)] px-3 py-2.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-[#fca5a5]">
@@ -647,6 +678,54 @@ export function AutonomousRunPanel({
                 ) : null}
               </div>
             </details>
+          ) : null}
+
+          {latestReview ? (
+            <div className="mt-4 rounded-xl border border-[rgba(45,127,249,0.22)] bg-[rgba(45,127,249,0.08)] px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#93c5fd]">
+                    Solution review
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-white/90">
+                    {formatReviewVerdict(latestReview.verdict)}
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-white/65">
+                    {latestReview.summary}
+                  </p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">
+                  {latestReview.model_name}
+                </span>
+              </div>
+              {latestReview.risks.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {latestReview.risks.map((risk, index) => (
+                    <div
+                      key={`${risk.area}-${index}`}
+                      className="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2.5"
+                    >
+                      <p className="text-sm font-medium text-white/85">
+                        {risk.area} · {risk.severity}
+                      </p>
+                      <p className="mt-1 text-sm text-white/60">{risk.reasoning}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {latestReview.feedback_for_repair.length > 0 ? (
+                <div className="mt-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Feedback for next attempt
+                  </p>
+                  <div className="mt-2 space-y-1.5 text-sm text-white/60">
+                    {latestReview.feedback_for_repair.map((item) => (
+                      <p key={item}>{item}</p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           <div className="mt-4">
@@ -887,6 +966,7 @@ function deriveFailureInsight(detail: IncidentAutonomousRunDetail | null): Failu
   const lastFailure = run.loop_state.last_failure;
   const derivedFailureClass = detail.outcome?.failure_class ?? lastFailure?.failure_class ?? null;
   const latestVerification = run.latest_verification;
+  const latestReview = run.latest_review ?? detail.outcome?.latest_review ?? null;
   const verificationSummary = latestVerification?.summary ?? "";
   const verificationSummaryLower = verificationSummary.toLowerCase();
   const lastError = run.last_error ?? "";
@@ -928,6 +1008,15 @@ function deriveFailureInsight(detail: IncidentAutonomousRunDetail | null): Failu
       summary: run.policy_block_reason,
       retryNote:
         "Automatic retry is blocked by project policy. Adjust the policy or repo linkage before trying again.",
+    };
+  }
+
+  if (latestReview?.verdict === "needs_changes") {
+    return {
+      label: "Reviewer requested changes",
+      summary: latestReview.summary,
+      retryNote:
+        "The patch looked promising, but the reviewer flagged risk or missing confidence. The next retry should address the review feedback before promotion.",
     };
   }
 
@@ -974,6 +1063,20 @@ function deriveFailureInsight(detail: IncidentAutonomousRunDetail | null): Failu
 
 function formatFailureClassLabel(failureClass: string): string {
   return failureClass
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatRetryDriver(driver: string): string {
+  return driver
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatReviewVerdict(verdict: string): string {
+  return verdict
     .split("_")
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ");

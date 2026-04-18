@@ -663,6 +663,7 @@ class AutonomousRepairRunner:
                 },
                 "last_failure": None,
                 "recent_failure_signatures": [],
+                "last_retry_context": retry_context or {},
             }
         )
         retried_run = run.model_copy(
@@ -678,6 +679,7 @@ class AutonomousRepairRunner:
                 "promotion_status": AutonomousPromotionStatus.NOT_REQUESTED,
                 "last_error": None,
                 "latest_verification": None,
+                "latest_review": None,
                 "loop_state": updated_loop_state,
                 "updated_at": datetime.now(UTC),
             }
