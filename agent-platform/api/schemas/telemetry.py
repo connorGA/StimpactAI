@@ -22,9 +22,9 @@ class TelemetryErrorRequest(TelemetryEnvelope):
             raise ValueError("value must not be blank")
         return normalized
 
-    @field_validator("commit_sha")
+    @field_validator("commit_sha", "release", "dist", "session_id")
     @classmethod
-    def normalize_commit_sha(cls, value: str | None) -> str | None:
+    def normalize_optional_value(cls, value: str | None) -> str | None:
         if value is None:
             return None
 
@@ -69,9 +69,9 @@ class TelemetryHeartbeatRequest(TelemetryEnvelope):
             raise ValueError("value must not be blank")
         return normalized
 
-    @field_validator("commit_sha")
+    @field_validator("commit_sha", "release", "dist", "session_id")
     @classmethod
-    def normalize_commit_sha(cls, value: str | None) -> str | None:
+    def normalize_optional_value(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip().lower()

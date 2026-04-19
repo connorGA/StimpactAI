@@ -20,6 +20,8 @@ from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.events.publisher import IncidentEventPublisher, get_incident_event_publisher
 from api.events.outbox_signaler import OutboxSignaler
 from api.repositories.control_plane_repository import ControlPlaneRepository
+from api.repositories.artifact_repository import ArtifactRepository
+from api.repositories.release_sourcemap_repository import ReleaseSourcemapRepository
 from api.repositories.telemetry_repository import PostgresTelemetryRepository
 from api.schemas.telemetry import (
     BrowserTelemetryTokenIssueRequest,
@@ -30,6 +32,8 @@ from api.schemas.telemetry import (
     TelemetryHeartbeatRequest,
 )
 from models.normalized_telemetry import NormalizedTelemetry
+from services.artifact_storage import S3ArtifactStorage
+from services.stacktrace_symbolication import StacktraceSymbolicationService
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 logger = logging.getLogger(__name__)
@@ -126,6 +130,16 @@ def get_control_plane_repository(
     return ControlPlaneRepository(manager.pool)
 
 
+def get_stacktrace_symbolication_service(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> StacktraceSymbolicationService:
+    return StacktraceSymbolicationService(
+        sourcemap_repository=ReleaseSourcemapRepository(manager.pool),
+        artifact_repository=ArtifactRepository(manager.pool),
+        artifact_storage=S3ArtifactStorage(),
+    )
+
+
 def get_outbox_signaler(request: Request) -> OutboxSignaler:
     return request.app.state.outbox_signaler
 
@@ -163,6 +177,7 @@ async def ingest_error(
     repository: PostgresTelemetryRepository = Depends(get_telemetry_repository),
     publisher: IncidentEventPublisher = Depends(get_incident_event_publisher),
     outbox_signaler: OutboxSignaler = Depends(get_outbox_signaler),
+    symbolication_service: StacktraceSymbolicationService = Depends(get_stacktrace_symbolication_service),
     _auth: None = Depends(require_telemetry_ingest_access),
     _rate_limit: None = Depends(enforce_telemetry_rate_limit),
 ) -> TelemetryAcceptedResponse:
@@ -175,9 +190,25 @@ async def ingest_error(
         request=payload.request,
         response=payload.response,
         commit_sha=payload.commit_sha,
+        release=payload.release,
+        dist=payload.dist,
+        session_id=payload.session_id,
+        user=payload.user,
+        tags=payload.tags,
+        contexts=payload.contexts,
+        breadcrumbs=payload.breadcrumbs,
         timestamp=payload.timestamp,
         handled=payload.handled,
     )
+    if telemetry.release:
+        symbolicated_stacktrace = await symbolication_service.symbolicate(
+            project_id=telemetry.project_id,
+            release=telemetry.release,
+            dist=telemetry.dist,
+            stacktrace=telemetry.stacktrace,
+        )
+        if symbolicated_stacktrace:
+            telemetry.stacktrace = symbolicated_stacktrace
     incident_event = publisher.build_telemetry_received(telemetry)
 
     outbox_event_id = await repository.insert_event_with_outbox(telemetry, incident_event)

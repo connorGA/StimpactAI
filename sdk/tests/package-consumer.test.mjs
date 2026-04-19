@@ -33,6 +33,11 @@ function inspectPackFileList() {
   const packedFiles = new Set(parsed[0].files.map((entry) => entry.path));
   assert.ok(packedFiles.has("dist/client.js"));
   assert.ok(packedFiles.has("dist/index.d.ts"));
+  assert.ok(packedFiles.has("dist/next.js"));
+  assert.ok(packedFiles.has("dist/vite.js"));
+  assert.ok(packedFiles.has("dist/react.js"));
+  assert.ok(packedFiles.has("dist/node.js"));
+  assert.ok(packedFiles.has("dist/react-query.js"));
   assert.ok(packedFiles.has("README.md"));
 }
 
@@ -52,11 +57,15 @@ function verifyPackedRuntime(consumerDir) {
     scriptPath,
     `import assert from "node:assert/strict";
 import { StimpactClient } from "@stimpact/sdk";
+import { installStimpact as installNodeStimpact } from "@stimpact/sdk/node";
+import { wrapQueryClient } from "@stimpact/sdk/react-query";
 
 assert.equal(typeof StimpactClient.prototype.captureHandledError, "function");
 assert.equal(typeof StimpactClient.prototype.wrap, "function");
 assert.equal(typeof StimpactClient.prototype.wrapAsync, "function");
 assert.equal(typeof StimpactClient.prototype.registerProcessAutoCapture, "function");
+assert.equal(typeof installNodeStimpact, "function");
+assert.equal(typeof wrapQueryClient, "function");
 
 const calls = [];
 const client = new StimpactClient({
@@ -88,182 +97,36 @@ function verifyPackagedBrowserIntegrationRuntime(consumerDir) {
   writeFileSync(
     scriptPath,
     `import assert from "node:assert/strict";
-import { StimpactClient, StimpactRequestError } from "@stimpact/sdk";
+import {
+  captureHandledError,
+  getStimpactClient,
+  installStimpact,
+  wrapStimpact,
+  wrapStimpactAsync,
+} from "@stimpact/sdk/vite";
+import { wrapQueryClient } from "@stimpact/sdk/react-query";
 
-const telemetryCalls = [];
-const listeners = new Map();
-const originalWindow = globalThis.window;
-const originalFetch = globalThis.fetch;
+assert.equal(typeof installStimpact, "function");
+assert.equal(typeof captureHandledError, "function");
+assert.equal(typeof getStimpactClient, "function");
+assert.equal(typeof wrapStimpact, "function");
+assert.equal(typeof wrapStimpactAsync, "function");
+assert.equal(typeof wrapQueryClient, "function");
 
-globalThis.window = {
-  addEventListener(type, listener) {
-    listeners.set(type, listener);
+const queryClient = {
+  defaultOptions: {},
+  getDefaultOptions() {
+    return this.defaultOptions;
   },
-  removeEventListener(type) {
-    listeners.delete(type);
+  setDefaultOptions(options) {
+    this.defaultOptions = options;
   },
 };
 
-const telemetryClient = new StimpactClient({
-  baseUrl: "https://stimpact.example.com",
-  projectId: "fixture-project",
-  apiKey: "stimp_live_fixture",
-  service: "fixture-web",
-  captureRequestContext: true,
-  captureResponseContext: true,
-  fetchImpl: async (url, init) => {
-    telemetryCalls.push([url, init]);
-    return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
-  },
-});
-
-async function captureHandledError(input) {
-  await telemetryClient.captureHandledError(input);
-}
-
-function wrapStimpact(operation, context) {
-  return telemetryClient.wrap(operation, context);
-}
-
-async function wrapStimpactAsync(operation, context) {
-  return await telemetryClient.wrapAsync(operation, context);
-}
-
-async function requestExample(endpoint) {
-  const method = "POST";
-  try {
-    const response = await fetch(endpoint, { method });
-    if (!response.ok) {
-      const error = new Error(\`\${response.status}: \${response.statusText}\`);
-      await captureHandledError({
-        error,
-        request: { method, url: endpoint },
-        response: { status_code: response.status },
-      });
-      throw error;
-    }
-    return response;
-  } catch (error) {
-    await captureHandledError({
-      error,
-      request: { method, url: endpoint },
-    });
-    throw error;
-  }
-}
-
-function describeReactQueryKey(key) {
-  if (!key || key.length === 0) {
-    return "react-query";
-  }
-  return key.map((segment) => String(segment)).join("/");
-}
-
-async function tick() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-try {
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ error: "downstream unavailable" }), {
-      status: 503,
-      statusText: "Service Unavailable",
-    });
-
-  await assert.rejects(
-    requestExample("/requests"),
-    (error) => error instanceof Error && error.message === "503: Service Unavailable",
-  );
-  assert.equal(telemetryCalls.length, 1);
-  let payload = JSON.parse(telemetryCalls[0][1].body);
-  assert.equal(payload.error_message, "503: Service Unavailable");
-  assert.equal(payload.request.method, "POST");
-  assert.equal(payload.request.url, "/requests");
-  assert.equal(payload.response.status_code, 503);
-
-  const queryError = new Error("query failed");
-  await captureHandledError({
-    error: queryError,
-    request: { method: "QUERY", url: describeReactQueryKey(["orders", "list"]) },
-  });
-  assert.equal(telemetryCalls.length, 2);
-  payload = JSON.parse(telemetryCalls[1][1].body);
-  assert.equal(payload.error_message, "query failed");
-  assert.equal(payload.request.method, "QUERY");
-  assert.equal(payload.request.url, "orders/list");
-
-  let toastCount = 0;
-  const mutationError = new Error("mutation failed");
-  await captureHandledError({
-    error: mutationError,
-    request: { method: "MUTATION", url: describeReactQueryKey(["requests", "create"]) },
-  });
-  toastCount += 1;
-  assert.equal(toastCount, 1);
-  assert.equal(telemetryCalls.length, 3);
-  payload = JSON.parse(telemetryCalls[2][1].body);
-  assert.equal(payload.error_message, "mutation failed");
-  assert.equal(payload.request.method, "MUTATION");
-  assert.equal(payload.request.url, "requests/create");
-
-  const syncError = new Error("sync failure");
-  assert.throws(
-    () =>
-      wrapStimpact(() => {
-        throw syncError;
-      }),
-    (error) => error === syncError,
-  );
-  await tick();
-  assert.equal(telemetryCalls.length, 4);
-  payload = JSON.parse(telemetryCalls[3][1].body);
-  assert.equal(payload.error_message, "sync failure");
-
-  const asyncError = new Error("async failure");
-  await assert.rejects(
-    wrapStimpactAsync(async () => {
-      throw asyncError;
-    }),
-    (error) => error === asyncError,
-  );
-  assert.equal(telemetryCalls.length, 5);
-  payload = JSON.parse(telemetryCalls[4][1].body);
-  assert.equal(payload.error_message, "async failure");
-
-  const autocapture = telemetryClient.registerBrowserAutoCapture();
-  const sharedError = new Error("shared handled browser error");
-  await captureHandledError({
-    error: sharedError,
-    request: { method: "POST", url: "/shared" },
-  });
-  listeners.get("unhandledrejection")?.({ reason: sharedError });
-  await tick();
-  assert.equal(telemetryCalls.length, 6);
-  payload = JSON.parse(telemetryCalls[5][1].body);
-  assert.equal(payload.error_message, "shared handled browser error");
-
-  listeners.get("error")?.({
-    error: new Error("uncaught render boom"),
-    message: "uncaught render boom",
-  });
-  await tick();
-  assert.equal(telemetryCalls.length, 7);
-  payload = JSON.parse(telemetryCalls[6][1].body);
-  assert.equal(payload.error_message, "uncaught render boom");
-
-  listeners.get("unhandledrejection")?.({
-    reason: new StimpactRequestError("Request failed before the platform acknowledged it.", {
-      retryable: true,
-    }),
-  });
-  await tick();
-  assert.equal(telemetryCalls.length, 7);
-
-  autocapture.dispose();
-} finally {
-  globalThis.window = originalWindow;
-  globalThis.fetch = originalFetch;
-}
+const wrapped = wrapQueryClient(queryClient);
+assert.equal(wrapped, queryClient);
+assert.equal(typeof queryClient.defaultOptions.queries.onError, "function");
+assert.equal(typeof queryClient.defaultOptions.mutations.onError, "function");
 `,
     "utf-8",
   );

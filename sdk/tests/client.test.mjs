@@ -477,3 +477,42 @@ test("opt-in HTTP context capture redacts headers and excludes bodies unless ena
   assert.equal(payload.response.body, undefined);
   assert.match(payload.stacktrace, /boom/);
 });
+
+test("captureError forwards user, tags, breadcrumbs, release, and session metadata", async () => {
+  const calls = [];
+  const client = new StimpactClient({
+    baseUrl: "https://stimpact.example.com",
+    projectId: "project-1",
+    apiKey: "project-key",
+    service: "billing-web",
+    release: "billing-web@1.2.3",
+    dist: "web",
+    fetchImpl: async (url, init) => {
+      calls.push([url, init]);
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202 });
+    },
+  });
+  client.setUser({ id: "user-123", email: "hello@example.com" });
+  client.setTags({ tenant: "acme" });
+  client.setContext("build", { commit: "abc123" });
+  client.addBreadcrumb({
+    category: "ui.click",
+    message: "button#save",
+    level: "info",
+  });
+
+  await client.captureHandledError({
+    error: new Error("save failed"),
+    tags: { screen: "checkout" },
+  });
+
+  const payload = JSON.parse(calls[0][1].body);
+  assert.equal(payload.release, "billing-web@1.2.3");
+  assert.equal(payload.dist, "web");
+  assert.equal(payload.user.id, "user-123");
+  assert.equal(payload.tags.tenant, "acme");
+  assert.equal(payload.tags.screen, "checkout");
+  assert.equal(payload.contexts.build.commit, "abc123");
+  assert.equal(Array.isArray(payload.breadcrumbs), true);
+  assert.equal(payload.breadcrumbs[0].category, "ui.click");
+});

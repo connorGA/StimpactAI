@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from openai import OpenAI
 
@@ -25,6 +25,8 @@ from api.core.config import (
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.core.errors import APIError
 from api.repositories.control_plane_repository import ControlPlaneRepository
+from api.repositories.artifact_repository import ArtifactRepository
+from api.repositories.release_sourcemap_repository import ReleaseSourcemapRepository
 from api.schemas.control_plane import (
     CreateProjectServiceRequest,
     CreateProjectApiKeyRequest,
@@ -90,6 +92,7 @@ from models.control_plane import (
     ProviderKind,
     SecretBackend,
 )
+from models.artifact import ArtifactStorageBackend, ArtifactType
 from services.aws_secrets_manager import (
     AwsSecretsManagerReader,
     AwsSecretsManagerWriter,
@@ -107,6 +110,11 @@ from services.sdk_bootstrap import (
     prepare_sdk_bootstrap_preview_from_clone,
 )
 from services.sdk_bootstrap_fallback import SdkBootstrapFallbackPlanner
+from services.artifact_storage import S3ArtifactStorage
+from services.stacktrace_symbolication import (
+    build_sourcemap_object_key,
+    build_sourcemap_payload,
+)
 from services.telemetry_origin_registry import TelemetryOriginRegistry
 
 router = APIRouter(
@@ -158,6 +166,18 @@ def get_sdk_bootstrap_fallback_planner() -> SdkBootstrapFallbackPlanner | None:
         client=OpenAI(api_key=api_key),
         model=get_openai_patch_model(),
     )
+
+
+def get_artifact_repository(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> ArtifactRepository:
+    return ArtifactRepository(manager.pool)
+
+
+def get_release_sourcemap_repository(
+    manager: PostgresConnectionManager = Depends(get_postgres_manager),
+) -> ReleaseSourcemapRepository:
+    return ReleaseSourcemapRepository(manager.pool)
 
 
 def _assert_project_matches(path_project_id: str, payload_project_id: str) -> None:
@@ -2111,6 +2131,84 @@ async def github_callback(
         account_type=preview.account_type,
         account_name=preview.account_name,
     )
+
+
+@project_router.post(
+    "/releases/{release}/sourcemaps",
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_release_sourcemaps(
+    project_id: str,
+    release: str,
+    files: list[UploadFile] = File(...),
+    dist: str | None = Query(default=None),
+    artifact_repository: ArtifactRepository = Depends(get_artifact_repository),
+    sourcemap_repository: ReleaseSourcemapRepository = Depends(get_release_sourcemap_repository),
+) -> dict[str, object]:
+    storage = S3ArtifactStorage()
+    normalized_dist = (dist or "").strip()
+    uploaded: list[dict[str, object]] = []
+    for upload in files:
+        if not upload.filename:
+            continue
+        if not upload.filename.endswith(".map"):
+            raise APIError(
+                "Only .map files are supported for sourcemap uploads.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code="sourcemap_upload_invalid_file",
+            )
+        sourcemap_bytes = await upload.read()
+        sourcemap_text = sourcemap_bytes.decode("utf-8")
+        bundle_path = upload.filename.removesuffix(".map")
+        object_key = build_sourcemap_object_key(
+            project_id=project_id,
+            release=release,
+            dist=normalized_dist,
+            bundle_path=bundle_path,
+        )
+        uri, size_bytes, checksum_sha256 = storage.put_text(
+            object_key=object_key,
+            content=sourcemap_text,
+            content_type=upload.content_type or "application/json",
+        )
+        artifact = await artifact_repository.create_artifact(
+            incident_id=None,
+            patch_run_id=None,
+            sandbox_run_id=None,
+            artifact_type=ArtifactType.SOURCE_MAP,
+            storage_backend=ArtifactStorageBackend.S3,
+            bucket_name=storage.bucket_name,
+            object_key=object_key,
+            uri=uri,
+            content_type=upload.content_type or "application/json",
+            size_bytes=size_bytes,
+            checksum_sha256=checksum_sha256,
+        )
+        await sourcemap_repository.upsert_release_sourcemap(
+            project_id=project_id,
+            release=release,
+            dist=normalized_dist,
+            artifact_id=artifact.id,
+            bundle_path=bundle_path,
+        )
+        uploaded.append(
+            {
+                "filename": upload.filename,
+                "bundle_path": bundle_path,
+                "artifact_id": artifact.id,
+                "metadata": build_sourcemap_payload(
+                    bundle_path=bundle_path,
+                    sourcemap_text=sourcemap_text,
+                ),
+            }
+        )
+    return {
+        "status": "created",
+        "project_id": project_id,
+        "release": release,
+        "dist": normalized_dist or None,
+        "uploaded": uploaded,
+    }
 
 
 @public_router.get(

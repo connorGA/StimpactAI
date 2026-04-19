@@ -6,7 +6,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.types.telemetry import Environment, HttpRequestContext, HttpResponseContext
+from shared.types.telemetry import (
+    Environment,
+    HttpRequestContext,
+    HttpResponseContext,
+    TelemetryBreadcrumb,
+    TelemetryUserContext,
+)
 
 
 def build_fingerprint(
@@ -44,6 +50,13 @@ class NormalizedTelemetry(BaseModel):
     request: HttpRequestContext | None = None
     response: HttpResponseContext | None = None
     commit_sha: str | None = None
+    release: str | None = None
+    dist: str | None = None
+    session_id: str | None = None
+    user: TelemetryUserContext | None = None
+    tags: dict[str, str] = Field(default_factory=dict)
+    contexts: dict[str, dict[str, object]] = Field(default_factory=dict)
+    breadcrumbs: list[TelemetryBreadcrumb] = Field(default_factory=list)
     handled: bool | None = None
     occurred_at: datetime
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -60,6 +73,13 @@ class NormalizedTelemetry(BaseModel):
         request: HttpRequestContext | None,
         response: HttpResponseContext | None,
         commit_sha: str | None,
+        release: str | None,
+        dist: str | None,
+        session_id: str | None,
+        user: TelemetryUserContext | None,
+        tags: dict[str, str],
+        contexts: dict[str, dict[str, object]],
+        breadcrumbs: list[TelemetryBreadcrumb],
         timestamp: datetime,
         handled: bool | None = None,
     ) -> "NormalizedTelemetry":
@@ -84,6 +104,13 @@ class NormalizedTelemetry(BaseModel):
             request=request,
             response=response,
             commit_sha=commit_sha,
+            release=release,
+            dist=dist,
+            session_id=session_id,
+            user=user,
+            tags=tags,
+            contexts=contexts,
+            breadcrumbs=breadcrumbs,
             handled=handled,
             occurred_at=timestamp.astimezone(UTC),
         )

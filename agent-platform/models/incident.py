@@ -45,6 +45,13 @@ class TelemetryRecord(BaseModel):
     request_payload: dict[str, Any] | list[Any] | str | None = None
     response_payload: dict[str, Any] | list[Any] | str | None = None
     commit_sha: str | None = None
+    release: str | None = None
+    dist: str | None = None
+    session_id: str | None = None
+    user_payload: dict[str, Any] | list[Any] | str | None = None
+    tags_payload: dict[str, Any] | list[Any] | str | None = None
+    contexts_payload: dict[str, Any] | list[Any] | str | None = None
+    breadcrumbs_payload: dict[str, Any] | list[Any] | str | None = None
     handled: bool | None = None
     classification: str | None = None
     classification_reason: str | None = None
@@ -75,6 +82,13 @@ class TelemetryRecord(BaseModel):
             request_payload=_decode_json_value(row["request_payload"]),
             response_payload=_decode_json_value(row["response_payload"]),
             commit_sha=row["commit_sha"],
+            release=_maybe("release"),
+            dist=_maybe("dist"),
+            session_id=_maybe("session_id"),
+            user_payload=_decode_json_value(_maybe("user_payload")),
+            tags_payload=_decode_json_value(_maybe("tags_payload")),
+            contexts_payload=_decode_json_value(_maybe("contexts_payload")),
+            breadcrumbs_payload=_decode_json_value(_maybe("breadcrumbs_payload")),
             handled=_maybe("handled"),
             classification=(
                 str(_maybe("classification"))
@@ -170,12 +184,29 @@ class IncidentEventRecord(BaseModel):
     stacktrace: str
     request_payload: dict[str, Any] | list[Any] | str | None = None
     response_payload: dict[str, Any] | list[Any] | str | None = None
+    release: str | None = None
+    dist: str | None = None
+    session_id: str | None = None
+    user_payload: dict[str, Any] | list[Any] | str | None = None
+    tags_payload: dict[str, Any] | list[Any] | str | None = None
+    contexts_payload: dict[str, Any] | list[Any] | str | None = None
+    breadcrumbs_payload: dict[str, Any] | list[Any] | str | None = None
     payload: dict[str, Any] | list[Any] | str
     occurred_at: datetime
     created_at: datetime
 
     @classmethod
     def from_db_row(cls, row: Any) -> "IncidentEventRecord":
+        row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+
+        def _maybe(key: str) -> Any:
+            if not row_keys or key in row_keys:
+                try:
+                    return row[key]
+                except (KeyError, IndexError):
+                    return None
+            return None
+
         return cls(
             id=str(row["id"]),
             incident_id=str(row["incident_id"]),
@@ -185,6 +216,13 @@ class IncidentEventRecord(BaseModel):
             stacktrace=str(row["stacktrace"]),
             request_payload=_decode_json_value(row["request_payload"]),
             response_payload=_decode_json_value(row["response_payload"]),
+            release=str(_maybe("release")) if _maybe("release") is not None else None,
+            dist=str(_maybe("dist")) if _maybe("dist") is not None else None,
+            session_id=str(_maybe("session_id")) if _maybe("session_id") is not None else None,
+            user_payload=_decode_json_value(_maybe("user_payload")),
+            tags_payload=_decode_json_value(_maybe("tags_payload")),
+            contexts_payload=_decode_json_value(_maybe("contexts_payload")),
+            breadcrumbs_payload=_decode_json_value(_maybe("breadcrumbs_payload")),
             payload=_decode_json_value(row["payload"]),
             occurred_at=row["occurred_at"],
             created_at=row["created_at"],

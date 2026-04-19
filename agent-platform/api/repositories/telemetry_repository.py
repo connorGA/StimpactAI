@@ -23,11 +23,18 @@ INSERT INTO telemetry_events (
     request_payload,
     response_payload,
     commit_sha,
+    release,
+    dist,
+    session_id,
+    user_payload,
+    tags_payload,
+    contexts_payload,
+    breadcrumbs_payload,
     handled,
     occurred_at,
     received_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13
+    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20
 );
 """
 
@@ -133,6 +140,7 @@ class PostgresTelemetryRepository:
 
         request_payload = telemetry.request.model_dump(mode="json") if telemetry.request else None
         response_payload = telemetry.response.model_dump(mode="json") if telemetry.response else None
+        user_payload = telemetry.user.model_dump(mode="json") if telemetry.user else None
 
         try:
             async with self._pool.acquire() as connection:
@@ -149,6 +157,13 @@ class PostgresTelemetryRepository:
                         json.dumps(request_payload) if request_payload is not None else None,
                         json.dumps(response_payload) if response_payload is not None else None,
                         telemetry.commit_sha,
+                        telemetry.release,
+                        telemetry.dist,
+                        telemetry.session_id,
+                        json.dumps(user_payload) if user_payload is not None else None,
+                        json.dumps(telemetry.tags),
+                        json.dumps(telemetry.contexts),
+                        json.dumps([item.model_dump(mode="json") for item in telemetry.breadcrumbs]),
                         telemetry.handled,
                         telemetry.occurred_at,
                         telemetry.received_at,

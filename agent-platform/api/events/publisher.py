@@ -18,6 +18,13 @@ class IncidentEventPublisher:
                 "environment": telemetry.environment.value,
                 "service": telemetry.service,
                 "error_message": telemetry.error_message,
+                "release": telemetry.release,
+                "dist": telemetry.dist,
+                "session_id": telemetry.session_id,
+                "user": telemetry.user.model_dump(mode="json") if telemetry.user else None,
+                "tags": telemetry.tags,
+                "contexts": telemetry.contexts,
+                "breadcrumbs": [item.model_dump(mode="json") for item in telemetry.breadcrumbs],
                 "occurred_at": telemetry.occurred_at.isoformat(),
             },
         )

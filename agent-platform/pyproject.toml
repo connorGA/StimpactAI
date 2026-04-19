@@ -12,7 +12,9 @@ dependencies = [
     "PyJWT",
     "PyYAML",
     "python-dotenv",
+    "python-multipart",
     "redis[hiredis]",
+    "sourcemap",
     "uvicorn[standard]",
 ]
 

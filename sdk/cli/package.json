@@ -1,0 +1,8 @@
+{
+  "name": "@stimpact/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "stimpact": "./stimpact.mjs"
+  }
+}

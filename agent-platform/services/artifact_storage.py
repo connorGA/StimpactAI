@@ -24,6 +24,12 @@ class ArtifactStorage(Protocol):
         content_type: str,
     ) -> tuple[str, int, str | None]: ...
 
+    def get_bytes(
+        self,
+        *,
+        object_key: str,
+    ) -> bytes: ...
+
     def generate_download_url(
         self,
         *,
@@ -77,6 +83,15 @@ class S3ArtifactStorage:
         )
         uri = f"s3://{self.bucket_name}/{object_key}"
         return uri, len(content), checksum
+
+    def get_bytes(
+        self,
+        *,
+        object_key: str,
+    ) -> bytes:
+        client = self._client()
+        response = client.get_object(Bucket=self.bucket_name, Key=object_key)
+        return bytes(response["Body"].read())
 
     def generate_download_url(
         self,

@@ -34,6 +34,25 @@ class HttpResponseContext(BaseModel):
     body: dict[str, Any] | list[Any] | str | None = None
 
 
+class TelemetryUserContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = Field(default=None, max_length=256)
+    email: str | None = Field(default=None, max_length=512)
+    username: str | None = Field(default=None, max_length=256)
+    segment: str | None = Field(default=None, max_length=256)
+
+
+class TelemetryBreadcrumb(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ts: datetime
+    category: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2048)
+    level: str | None = Field(default=None, max_length=32)
+    data: dict[str, Any] | None = None
+
+
 class TelemetryEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,6 +60,13 @@ class TelemetryEnvelope(BaseModel):
     environment: Environment
     service: str = Field(min_length=1, max_length=128)
     commit_sha: str | None = Field(default=None, max_length=64)
+    release: str | None = Field(default=None, max_length=128)
+    dist: str | None = Field(default=None, max_length=64)
+    session_id: str | None = Field(default=None, max_length=128)
+    user: TelemetryUserContext | None = None
+    tags: dict[str, str] = Field(default_factory=dict)
+    contexts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    breadcrumbs: list[TelemetryBreadcrumb] = Field(default_factory=list, max_length=100)
     timestamp: datetime
     handled: bool | None = Field(
         default=None,

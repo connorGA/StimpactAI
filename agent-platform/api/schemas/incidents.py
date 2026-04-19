@@ -57,6 +57,13 @@ class IncidentEventResponse(BaseModel):
     stacktrace: str
     request_payload: dict[str, Any] | list[Any] | str | None = None
     response_payload: dict[str, Any] | list[Any] | str | None = None
+    release: str | None = None
+    dist: str | None = None
+    session_id: str | None = None
+    user_payload: dict[str, Any] | list[Any] | str | None = None
+    tags_payload: dict[str, Any] | list[Any] | str | None = None
+    contexts_payload: dict[str, Any] | list[Any] | str | None = None
+    breadcrumbs_payload: dict[str, Any] | list[Any] | str | None = None
     payload: dict[str, Any] | list[Any] | str
     occurred_at: datetime
     created_at: datetime
@@ -71,6 +78,13 @@ class IncidentEventResponse(BaseModel):
             stacktrace=incident_event.stacktrace,
             request_payload=incident_event.request_payload,
             response_payload=incident_event.response_payload,
+            release=incident_event.release,
+            dist=incident_event.dist,
+            session_id=incident_event.session_id,
+            user_payload=incident_event.user_payload,
+            tags_payload=incident_event.tags_payload,
+            contexts_payload=incident_event.contexts_payload,
+            breadcrumbs_payload=incident_event.breadcrumbs_payload,
             payload=incident_event.payload,
             occurred_at=incident_event.occurred_at,
             created_at=incident_event.created_at,

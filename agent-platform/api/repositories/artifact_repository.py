@@ -34,6 +34,13 @@ WHERE sandbox_run_id = $1
 ORDER BY created_at ASC;
 """
 
+GET_ARTIFACT_SQL = """
+SELECT *
+FROM artifacts
+WHERE id = $1
+LIMIT 1;
+"""
+
 
 class ArtifactRepository:
     def __init__(self, pool: asyncpg.Pool | None) -> None:
@@ -88,3 +95,15 @@ class ArtifactRepository:
         except asyncpg.PostgresError as exc:
             raise PersistenceError("Failed to list sandbox artifacts.") from exc
         return [ArtifactRecord.from_db_row(row) for row in rows]
+
+    async def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
+        if self._pool is None:
+            raise PersistenceError("Postgres is not configured for artifact operations.")
+        try:
+            async with self._pool.acquire() as connection:
+                row = await connection.fetchrow(GET_ARTIFACT_SQL, artifact_id)
+        except asyncpg.PostgresError as exc:
+            raise PersistenceError("Failed to fetch artifact metadata.") from exc
+        if row is None:
+            return None
+        return ArtifactRecord.from_db_row(row)

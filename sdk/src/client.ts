@@ -1,6 +1,7 @@
 import type {
   BrowserAutoCaptureOptions,
   BrowserCaptureSubscription,
+  StimpactBreadcrumb,
   CaptureErrorInput,
   ErrorCaptureContext,
   HeartbeatInput,
@@ -9,8 +10,11 @@ import type {
   ProcessAutoCaptureOptions,
   ProcessCaptureSubscription,
   ProcessListenerTarget,
+  StimpactContexts,
   StimpactClientOptions,
   StimpactEnvironment,
+  StimpactTags,
+  StimpactUser,
 } from "./types.js";
 
 type TelemetryPayload = {
@@ -22,6 +26,13 @@ type TelemetryPayload = {
   request?: CaptureErrorInput["request"];
   response?: CaptureErrorInput["response"];
   commit_sha?: string | null;
+  release?: string | null;
+  dist?: string | null;
+  user?: StimpactUser | null;
+  tags?: StimpactTags;
+  contexts?: StimpactContexts;
+  breadcrumbs?: StimpactBreadcrumb[];
+  session_id?: string | null;
   timestamp: string;
   handled?: boolean | null;
 };
@@ -31,6 +42,9 @@ type HeartbeatPayload = {
   environment: StimpactEnvironment;
   service: string;
   commit_sha?: string | null;
+  release?: string | null;
+  dist?: string | null;
+  session_id?: string | null;
   timestamp: string;
 };
 
@@ -53,6 +67,9 @@ const DEFAULT_REDACTED_HEADERS = new Set([
   "x-api-key",
   "x-stimpact-project-key",
 ]);
+const DEFAULT_BREADCRUMB_LIMIT = 100;
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_OFFLINE_QUEUE_LIMIT = 25;
 const CAPTURE_IN_FLIGHT = Symbol("stimpact.captureInFlight");
 const CAPTURE_REPORTED = Symbol("stimpact.captureReported");
 
@@ -86,6 +103,7 @@ export class StimpactClient {
       | "includeBodies"
       | "redactedHeaders"
       | "maxValueLength"
+      | "breadcrumbLimit"
     >
   > &
     Pick<
@@ -95,6 +113,8 @@ export class StimpactClient {
       | "browserTokenEndpoint"
       | "tokenProvider"
       | "environment"
+      | "release"
+      | "dist"
       | "fetchImpl"
       | "headers"
     >;
@@ -105,6 +125,15 @@ export class StimpactClient {
   private browserTokenFailureBlockedUntilMs = 0;
   private readonly inFlightErrors = new WeakSet<object>();
   private readonly reportedErrors = new WeakSet<object>();
+  private user: StimpactUser | null = null;
+  private readonly tags = new Map<string, string>();
+  private readonly contexts = new Map<string, Record<string, unknown>>();
+  private breadcrumbs: StimpactBreadcrumb[] = [];
+  private sessionId: string | null = null;
+  private lastActivityAtMs = 0;
+  private browserActivityBound = false;
+  private offlineQueue: TelemetryPayload[] = [];
+  private offlineFlushBound = false;
 
   constructor(options: StimpactClientOptions) {
     if (!options.apiKey && !options.browserKey && !options.browserTokenEndpoint && !options.tokenProvider) {
@@ -127,7 +156,9 @@ export class StimpactClient {
       includeBodies: options.includeBodies ?? false,
       redactedHeaders: options.redactedHeaders ?? [],
       maxValueLength: options.maxValueLength ?? 2_048,
+      breadcrumbLimit: options.breadcrumbLimit ?? DEFAULT_BREADCRUMB_LIMIT,
     };
+    this.touchSession();
   }
 
   async captureError(input: CaptureErrorInput): Promise<void> {
@@ -147,12 +178,59 @@ export class StimpactClient {
     await this.captureHandledError(input);
   }
 
+  setUser(user: StimpactUser | null): void {
+    this.user = user ? sanitizeUser(user, this.options.maxValueLength) ?? null : null;
+  }
+
+  clearUser(): void {
+    this.user = null;
+  }
+
+  setTags(tags: StimpactTags): void {
+    for (const [key, value] of Object.entries(tags)) {
+      if (!key) {
+        continue;
+      }
+      this.tags.set(clampString(key, 128), clampString(String(value), 256));
+    }
+  }
+
+  setContext(name: string, value: Record<string, unknown>): void {
+    if (!name) {
+      return;
+    }
+    this.contexts.set(
+      clampString(name, 128),
+      sanitizeUnknown(value, this.options) as Record<string, unknown>,
+    );
+  }
+
+  clearContext(name: string): void {
+    this.contexts.delete(name);
+  }
+
+  addBreadcrumb(input: Omit<StimpactBreadcrumb, "ts"> & { ts?: string | Date }): void {
+    const breadcrumb = normalizeBreadcrumb(input, this.options.maxValueLength);
+    if (!breadcrumb) {
+      return;
+    }
+    this.touchSession();
+    this.breadcrumbs = [...this.breadcrumbs, breadcrumb].slice(-this.options.breadcrumbLimit);
+  }
+
+  clearBreadcrumbs(): void {
+    this.breadcrumbs = [];
+  }
+
   async sendHeartbeat(input: HeartbeatInput = {}): Promise<void> {
     const payload: HeartbeatPayload = {
       project_id: this.options.projectId,
       environment: input.environment ?? this.options.environment ?? "production",
       service: input.service ?? this.options.service,
       commit_sha: input.commitSha ?? null,
+      release: input.release ?? this.options.release ?? null,
+      dist: input.dist ?? this.options.dist ?? null,
+      session_id: input.sessionId ?? this.getSessionId(),
       timestamp: normalizeTimestamp(input.timestamp),
     };
     await this.sendHeartbeatPayload(payload);
@@ -247,6 +325,7 @@ export class StimpactClient {
   }
 
   private async captureWithState(input: CaptureErrorInput): Promise<void> {
+    this.touchSession();
     const trackedError = asTrackableObject(input.error);
     if (trackedError && (this.inFlightErrors.has(trackedError) || this.reportedErrors.has(trackedError))) {
       return;
@@ -270,6 +349,13 @@ export class StimpactClient {
         ? sanitizeResponseContext(input.response, this.options)
         : undefined,
       commit_sha: input.commitSha ?? null,
+      release: input.release ?? this.options.release ?? null,
+      dist: input.dist ?? this.options.dist ?? null,
+      user: input.user === undefined ? this.user : sanitizeUser(input.user, this.options.maxValueLength),
+      tags: mergeTags(this.tags, input.tags),
+      contexts: mergeContexts(this.contexts, input.contexts, this.options),
+      breadcrumbs: mergeBreadcrumbs(this.breadcrumbs, input.breadcrumbs, this.options.maxValueLength),
+      session_id: input.sessionId ?? this.getSessionId(),
       timestamp: normalizeTimestamp(input.timestamp),
       handled: typeof input.handled === "boolean" ? input.handled : undefined,
     };
@@ -426,6 +512,7 @@ export class StimpactClient {
     if (typeof window === "undefined") {
       return { dispose: () => undefined };
     }
+    this.ensureBrowserRuntimeObservers();
 
     const captureWindowErrors = options.captureWindowErrors ?? true;
     const captureUnhandledRejections =
@@ -472,6 +559,249 @@ export class StimpactClient {
     };
   }
 
+  private ensureBrowserRuntimeObservers(): void {
+    this.ensureSession();
+    this.ensureOfflineFlushListener();
+    if (this.browserActivityBound || typeof window === "undefined") {
+      return;
+    }
+    this.browserActivityBound = true;
+    const recordVisibility = () => {
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "navigation.visibility",
+        message: typeof document !== "undefined" ? document.visibilityState : "unknown",
+        level: "info",
+      });
+    };
+    window.addEventListener("online", () => {
+      this.touchSession();
+      void this.flushOfflineQueue().catch(() => undefined);
+    });
+    window.addEventListener("pagehide", () => {
+      this.touchSession();
+    });
+    window.addEventListener("click", (event) => {
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "ui.click",
+        message: describeEventTarget(event.target),
+        level: "info",
+      });
+    });
+    window.addEventListener("keydown", (event) => {
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "ui.keydown",
+        message: `key:${event.key}`,
+        level: "debug",
+      });
+    });
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", recordVisibility);
+    }
+    this.instrumentHistoryBreadcrumbs();
+    this.instrumentNetworkBreadcrumbs();
+    this.instrumentConsoleBreadcrumbs();
+  }
+
+  private instrumentHistoryBreadcrumbs(): void {
+    if (
+      typeof window === "undefined" ||
+      !window.history ||
+      typeof window.history.pushState !== "function" ||
+      typeof window.history.replaceState !== "function" ||
+      hasGlobalFlag("__stimpactHistoryWrapped")
+    ) {
+      return;
+    }
+    setGlobalFlag("__stimpactHistoryWrapped");
+    const originalPushState = window.history.pushState.bind(window.history);
+    const originalReplaceState = window.history.replaceState.bind(window.history);
+    window.history.pushState = ((...args: Parameters<History["pushState"]>) => {
+      const result = originalPushState(...args);
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "navigation.pushState",
+        message: String(args[2] ?? window.location.pathname),
+        level: "info",
+      });
+      return result;
+    }) as History["pushState"];
+    window.history.replaceState = ((...args: Parameters<History["replaceState"]>) => {
+      const result = originalReplaceState(...args);
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "navigation.replaceState",
+        message: String(args[2] ?? window.location.pathname),
+        level: "debug",
+      });
+      return result;
+    }) as History["replaceState"];
+    window.addEventListener("popstate", () => {
+      this.touchSession();
+      this.addBreadcrumb({
+        category: "navigation.popstate",
+        message: window.location.pathname,
+        level: "info",
+      });
+    });
+  }
+
+  private instrumentConsoleBreadcrumbs(): void {
+    if (typeof console === "undefined" || hasGlobalFlag("__stimpactConsoleWrapped")) {
+      return;
+    }
+    setGlobalFlag("__stimpactConsoleWrapped");
+    const originalError = console.error.bind(console);
+    const originalWarn = console.warn.bind(console);
+    console.error = (...args: unknown[]) => {
+      this.addBreadcrumb({
+        category: "console.error",
+        message: summarizeConsoleArgs(args, this.options.maxValueLength),
+        level: "error",
+      });
+      originalError(...args);
+    };
+    console.warn = (...args: unknown[]) => {
+      this.addBreadcrumb({
+        category: "console.warn",
+        message: summarizeConsoleArgs(args, this.options.maxValueLength),
+        level: "warning",
+      });
+      originalWarn(...args);
+    };
+  }
+
+  private instrumentNetworkBreadcrumbs(): void {
+    if (typeof globalThis.fetch === "function" && !hasGlobalFlag("__stimpactFetchWrapped")) {
+      setGlobalFlag("__stimpactFetchWrapped");
+      const originalFetch = globalThis.fetch.bind(globalThis);
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const startedAt = Date.now();
+        const method = init?.method ?? "GET";
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        try {
+          const response = await originalFetch(input, init);
+          this.addBreadcrumb({
+            category: "fetch",
+            message: `${method} ${url}`,
+            level: response.ok ? "info" : "warning",
+            data: {
+              status: response.status,
+              duration_ms: Date.now() - startedAt,
+            },
+          });
+          return response;
+        } catch (error) {
+          this.addBreadcrumb({
+            category: "fetch",
+            message: `${method} ${url}`,
+            level: "error",
+            data: {
+              duration_ms: Date.now() - startedAt,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+          throw error;
+        }
+      }) as typeof fetch;
+    }
+    if (typeof XMLHttpRequest === "undefined" || hasGlobalFlag("__stimpactXhrWrapped")) {
+      return;
+    }
+    setGlobalFlag("__stimpactXhrWrapped");
+    const client = this;
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (
+      method: string,
+      url: string | URL,
+      async?: boolean,
+      username?: string | null,
+      password?: string | null,
+    ) {
+      (this as XMLHttpRequest & { __stimpactMethod?: string; __stimpactUrl?: string }).__stimpactMethod = method;
+      (this as XMLHttpRequest & { __stimpactMethod?: string; __stimpactUrl?: string }).__stimpactUrl = String(url);
+      return originalOpen.call(this, method, url, async ?? true, username ?? undefined, password ?? undefined);
+    };
+    XMLHttpRequest.prototype.send = function (...args) {
+      const startedAt = Date.now();
+      this.addEventListener("loadend", () => {
+        const xhr = this as XMLHttpRequest & { __stimpactMethod?: string; __stimpactUrl?: string };
+        const method = xhr.__stimpactMethod ?? "GET";
+        const url = xhr.__stimpactUrl ?? "";
+        client.addBreadcrumb({
+          category: "xhr",
+          message: `${method} ${url}`,
+          level: xhr.status >= 400 ? "warning" : "info",
+          data: {
+            status: xhr.status,
+            duration_ms: Date.now() - startedAt,
+          },
+        });
+      }, { once: true });
+      return originalSend.apply(this, args);
+    };
+  }
+
+  private getSessionId(): string | null {
+    return this.ensureSession();
+  }
+
+  private ensureSession(): string | null {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const now = Date.now();
+    if (!this.sessionId || now - this.lastActivityAtMs > DEFAULT_SESSION_IDLE_TIMEOUT_MS) {
+      this.sessionId = createSessionId();
+    }
+    this.lastActivityAtMs = now;
+    return this.sessionId;
+  }
+
+  private touchSession(): void {
+    this.ensureSession();
+  }
+
+  private isBrowserOffline(): boolean {
+    return (
+      typeof navigator !== "undefined" &&
+      "onLine" in navigator &&
+      navigator.onLine === false
+    );
+  }
+
+  private shouldUseKeepalive(payload: TelemetryPayload | HeartbeatPayload): boolean {
+    return "error_message" in payload && typeof document !== "undefined" && document.visibilityState === "hidden";
+  }
+
+  private enqueueOfflinePayload(payload: TelemetryPayload): void {
+    this.offlineQueue = [...this.offlineQueue, payload].slice(-DEFAULT_OFFLINE_QUEUE_LIMIT);
+  }
+
+  private ensureOfflineFlushListener(): void {
+    if (this.offlineFlushBound || typeof window === "undefined") {
+      return;
+    }
+    this.offlineFlushBound = true;
+    window.addEventListener("online", () => {
+      void this.flushOfflineQueue().catch(() => undefined);
+    });
+  }
+
+  private async flushOfflineQueue(): Promise<void> {
+    if (this.offlineQueue.length === 0 || this.isBrowserOffline()) {
+      return;
+    }
+    const queued = [...this.offlineQueue];
+    this.offlineQueue = [];
+    for (const payload of queued) {
+      await this.sendTelemetry(payload);
+    }
+  }
+
   private shouldIgnoreAutoCapturedError(error: unknown): boolean {
     if (error instanceof StimpactRequestError) {
       return true;
@@ -510,6 +840,11 @@ export class StimpactClient {
   }
 
   private async sendTelemetry(payload: TelemetryPayload): Promise<void> {
+    if (this.isBrowserOffline()) {
+      this.enqueueOfflinePayload(payload);
+      this.ensureOfflineFlushListener();
+      return;
+    }
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.options.retryAttempts; attempt += 1) {
@@ -573,6 +908,7 @@ export class StimpactClient {
           ...this.options.headers,
         },
         body: JSON.stringify(payload),
+        keepalive: this.shouldUseKeepalive(payload),
         signal: controller?.signal,
       });
 
@@ -737,6 +1073,124 @@ export class StimpactClient {
     this.browserTokenFailureBlockedUntilMs =
       Date.now() + this.options.browserTokenFailureCooldownMs;
   }
+}
+
+function sanitizeUser(
+  user: StimpactUser | null | undefined,
+  maxValueLength: number,
+): StimpactUser | null | undefined {
+  if (user === undefined) {
+    return undefined;
+  }
+  if (user === null) {
+    return null;
+  }
+  return omitUndefined({
+    id: user.id ? clampString(user.id, maxValueLength) : undefined,
+    email: user.email ? clampString(user.email, maxValueLength) : undefined,
+    username: user.username ? clampString(user.username, maxValueLength) : undefined,
+    segment: user.segment ? clampString(user.segment, maxValueLength) : undefined,
+  }) ?? null;
+}
+
+function mergeTags(
+  existing: Map<string, string>,
+  tags: StimpactTags | undefined,
+): StimpactTags | undefined {
+  const merged = new Map(existing);
+  for (const [key, value] of Object.entries(tags ?? {})) {
+    merged.set(clampString(key, 128), clampString(String(value), 256));
+  }
+  return merged.size > 0 ? Object.fromEntries(merged) : undefined;
+}
+
+function mergeContexts(
+  existing: Map<string, Record<string, unknown>>,
+  contexts: StimpactContexts | undefined,
+  options: Pick<StimpactClientOptions, "includeBodies" | "redactedHeaders" | "maxValueLength">,
+): StimpactContexts | undefined {
+  const merged = new Map(existing);
+  for (const [key, value] of Object.entries(contexts ?? {})) {
+    merged.set(
+      clampString(key, 128),
+      sanitizeUnknown(value, options) as Record<string, unknown>,
+    );
+  }
+  return merged.size > 0 ? Object.fromEntries(merged) : undefined;
+}
+
+function mergeBreadcrumbs(
+  existing: StimpactBreadcrumb[],
+  input: StimpactBreadcrumb[] | undefined,
+  maxValueLength: number,
+): StimpactBreadcrumb[] | undefined {
+  const normalized = [...existing];
+  for (const breadcrumb of input ?? []) {
+    const normalizedBreadcrumb = normalizeBreadcrumb(breadcrumb, maxValueLength);
+    if (normalizedBreadcrumb) {
+      normalized.push(normalizedBreadcrumb);
+    }
+  }
+  return normalized.length > 0 ? normalized.slice(-DEFAULT_BREADCRUMB_LIMIT) : undefined;
+}
+
+function normalizeBreadcrumb(
+  input: Omit<StimpactBreadcrumb, "ts"> & { ts?: string | Date },
+  maxValueLength: number,
+): StimpactBreadcrumb | null {
+  if (!input.category || !input.message) {
+    return null;
+  }
+  return omitUndefined({
+    ts: normalizeTimestamp(input.ts),
+    category: clampString(input.category, 128),
+    message: clampString(input.message, maxValueLength),
+    level: input.level,
+    data: input.data
+      ? (sanitizeUnknown(input.data, {
+          includeBodies: false,
+          redactedHeaders: [],
+          maxValueLength,
+        }) as Record<string, unknown>)
+      : undefined,
+  }) as StimpactBreadcrumb;
+}
+
+function describeEventTarget(target: EventTarget | null): string {
+  if (!target || typeof Element === "undefined" || !(target instanceof Element)) {
+    return "unknown";
+  }
+  const id = target.id ? `#${target.id}` : "";
+  const className =
+    typeof target.className === "string" && target.className.trim()
+      ? `.${target.className.trim().split(/\s+/).slice(0, 2).join(".")}`
+      : "";
+  return `${target.tagName.toLowerCase()}${id}${className}`;
+}
+
+function summarizeConsoleArgs(args: unknown[], maxValueLength: number): string {
+  return clampString(
+    args
+      .slice(0, 4)
+      .map((arg) => (typeof arg === "string" ? arg : safeSerialize(arg)))
+      .join(" "),
+    maxValueLength,
+  );
+}
+
+function createSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `stimpact_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+}
+
+function hasGlobalFlag(name: string): boolean {
+  return Boolean((globalThis as Record<string, unknown>)[name]);
+}
+
+function setGlobalFlag(name: string): void {
+  (globalThis as Record<string, unknown>)[name] = true;
 }
 
 function normalizeTimestamp(value: string | Date | undefined): string {

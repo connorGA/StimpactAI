@@ -1427,21 +1427,22 @@ def _apply_next_strategy(
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     target_path = package_dir / entrypoint_relative
     component_path = target_path.parents[1] / "components" / f"stimpact-provider{target_path.suffix}"
-    import_path = "../components/stimpact-provider"
-    _write_file(component_path, _build_next_provider_source(service_name=service_name, environment=environment))
+    if component_path.exists():
+        component_path.unlink()
     target_source = target_path.read_text(encoding="utf-8")
-    if "StimpactProvider" not in target_source:
+    if 'import { StimpactProvider } from "@stimpact/sdk/next";' not in target_source:
         target_source = _inject_import(
             target_source,
-            f'import {{ StimpactProvider }} from "{import_path}";\n',
+            'import { StimpactProvider } from "@stimpact/sdk/next";\n',
         )
-    if "<StimpactProvider />" not in target_source:
+    provider_markup = f'<StimpactProvider service="{service_name}" environment="{environment}" />'
+    if provider_markup not in target_source:
         if "<body" in target_source:
-            target_source = re.sub(r"(<body[^>]*>)", r"\1\n        <StimpactProvider />", target_source, count=1)
+            target_source = re.sub(r"(<body[^>]*>)", rf"\1\n        {provider_markup}", target_source, count=1)
         elif "<Component" in target_source:
             target_source = target_source.replace(
                 "<Component {...pageProps} />",
-                "<>\n      <StimpactProvider />\n      <Component {...pageProps} />\n    </>",
+                f"<>\n      {provider_markup}\n      <Component {{...pageProps}} />\n    </>",
                 1,
             )
         else:
@@ -1478,17 +1479,19 @@ def _apply_vite_react_strategy(
     entrypoint_path = package_dir / entrypoint_relative
     helper_suffix = ".ts" if entrypoint_path.suffix in {".ts", ".tsx"} else ".js"
     helper_path = entrypoint_path.parent / f"stimpact{helper_suffix}"
-    _write_file(helper_path, _build_vite_helper_source(service_name=service_name, environment=environment))
+    if helper_path.exists():
+        helper_path.unlink()
     source = entrypoint_path.read_text(encoding="utf-8")
-    if 'installStimpact' not in source:
-        source = _inject_import(source, 'import { installStimpact } from "./stimpact";\n')
-    if "installStimpact();" not in source:
+    if 'import { installStimpact } from "@stimpact/sdk/vite";' not in source:
+        source = _inject_import(source, 'import { installStimpact } from "@stimpact/sdk/vite";\n')
+    install_call = f'installStimpact({{ service: "{service_name}", environment: "{environment}" }});'
+    if install_call not in source:
         insertion_pattern = r"(ReactDOM\.createRoot|createRoot\()"
         match = re.search(insertion_pattern, source)
         if match:
-            source = f"{source[:match.start()]}installStimpact();\n\n{source[match.start():]}"
+            source = f"{source[:match.start()]}{install_call}\n\n{source[match.start():]}"
         else:
-            source = f"{source.rstrip()}\n\ninstallStimpact();\n"
+            source = f"{source.rstrip()}\n\n{install_call}\n"
     entrypoint_path.write_text(source, encoding="utf-8")
     _ensure_env_file(
         package_dir / ".env.example",
@@ -1498,7 +1501,6 @@ def _apply_vite_react_strategy(
             ("VITE_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
-    _apply_browser_handled_boundary_instrumentation(helper_path=helper_path)
 
 
 def _apply_react_scripts_strategy(
@@ -1519,17 +1521,19 @@ def _apply_react_scripts_strategy(
     helper_suffix = ".ts" if entrypoint_path.suffix in {".ts", ".tsx"} else ".js"
     helper_filename = f"stimpact{helper_suffix}"
     helper_path = entrypoint_path.parent / helper_filename
-    _write_file(helper_path, _build_react_scripts_helper_source(service_name=service_name, environment=environment))
+    if helper_path.exists():
+        helper_path.unlink()
     source = entrypoint_path.read_text(encoding="utf-8")
-    if "installStimpact" not in source:
-        source = _inject_import(source, f'import {{ installStimpact }} from "./{helper_filename.removesuffix(helper_suffix)}";\n')
-    if "installStimpact();" not in source:
+    if 'import { installStimpact } from "@stimpact/sdk/react";' not in source:
+        source = _inject_import(source, 'import { installStimpact } from "@stimpact/sdk/react";\n')
+    install_call = f'installStimpact({{ service: "{service_name}", environment: "{environment}" }});'
+    if install_call not in source:
         insertion_pattern = r"(ReactDOM\.createRoot|createRoot\(|ReactDOM\.render\(|render\()"
         match = re.search(insertion_pattern, source)
         if match:
-            source = f"{source[:match.start()]}installStimpact();\n\n{source[match.start():]}"
+            source = f"{source[:match.start()]}{install_call}\n\n{source[match.start():]}"
         else:
-            source = f"{source.rstrip()}\n\ninstallStimpact();\n"
+            source = f"{source.rstrip()}\n\n{install_call}\n"
     entrypoint_path.write_text(source, encoding="utf-8")
     _ensure_env_file(
         package_dir / ".env.example",
@@ -1539,7 +1543,6 @@ def _apply_react_scripts_strategy(
             ("REACT_APP_STIMPACT_BROWSER_KEY", api_key),
         ],
     )
-    _apply_browser_handled_boundary_instrumentation(helper_path=helper_path)
 
 
 def _apply_python_strategy(
@@ -1563,23 +1566,21 @@ def _apply_python_strategy(
         )
     _ensure_python_dependency(dependency_target, "stimpact-sdk")
     helper_path = project_dir / "stimpact_bootstrap.py"
-    helper_source = (
-        _build_fastapi_helper_source(service_name=service_name, environment=environment)
-        if framework == "fastapi"
-        else _build_flask_helper_source(service_name=service_name, environment=environment)
-    )
-    _write_file(helper_path, helper_source)
+    if helper_path.exists():
+        helper_path.unlink()
     entrypoint_relative = _entrypoint_relative_to_subpath(strategy)
     entrypoint_path = project_dir / entrypoint_relative
     entrypoint_source = entrypoint_path.read_text(encoding="utf-8")
     app_variable = _detect_python_app_variable(entrypoint_source, framework)
-    import_name = "install_fastapi_stimpact" if framework == "fastapi" else "install_flask_stimpact"
-    if import_name not in entrypoint_source:
+    import_name = "install_stimpact"
+    import_source = "stimpact_sdk.fastapi" if framework == "fastapi" else "stimpact_sdk.flask"
+    if f"from {import_source} import {import_name}" not in entrypoint_source:
         entrypoint_source = _inject_import(
             entrypoint_source,
-            f"from stimpact_bootstrap import {import_name}\n",
+            f"from {import_source} import {import_name}\n",
         )
-    if f"{import_name}({app_variable})" not in entrypoint_source:
+    install_call = f'{import_name}({app_variable}, service="{service_name}", environment="{environment}")'
+    if install_call not in entrypoint_source:
         assignment_pattern = rf"(?m)^(\s*{re.escape(app_variable)}\s*=\s*.*)$"
         match = re.search(assignment_pattern, entrypoint_source)
         if not match:
@@ -1588,7 +1589,7 @@ def _apply_python_strategy(
                 status_code=400,
                 code="sdk_bootstrap_entrypoint_not_found",
             )
-        insertion = f"{match.group(1)}\n{import_name}({app_variable})"
+        insertion = f"{match.group(1)}\n{install_call}"
         entrypoint_source = (
             f"{entrypoint_source[:match.start()]}{insertion}{entrypoint_source[match.end():]}"
         )
@@ -1623,23 +1624,17 @@ def _apply_generic_javascript_strategy(
     helper_stem = "stimpact"
     helper_path = entrypoint_path.parent / f"{helper_stem}{helper_suffix}"
     module_style = "cjs" if "require(" in source and "import " not in source else "esm"
-    _write_file(
-        helper_path,
-        _build_generic_node_helper_source(
-            service_name=service_name,
-            environment=environment,
-            module_style=module_style,
-        ),
-    )
-    relative_import = f"./{helper_stem}"
+    if helper_path.exists():
+        helper_path.unlink()
     if module_style == "cjs":
-        if 'const { installStimpact } = require("./stimpact");' not in source:
-            source = f'const {{ installStimpact }} = require("{relative_import}");\n{source}'
+        if 'const { installStimpact } = require("@stimpact/sdk/node");' not in source:
+            source = f'const {{ installStimpact }} = require("@stimpact/sdk/node");\n{source}'
     else:
-        if 'import { installStimpact } from "./stimpact";' not in source:
-            source = _inject_import(source, f'import {{ installStimpact }} from "{relative_import}";\n')
-    if "installStimpact();" not in source:
-        source = f"installStimpact();\n{source}"
+        if 'import { installStimpact } from "@stimpact/sdk/node";' not in source:
+            source = _inject_import(source, 'import { installStimpact } from "@stimpact/sdk/node";\n')
+    install_call = f'installStimpact({{ service: "{service_name}", environment: "{environment}" }});'
+    if install_call not in source:
+        source = f"{install_call}\n{source}"
     entrypoint_path.write_text(source, encoding="utf-8")
     _ensure_env_file(
         package_dir / ".env.example",

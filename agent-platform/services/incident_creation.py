@@ -14,7 +14,13 @@ from services.telemetry_classifier import (
     TelemetryClassifier,
 )
 from shared.events.incident_events import IncidentEvent
-from shared.types.telemetry import Environment, HttpRequestContext, HttpResponseContext
+from shared.types.telemetry import (
+    Environment,
+    HttpRequestContext,
+    HttpResponseContext,
+    TelemetryBreadcrumb,
+    TelemetryUserContext,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +167,8 @@ def _telemetry_record_to_normalized(telemetry: TelemetryRecord) -> NormalizedTel
     response_payload = telemetry.response_payload
     request_context: HttpRequestContext | None = None
     response_context: HttpResponseContext | None = None
+    user_context: TelemetryUserContext | None = None
+    breadcrumb_items: list[TelemetryBreadcrumb] = []
     if isinstance(request_payload, dict):
         try:
             request_context = HttpRequestContext.model_validate(request_payload)
@@ -171,6 +179,19 @@ def _telemetry_record_to_normalized(telemetry: TelemetryRecord) -> NormalizedTel
             response_context = HttpResponseContext.model_validate(response_payload)
         except Exception:
             response_context = None
+    if isinstance(telemetry.user_payload, dict):
+        try:
+            user_context = TelemetryUserContext.model_validate(telemetry.user_payload)
+        except Exception:
+            user_context = None
+    if isinstance(telemetry.breadcrumbs_payload, list):
+        for item in telemetry.breadcrumbs_payload:
+            if not isinstance(item, dict):
+                continue
+            try:
+                breadcrumb_items.append(TelemetryBreadcrumb.model_validate(item))
+            except Exception:
+                continue
     return NormalizedTelemetry(
         id=telemetry.id,
         project_id=telemetry.project_id,
@@ -182,6 +203,13 @@ def _telemetry_record_to_normalized(telemetry: TelemetryRecord) -> NormalizedTel
         request=request_context,
         response=response_context,
         commit_sha=telemetry.commit_sha,
+        release=telemetry.release,
+        dist=telemetry.dist,
+        session_id=telemetry.session_id,
+        user=user_context,
+        tags=telemetry.tags_payload if isinstance(telemetry.tags_payload, dict) else {},
+        contexts=telemetry.contexts_payload if isinstance(telemetry.contexts_payload, dict) else {},
+        breadcrumbs=breadcrumb_items,
         handled=telemetry.handled,
         occurred_at=telemetry.occurred_at,
         received_at=telemetry.received_at,

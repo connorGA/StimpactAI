@@ -6,6 +6,31 @@ export type StimpactEnvironment =
 
 export type StimpactTokenProvider = () => Promise<string>;
 
+export type StimpactUser = {
+  id?: string;
+  email?: string;
+  username?: string;
+  segment?: string;
+};
+
+export type StimpactTags = Record<string, string>;
+
+export type StimpactContexts = Record<string, Record<string, unknown>>;
+
+export type StimpactBreadcrumbLevel =
+  | "debug"
+  | "info"
+  | "warning"
+  | "error";
+
+export type StimpactBreadcrumb = {
+  ts: string;
+  category: string;
+  message: string;
+  level?: StimpactBreadcrumbLevel;
+  data?: Record<string, unknown>;
+};
+
 export type HttpRequestContext = {
   method?: string;
   url?: string;
@@ -24,6 +49,13 @@ export type CaptureErrorInput = {
   request?: HttpRequestContext;
   response?: HttpResponseContext;
   commitSha?: string | null;
+  release?: string | null;
+  dist?: string | null;
+  user?: StimpactUser | null;
+  tags?: StimpactTags;
+  contexts?: StimpactContexts;
+  breadcrumbs?: StimpactBreadcrumb[];
+  sessionId?: string | null;
   environment?: StimpactEnvironment;
   service?: string;
   timestamp?: string | Date;
@@ -42,6 +74,9 @@ export type ErrorCaptureContext = Omit<CaptureErrorInput, "error">;
 
 export type HeartbeatInput = {
   commitSha?: string | null;
+  release?: string | null;
+  dist?: string | null;
+  sessionId?: string | null;
   environment?: StimpactEnvironment;
   service?: string;
   timestamp?: string | Date;
@@ -64,6 +99,8 @@ export type StimpactClientOptions = {
   tokenProvider?: StimpactTokenProvider;
   service: string;
   environment?: StimpactEnvironment;
+  release?: string | null;
+  dist?: string | null;
   fetchImpl?: typeof fetch;
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -75,6 +112,7 @@ export type StimpactClientOptions = {
   includeBodies?: boolean;
   redactedHeaders?: string[];
   maxValueLength?: number;
+  breadcrumbLimit?: number;
 };
 
 export type BrowserAutoCaptureOptions = {

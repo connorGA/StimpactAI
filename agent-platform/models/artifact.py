@@ -17,6 +17,7 @@ class ArtifactType(StrEnum):
     TEST_REPORT = "test_report"
     SANDBOX_MANIFEST = "sandbox_manifest"
     SANDBOX_STEP_LOG = "sandbox_step_log"
+    SOURCE_MAP = "source_map"
 
 
 class ArtifactRecord(BaseModel):

@@ -235,19 +235,13 @@ def test_vite_query_client_patch_adds_global_react_query_capture(tmp_path: Path)
     )
 
     query_client_source = (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
-    assert 'import { QueryClient, QueryFunction, MutationCache, QueryCache } from "@tanstack/react-query";' in query_client_source
-    assert "captureHandledError" in query_client_source
-    assert "async function reportHandledError(input: {" in query_client_source
-    assert "const stimpactQueryCache = new QueryCache({" in query_client_source
-    assert "const stimpactMutationCache = new MutationCache({" in query_client_source
-    assert 'method: "MUTATION"' in query_client_source
-    assert 'method: "QUERY"' in query_client_source
-    assert "queryCache: stimpactQueryCache" in query_client_source
-    assert "mutationCache: stimpactMutationCache" in query_client_source
-    assert query_client_source.count("const stimpactMutationCache = new MutationCache({") == 1
-    stimpact_source = (src_dir / "stimpact.ts").read_text(encoding="utf-8")
-    assert "captureError: (payload: HandledErrorInput) => Promise<void>;" in stimpact_source
-    assert "await runtimeClient.captureError(input);" in stimpact_source
+    assert 'import { QueryClient, QueryFunction } from "@tanstack/react-query";' in query_client_source
+    assert "captureHandledError" not in query_client_source
+    assert "reportHandledError" not in query_client_source
+    assert not (src_dir / "stimpact.ts").exists()
+    main_source = (src_dir / "main.tsx").read_text(encoding="utf-8")
+    assert 'import { installStimpact } from "@stimpact/sdk/vite";' in main_source
+    assert 'installStimpact({ service: "web-app", environment: "production" });' in main_source
 
 
 def test_vite_query_client_patch_recovers_missing_report_helper(tmp_path: Path) -> None:
@@ -328,9 +322,9 @@ def test_vite_query_client_patch_recovers_missing_report_helper(tmp_path: Path) 
     )
 
     query_client_source = (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
-    assert "async function reportHandledError(input: {" in query_client_source
-    assert query_client_source.count("async function reportHandledError(input: {") == 1
-    assert "await captureHandledError(input);" in query_client_source
+    assert "reportHandledError" in query_client_source
+    assert "captureHandledError" not in query_client_source
+    assert not (src_dir / "stimpact.ts").exists()
 
 
 def test_vite_strategy_builds_against_packed_sdk_tarball(tmp_path: Path) -> None:
@@ -529,9 +523,9 @@ def test_vite_strategy_builds_against_packed_sdk_tarball(tmp_path: Path) -> None
         timeout=180,
     )
 
-    assert (src_dir / "stimpact.ts").exists()
-    assert "captureHandledError" in (src_dir / "stimpact.ts").read_text(encoding="utf-8")
-    assert "reportHandledError" in (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
+    assert not (src_dir / "stimpact.ts").exists()
+    assert "reportHandledError" not in (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
+    assert 'import { installStimpact } from "@stimpact/sdk/vite";' in (src_dir / "main.tsx").read_text(encoding="utf-8")
     assert install_result.returncode == 0
     assert build_result.returncode == 0
 
@@ -762,17 +756,15 @@ def test_connected_repo_reference_shape_rewrites_old_get_stimpact_client_usage(t
         api_key="stimp_browser_replace_me",
     )
 
-    helper_source = (src_dir / "stimpact.ts").read_text(encoding="utf-8")
     query_client_source = (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
     xano_client_source = (lib_dir / "xanoClient.ts").read_text(encoding="utf-8")
 
-    assert "export async function captureHandledError" in helper_source
+    assert not (src_dir / "stimpact.ts").exists()
     assert "getStimpactClient" not in query_client_source
     assert "getStimpactClient" not in xano_client_source
-    assert 'import { captureHandledError } from "../stimpact";' in query_client_source
-    assert 'import { captureHandledError } from "../stimpact";' in xano_client_source
-    assert "async function reportHandledError(input: {" in query_client_source
-    assert "async function reportHandledError(input: {" in xano_client_source
+    assert 'import { installStimpact } from "@stimpact/sdk/vite";' in (src_dir / "main.tsx").read_text(encoding="utf-8")
+    assert "reportHandledError" not in query_client_source
+    assert "captureHandledError" not in xano_client_source
 
 
 def test_previously_patched_repo_with_stale_report_handled_error_gets_rewritten(tmp_path: Path) -> None:
@@ -917,19 +909,11 @@ def test_previously_patched_repo_with_stale_report_handled_error_gets_rewritten(
         api_key="stimp_browser_replace_me",
     )
 
-    helper_source = (src_dir / "stimpact.ts").read_text(encoding="utf-8")
     query_client_source = (lib_dir / "queryClient.ts").read_text(encoding="utf-8")
 
-    assert "// @stimpact-integration v" in helper_source
-    assert "export async function captureHandledError" in helper_source
-
-    assert "getStimpactClient" not in query_client_source, (
-        "Stale getStimpactClient references must be purged from boundary files"
-    )
-    assert 'import { captureHandledError } from "../stimpact";' in query_client_source
-    assert "await captureHandledError(input);" in query_client_source, (
-        "reportHandledError must delegate to captureHandledError, not getStimpactClient"
-    )
+    assert not (src_dir / "stimpact.ts").exists()
+    assert "getStimpactClient" in query_client_source
+    assert 'import { installStimpact } from "@stimpact/sdk/vite";' in (src_dir / "main.tsx").read_text(encoding="utf-8")
 
 
 def test_unsupported_repo_fixture_stays_manual_only(tmp_path: Path) -> None:

@@ -28,6 +28,13 @@ SELECT
     request_payload,
     response_payload,
     commit_sha,
+    release,
+    dist,
+    session_id,
+    user_payload,
+    tags_payload,
+    contexts_payload,
+    breadcrumbs_payload,
     handled,
     classification,
     classification_reason,
@@ -117,10 +124,17 @@ INSERT INTO incident_events (
     stacktrace,
     request_payload,
     response_payload,
+    release,
+    dist,
+    session_id,
+    user_payload,
+    tags_payload,
+    contexts_payload,
+    breadcrumbs_payload,
     payload,
     occurred_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10
+    $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17
 )
 ON CONFLICT (telemetry_id) DO NOTHING
 RETURNING id;
@@ -160,6 +174,13 @@ SELECT
     stacktrace,
     request_payload,
     response_payload,
+    release,
+    dist,
+    session_id,
+    user_payload,
+    tags_payload,
+    contexts_payload,
+    breadcrumbs_payload,
     payload,
     occurred_at,
     created_at
@@ -354,6 +375,13 @@ class IncidentRepository:
                         telemetry.stacktrace,
                         json.dumps(request_payload) if request_payload is not None else None,
                         json.dumps(response_payload) if response_payload is not None else None,
+                        telemetry.release,
+                        telemetry.dist,
+                        telemetry.session_id,
+                        json.dumps(telemetry.user_payload) if telemetry.user_payload is not None else None,
+                        json.dumps(telemetry.tags_payload) if telemetry.tags_payload is not None else None,
+                        json.dumps(telemetry.contexts_payload) if telemetry.contexts_payload is not None else None,
+                        json.dumps(telemetry.breadcrumbs_payload) if telemetry.breadcrumbs_payload is not None else None,
                         json.dumps(event_payload),
                         telemetry.occurred_at,
                     )

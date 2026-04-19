@@ -39,6 +39,13 @@ export type IncidentEvent = {
   stacktrace: string;
   request_payload: unknown;
   response_payload: unknown;
+  release: string | null;
+  dist: string | null;
+  session_id: string | null;
+  user_payload: unknown;
+  tags_payload: unknown;
+  contexts_payload: unknown;
+  breadcrumbs_payload: unknown;
   payload: unknown;
   occurred_at: string;
   created_at: string;
