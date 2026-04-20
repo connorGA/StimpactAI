@@ -191,12 +191,6 @@ class TelemetryClassifier:
         stacktrace = telemetry.stacktrace or ""
         response_body = _response_body(telemetry)
 
-        if telemetry.handled is True:
-            return _decisive(
-                Classification.USER_ERROR,
-                "The caller explicitly tagged this error as handled at the call site.",
-            )
-
         if status_code is not None and 500 <= status_code <= 599:
             return _decisive(
                 Classification.CODE_BUG,
@@ -242,6 +236,18 @@ class TelemetryClassifier:
                 Classification.USER_ERROR,
                 "Error message matches a handled authentication failure without HTTP context.",
             )
+
+        if telemetry.handled is True:
+            if _looks_like_unhandled_exception(error_message):
+                return _decisive(
+                    Classification.CODE_BUG,
+                    "Handled at the call site, but the exception type still indicates an application defect.",
+                )
+            if status_code is not None and status_code in USER_ERROR_STATUS_CODES:
+                return _decisive(
+                    Classification.USER_ERROR,
+                    f"Handled HTTP {status_code} response matches an expected user-driven outcome.",
+                )
 
         if telemetry.handled is False and status_code is None:
             if _looks_like_unhandled_exception(error_message):

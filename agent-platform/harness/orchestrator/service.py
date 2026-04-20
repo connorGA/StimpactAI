@@ -140,6 +140,19 @@ class HarnessSessionOrchestrator:
         self._feature_catalogs[session_id] = initializer_output.feature_catalog.model_copy(deep=True)
         return self._build_snapshot(updated)
 
+    def invalidate_feature_catalog(self, session_id: str) -> FeatureCatalog | None:
+        catalog = self._feature_catalogs.get(session_id)
+        if catalog is None:
+            return None
+        primitives = self._runtime.get_runtime_primitives(session_id)
+        for feature in catalog.features:
+            feature.verification_state = primitives.verification_rules_engine.build_initial_state(
+                required_verification=feature.required_verification,
+                browser_required=feature.verification_state.browser_required,
+            )
+            feature.last_verified_at = None
+        return catalog
+
     def build_coding_handoff(
         self,
         *,

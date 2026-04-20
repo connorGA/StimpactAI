@@ -518,23 +518,14 @@ class AutonomousRunService:
         )
         if persisted_record is not None and getattr(persisted_record, "run", None) is not None:
             persisted_run = persisted_record.run
-            if (
-                persisted_run.incident_id in {None, incident_id}
-                and (
-                    persisted_run.updated_at > detail.run.updated_at
-                    or persisted_run.status is not detail.run.status
-                    or persisted_run.phase is not detail.run.phase
-                    or persisted_run.async_job_id != detail.run.async_job_id
-                    or persisted_run.coding_session_id != detail.run.coding_session_id
-                    or persisted_run.initializer_session_id != detail.run.initializer_session_id
-                )
-            ):
+            if persisted_run.incident_id in {None, incident_id}:
                 detail = detail.model_copy(
                     update={
                         "run": persisted_run,
                         "outcome": getattr(persisted_record, "outcome", None),
                     }
                 )
+                self._event_stream.upsert_run(persisted_run)
         self._hydrate_event_stream(detail)
         repo_profile = (
             await self._require_repo_profile(detail.run.repo_profile_id)

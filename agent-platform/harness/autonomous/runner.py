@@ -362,12 +362,26 @@ class AutonomousRepairRunner:
 
             if decision.action is AutonomousDecisionAction.COMPLETE:
                 if self._all_features_verified(coding_snapshot):
-                    if self._repair_mode_requires_code_change(run) and not self._has_changes_since_checkpoint(run):
-                        return self._fail_run(
-                            run_id,
-                            "Autonomous repair cannot complete without producing a code change relative to the baseline checkpoint.",
-                        )
-                    if self._repair_mode_requires_code_change(run) and not self._has_fresh_verification_evidence(run):
+                    requires_code_change = self._repair_mode_requires_code_change(run)
+                    has_changes = self._has_changes_since_checkpoint(run)
+                    has_fresh_evidence = self._has_fresh_verification_evidence(run)
+                    if requires_code_change and (not has_changes or not has_fresh_evidence):
+                        if self._can_invalidate_stale_verification(run, step_index):
+                            self._invalidate_feature_catalog(
+                                run_id=run_id,
+                                coding_session_id=coding_session_id,
+                                reason=(
+                                    "no_diff_since_checkpoint"
+                                    if not has_changes
+                                    else "no_fresh_verification_evidence"
+                                ),
+                            )
+                            continue
+                        if not has_changes:
+                            return self._fail_run(
+                                run_id,
+                                "Autonomous repair cannot complete without producing a code change relative to the baseline checkpoint.",
+                            )
                         return self._fail_run(
                             run_id,
                             "Autonomous repair cannot complete without fresh verification evidence from an explicit post-fix verification step.",
@@ -1206,6 +1220,56 @@ class AutonomousRepairRunner:
         if evidence is None or not evidence.passed:
             return False
         return evidence.recorded_at >= run.created_at
+
+    def _can_invalidate_stale_verification(
+        self,
+        run: AutonomousRepairRunRecord,
+        step_index: int,
+    ) -> bool:
+        # When the decision engine decides COMPLETE at the very first step of a
+        # continue_run loop without performing any tool calls in this loop, the
+        # feature catalog's "fully_verified" status is inherited from a previous
+        # attempt. In that case, resetting the catalog lets the run actually do
+        # the work rather than terminating as if the job were done.
+        if step_index > 1:
+            return False
+        return not run.loop_state.recent_tool_names or (
+            len(run.loop_state.recent_tool_names) == 1
+            and run.loop_state.recent_tool_names[0] == "discard_failed_work"
+        )
+
+    def _invalidate_feature_catalog(
+        self,
+        *,
+        run_id: str,
+        coding_session_id: str,
+        reason: str,
+    ) -> None:
+        try:
+            self._orchestrator.invalidate_feature_catalog(coding_session_id)
+        except Exception:  # noqa: BLE001
+            return
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.VERIFICATION_STATE_UPDATED,
+            phase=AutonomousRunPhase.CODING,
+            summary=(
+                "Reset stale feature verification state inherited from a prior attempt "
+                "so the runner can actually reproduce and repair the incident."
+            ),
+            payload={"reason": reason},
+        )
+        current = self.get_snapshot(run_id).run
+        refreshed = current.model_copy(
+            update={
+                "latest_verification": None,
+                "updated_at": datetime.now(UTC),
+                "loop_state": current.loop_state.model_copy(
+                    update={"last_tool_result": {}},
+                ),
+            }
+        )
+        self._persist_run(refreshed)
 
     def _has_changes_since_checkpoint(self, run: AutonomousRepairRunRecord) -> bool:
         checkpoint_ref = run.loop_state.checkpoint_ref
