@@ -27,6 +27,7 @@ from harness.schemas.autonomous import (
     AutonomousVerificationEvidence,
 )
 from harness.schemas.verification import VerificationKind
+from models.async_job import AsyncJobStatus, AsyncJobType
 from models.control_plane import (
     AutonomyMode,
     ProjectPolicyRecord,
@@ -317,6 +318,68 @@ class StubRetryRunner:
             }
         )
         self._event_stream.upsert_run(reset)
+        return self._event_stream.get_snapshot(run_id)
+
+
+class StubPersistedRetryStateRunner:
+    def __init__(self, event_stream) -> None:
+        self._event_stream = event_stream
+        self.checked_reset_state = False
+
+    def bootstrap_run(self, **kwargs):
+        raise AssertionError("bootstrap_run should not be called in this test")
+
+    def ensure_sessions(self, **kwargs):
+        snapshot = self._event_stream.get_snapshot(kwargs["run_id"])
+        run = snapshot.run
+        assert run.status is AutonomousRunStatus.QUEUED
+        assert run.phase is AutonomousRunPhase.CODING
+        assert run.initializer_session_id is None
+        assert run.coding_session_id is None
+        assert run.latest_verification is None
+        self.checked_reset_state = True
+        updated = run.model_copy(
+            update={
+                "initializer_session_id": "retry-initializer",
+                "coding_session_id": "retry-coding",
+            }
+        )
+        self._event_stream.upsert_run(updated)
+        return self._event_stream.get_snapshot(run.id)
+
+    async def continue_run(self, *, run_id: str, decision_engine, max_steps: int = 20):
+        _ = (decision_engine, max_steps)
+        snapshot = self._event_stream.get_snapshot(run_id)
+        run = snapshot.run
+        failed = run.model_copy(
+            update={
+                "status": AutonomousRunStatus.FAILED,
+                "phase": AutonomousRunPhase.FAILED,
+                "last_error": "Verification still failing after retry.",
+                "latest_verification": AutonomousVerificationEvidence(
+                    source="tool",
+                    kind="integration",
+                    summary="Command exited with status 1.",
+                    passed=False,
+                    command="npm run build",
+                    recorded_at=run.updated_at + timedelta(seconds=1),
+                    metadata={},
+                ),
+                "loop_state": run.loop_state.model_copy(
+                    update={
+                        "last_failure": AutonomousToolFailure(
+                            tool_name="run_command",
+                            failure_class=AutonomousToolFailureClass.VERIFICATION,
+                            message="Verification still failing after retry.",
+                            hint="Fix the verification error before trying again.",
+                            signature="run_command:verification:retry-state",
+                            repeated_count=1,
+                        ),
+                    }
+                ),
+            }
+        )
+        self._event_stream.upsert_run(failed)
         return self._event_stream.get_snapshot(run_id)
 
 
@@ -716,12 +779,8 @@ async def test_autonomous_run_service_supports_approval_verification_and_promoti
         )
     )
 
-    ready = await service.get_run_detail("incident-1", detail.run.id)
-    assert ready.run.sandbox_run_id == "sandbox-1"
-    assert ready.run.promotion_status is AutonomousPromotionStatus.READY
-
-    promoted = await service.promote_run("incident-1", detail.run.id)
-
+    promoted = await service.get_run_detail("incident-1", detail.run.id)
+    assert promoted.run.sandbox_run_id == "sandbox-1"
     assert promoted.run.promotion_status is AutonomousPromotionStatus.PROPOSED
     assert promoted.run.promotion_branch_name == f"stimpact/fix/incident-1-{detail.run.id[:8]}"
     assert promoted.run.promotion_url == "https://github.com/acme/billing-api/pull/99"
@@ -1234,6 +1293,58 @@ async def test_autonomous_run_service_does_not_retry_non_retryable_failed_run(
 
 
 @pytest.mark.asyncio
+async def test_autonomous_run_service_retries_when_completion_lacks_durable_diff(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    async_jobs = StubAsyncJobRepository()
+    repository = StubAutonomousRunRepository()
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=async_jobs,
+        autonomous_repository=repository,
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=event_stream,
+        runner=AutonomousRepairRunner(event_stream=event_stream),
+        decision_engine_factory=lambda: object(),  # type: ignore[arg-type]
+    )
+
+    await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    retry_runner = StubRetryRunner(
+        event_stream,
+        failure_class=AutonomousToolFailureClass.UNKNOWN,
+        include_last_failure=False,
+        first_error=(
+            "Autonomous repair cannot complete without producing a code change "
+            "relative to the baseline checkpoint."
+        ),
+    )
+    service._runner = retry_runner  # noqa: SLF001
+
+    final_detail = await service.process_async_job(async_jobs.jobs[0])
+
+    assert retry_runner.continue_calls == 2
+    assert len(retry_runner.retry_contexts) == 1
+    assert (
+        retry_runner.retry_contexts[0]["previous_failure_class"]
+        == AutonomousToolFailureClass.STAGNATION.value
+    )
+    assert final_detail.run.status is AutonomousRunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
 async def test_autonomous_run_service_does_not_retry_repository_setup_failure(
     tmp_path: Path,
 ) -> None:
@@ -1285,6 +1396,67 @@ async def test_autonomous_run_service_does_not_retry_repository_setup_failure(
     assert retry_runner.continue_calls == 1
     assert retry_runner.retry_contexts == []
     assert final_detail.run.status is AutonomousRunStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_approve_run_auto_promotes_when_verified_run_is_already_ready(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    repository = StubAutonomousRunRepository()
+    provider_service = StubProviderIntegrationService()
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=repository,
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        patch_repository=StubPatchRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+        provider_integration_service=provider_service,
+    )
+
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    ready_run = detail.run.model_copy(
+        update={
+            "status": AutonomousRunStatus.SUCCEEDED,
+            "phase": AutonomousRunPhase.COMPLETED,
+            "approval_status": AutonomousApprovalStatus.PENDING,
+            "promotion_status": AutonomousPromotionStatus.READY,
+            "patch_run_id": "patch-1",
+            "sandbox_run_id": "sandbox-1",
+        }
+    )
+    service._event_stream.upsert_run(ready_run)  # noqa: SLF001
+    await repository.update_run(
+        ready_run.id,
+        async_job_id=ready_run.async_job_id,
+        repo_profile_id=ready_run.repo_profile_id,
+        run=ready_run,
+        outcome=None,
+    )
+
+    approved = await service.approve_run(
+        "incident-1",
+        ready_run.id,
+        AutonomousRunApprovalRequest(approval_status=AutonomousApprovalStatus.APPROVED),
+    )
+
+    assert approved.run.approval_status is AutonomousApprovalStatus.APPROVED
+    assert approved.run.promotion_status is AutonomousPromotionStatus.PROPOSED
+    assert approved.run.promotion_url == "https://github.com/acme/billing-api/pull/99"
+    assert provider_service.calls
 
 
 @pytest.mark.asyncio
@@ -1540,6 +1712,117 @@ async def test_autonomous_run_service_prefers_newer_persisted_snapshot_over_stal
     refreshed = service.get_run_detail_sync("incident-1", detail.run.id)
     assert refreshed.run.status is AutonomousRunStatus.SUCCEEDED
     assert refreshed.run.phase is AutonomousRunPhase.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_process_async_job_prefers_persisted_retry_state_over_stale_artifact_snapshot(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident = IncidentRecord(
+        id="incident-1",
+        project_id="project-1",
+        fingerprint="fp-1",
+        service="billing-api",
+        environment=Environment.STAGING,
+        title="billing-api: Database timeout",
+        status=IncidentStatus.OPEN,
+        severity=IncidentSeverity.HIGH,
+        first_seen_at=now,
+        last_seen_at=now,
+        event_count=1,
+        latest_telemetry_id="telemetry-1",
+        created_at=now,
+        updated_at=now,
+    )
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    repository = StubAutonomousRunRepository()
+    initial_event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    initial_service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=repository,
+        control_plane_repository=StubMissingRepoProfileControlPlaneRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=initial_event_stream,
+    )
+
+    detail = await initial_service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    stale_success_run = detail.run.model_copy(
+        update={
+            "status": AutonomousRunStatus.SUCCEEDED,
+            "phase": AutonomousRunPhase.COMPLETED,
+            "initializer_session_id": "stale-initializer",
+            "coding_session_id": "stale-coding",
+            "latest_verification": AutonomousVerificationEvidence(
+                source="tool",
+                kind="integration",
+                summary="Verification passed.",
+                passed=True,
+                command="npm run build",
+                recorded_at=detail.run.updated_at + timedelta(minutes=1),
+                metadata={"attempt": 1},
+            ),
+            "updated_at": detail.run.updated_at + timedelta(minutes=1),
+        }
+    )
+    initial_event_stream.upsert_run(stale_success_run)
+
+    retry_ready_run = stale_success_run.model_copy(
+        update={
+            "status": AutonomousRunStatus.QUEUED,
+            "phase": AutonomousRunPhase.CODING,
+            "async_job_id": "job-retry",
+            "initializer_session_id": None,
+            "coding_session_id": None,
+            "last_error": None,
+            "latest_verification": None,
+            "updated_at": stale_success_run.updated_at + timedelta(seconds=1),
+        }
+    )
+    await repository.update_run(
+        detail.run.id,
+        async_job_id="job-retry",
+        repo_profile_id=detail.run.repo_profile_id,
+        run=retry_ready_run,
+        outcome=None,
+    )
+
+    retry_event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    retry_runner = StubPersistedRetryStateRunner(retry_event_stream)
+    retry_service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=repository,
+        control_plane_repository=StubMissingRepoProfileControlPlaneRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=retry_event_stream,
+        runner=retry_runner,
+        decision_engine_factory=lambda: object(),  # type: ignore[arg-type]
+    )
+
+    job = SimpleNamespace(
+        id="job-retry",
+        job_type=AsyncJobType.AUTONOMOUS_REPAIR,
+        payload={"incident_id": "incident-1", "autonomous_run_id": detail.run.id},
+        status=AsyncJobStatus.QUEUED,
+    )
+
+    final_detail = await retry_service.process_async_job(job)
+
+    assert retry_runner.checked_reset_state is True
+    assert final_detail.run.status is AutonomousRunStatus.FAILED
+    assert final_detail.run.last_error == "Verification still failing after retry."
 
 
 @pytest.mark.asyncio

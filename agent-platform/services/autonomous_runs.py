@@ -491,12 +491,16 @@ class AutonomousRunService:
                 run=updated_run,
                 outcome=detail.outcome,
             )
-        return AutonomousRunDetailResponse(
+        approved_detail = AutonomousRunDetailResponse(
             run=updated_run,
             events=detail.events,
             outcome=detail.outcome,
             artifact_paths=detail.artifact_paths,
         )
+        auto_promoted = await self._maybe_auto_promote_run(approved_detail)
+        if auto_promoted is not None:
+            return auto_promoted
+        return approved_detail
 
     async def process_async_job(self, job) -> AutonomousRunDetailResponse:
         if job.job_type is not AsyncJobType.AUTONOMOUS_REPAIR:
@@ -507,12 +511,31 @@ class AutonomousRunService:
         incident_id = str(job.payload["incident_id"])
         run_id = str(job.payload["autonomous_run_id"])
         detail = self.get_run_detail_sync(incident_id, run_id)
-        self._hydrate_event_stream(detail)
         persisted_record = (
             await self._autonomous_repository.get_run(run_id)
             if self._autonomous_repository is not None
             else None
         )
+        if persisted_record is not None and getattr(persisted_record, "run", None) is not None:
+            persisted_run = persisted_record.run
+            if (
+                persisted_run.incident_id in {None, incident_id}
+                and (
+                    persisted_run.updated_at > detail.run.updated_at
+                    or persisted_run.status is not detail.run.status
+                    or persisted_run.phase is not detail.run.phase
+                    or persisted_run.async_job_id != detail.run.async_job_id
+                    or persisted_run.coding_session_id != detail.run.coding_session_id
+                    or persisted_run.initializer_session_id != detail.run.initializer_session_id
+                )
+            ):
+                detail = detail.model_copy(
+                    update={
+                        "run": persisted_run,
+                        "outcome": getattr(persisted_record, "outcome", None),
+                    }
+                )
+        self._hydrate_event_stream(detail)
         repo_profile = (
             await self._require_repo_profile(detail.run.repo_profile_id)
             if detail.run.repo_profile_id is not None
@@ -778,6 +801,11 @@ class AutonomousRunService:
                 run=updated_run,
                 outcome=outcome,
             )
+            auto_promoted = await self._maybe_auto_promote_run(
+                self.get_run_detail_sync(record.incident_id, updated_run.id)
+            )
+            if auto_promoted is not None:
+                updated_run = auto_promoted.run
             if (
                 sandbox_run.status is SandboxRunStatus.SUCCEEDED
                 and sandbox_run.verification_succeeded
@@ -1367,9 +1395,48 @@ class AutonomousRunService:
             return AutonomousToolFailureClass.TOOL_ERROR
         if "exceeded the max step budget" in message:
             return AutonomousToolFailureClass.STAGNATION
+        if (
+            "without producing a code change relative to the baseline checkpoint" in message
+            or "without fresh verification evidence from an explicit post-fix verification step" in message
+        ):
+            return AutonomousToolFailureClass.STAGNATION
         if "verification" in message:
             return AutonomousToolFailureClass.VERIFICATION
         return None
+
+    @staticmethod
+    def _run_is_ready_for_auto_promotion(run: AutonomousRepairRunRecord) -> bool:
+        return (
+            run.execution_mode is AutonomousExecutionMode.REPAIR_AND_PROPOSE
+            and run.status is AutonomousRunStatus.SUCCEEDED
+            and run.approval_status in {
+                AutonomousApprovalStatus.NOT_REQUIRED,
+                AutonomousApprovalStatus.APPROVED,
+            }
+            and run.promotion_status is AutonomousPromotionStatus.READY
+            and run.sandbox_run_id is not None
+            and run.patch_run_id is not None
+            and run.repo_profile_id is not None
+        )
+
+    async def _maybe_auto_promote_run(
+        self,
+        detail: AutonomousRunDetailResponse,
+    ) -> AutonomousRunDetailResponse | None:
+        run = detail.run
+        if run.incident_id is None or not self._run_is_ready_for_auto_promotion(run):
+            return None
+        try:
+            return await self.promote_run(run.incident_id, run.id)
+        except Exception:
+            logger.exception(
+                "autonomous_run_auto_promotion_failed",
+                extra={
+                    "incident_id": run.incident_id,
+                    "run_id": run.id,
+                },
+            )
+            return None
 
     async def _build_retry_context(
         self,
