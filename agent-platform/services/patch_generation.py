@@ -59,7 +59,7 @@ class PatchGenerationService:
 
         events = await self._incident_repository.list_incident_events(incident_id, limit=event_limit)
         latest_telemetry = await self._incident_repository.get_telemetry(incident.latest_telemetry_id)
-        classification = self._classifier.classify(incident, events)
+        classification = await self._classifier.classify_async(incident, events)
         evidence = self._code_context.build_evidence(
             incident=incident,
             events=events,

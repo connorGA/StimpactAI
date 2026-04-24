@@ -436,6 +436,7 @@ class ProjectServiceRecord(BaseModel):
     repo_profile_id: str | None = None
     owner: str | None = None
     deploy_target: str | None = None
+    tracked_branch: str | None = None
     routing_hints: ProjectServiceRoutingHints = Field(default_factory=ProjectServiceRoutingHints)
     startup_priority: int = 100
     sandbox_healthcheck_command: str | None = None
@@ -455,6 +456,7 @@ class ProjectServiceRecord(BaseModel):
             repo_profile_id=str(row["repo_profile_id"]) if row["repo_profile_id"] is not None else None,
             owner=row["owner"],
             deploy_target=row["deploy_target"],
+            tracked_branch=str(row["tracked_branch"]) if row["tracked_branch"] is not None else None,
             routing_hints=ProjectServiceRoutingHints.from_db_value(row["routing_hints"]),
             startup_priority=int(row["startup_priority"]),
             sandbox_healthcheck_command=row["sandbox_healthcheck_command"],

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from api.core.config import get_outbox_stale_lock_seconds
@@ -78,10 +77,17 @@ class OutboxDispatcher:
                     "attached_telemetry": result.attached_telemetry,
                 },
             )
-            # region agent log
-            with open("/Users/connor/Desktop/StimpactAi/.cursor/debug-31f43d.log", "a", encoding="utf-8") as debug_log:
-                debug_log.write(json.dumps({"sessionId": "31f43d", "runId": result.incident_id or "suppressed", "hypothesisId": "H5", "location": "agent-platform/workers/outbox_dispatcher.py:81", "message": "outbox telemetry evaluated for autonomous trigger", "data": {"eventId": str(event["id"]), "incidentId": result.incident_id, "createdNewIncident": result.created_new_incident, "attachedTelemetry": result.attached_telemetry, "suppressed": result.suppressed}, "timestamp": int(datetime.now(UTC).timestamp() * 1000)}) + "\n")
-            # endregion
+            logger.info(
+                "Outbox telemetry evaluated for autonomous trigger",
+                extra={
+                    "event_id": str(event["id"]),
+                    "incident_id": result.incident_id,
+                    "created_new_incident": result.created_new_incident,
+                    "attached_telemetry": result.attached_telemetry,
+                    "suppressed": result.suppressed,
+                    "autonomous_service_configured": self._autonomous_run_service is not None,
+                },
+            )
             if (
                 result.attached_telemetry
                 and result.incident_id is not None

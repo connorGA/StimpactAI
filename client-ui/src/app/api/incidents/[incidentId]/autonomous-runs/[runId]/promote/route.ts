@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const AGENT_PLATFORM_API_URL =
-  process.env.AGENT_PLATFORM_API_URL ?? "http://127.0.0.1:8000";
+import {
+  AGENT_PLATFORM_API_URL,
+  buildAgentPlatformForwardHeaders,
+} from "../../../../_agent-platform-proxy";
 
 type RouteContext = {
   params: Promise<{
@@ -10,7 +12,7 @@ type RouteContext = {
   }>;
 };
 
-export async function POST(_: Request, context: RouteContext) {
+export async function POST(request: NextRequest, context: RouteContext) {
   const { incidentId, runId } = await context.params;
 
   try {
@@ -18,9 +20,7 @@ export async function POST(_: Request, context: RouteContext) {
       `${AGENT_PLATFORM_API_URL}/incidents/${incidentId}/autonomous-runs/${runId}/promote`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: buildAgentPlatformForwardHeaders(request),
         cache: "no-store",
       },
     );

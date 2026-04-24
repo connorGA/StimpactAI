@@ -41,15 +41,33 @@ class AutonomousJobDispatcher:
                 job.id, run_id, incident_id,
             )
             try:
-                await self._service.process_async_job(job)
+                detail = await self._service.process_async_job(job)
+                run = detail.run
+                run_terminal_error = (
+                    f"Worker completed; autonomous run ended with status={run.status.value}"
+                    if run.last_error
+                    else None
+                )
                 await self._repository.mark_job_status(job.id, status=AsyncJobStatus.SUCCEEDED)
                 await self._repository.create_job_attempt(
                     async_job_id=job.id,
                     worker_id=self._worker_id,
                     status=AsyncJobStatus.SUCCEEDED,
+                    error_message=run_terminal_error,
                     finished=True,
                 )
-                logger.info("Autonomous job %s completed successfully", job.id)
+                logger.info(
+                    "Autonomous job %s completed worker execution",
+                    job.id,
+                    extra={
+                        "run_id": run_id,
+                        "incident_id": incident_id,
+                        "run_status": run.status.value,
+                        "run_phase": run.phase.value,
+                        "promotion_status": run.promotion_status.value,
+                        "run_last_error": run.last_error,
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "Autonomous job %s failed (run=%s)", job.id, run_id,

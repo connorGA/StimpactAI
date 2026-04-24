@@ -482,13 +482,14 @@ INSERT INTO project_services (
     repo_profile_id,
     owner,
     deploy_target,
+    tracked_branch,
     routing_hints,
     startup_priority,
     sandbox_healthcheck_command,
     sandbox_healthcheck_url,
     active
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14
 )
 RETURNING *;
 """
@@ -501,11 +502,12 @@ SET name = $2,
     repo_profile_id = $5,
     owner = $6,
     deploy_target = $7,
-    routing_hints = $8::jsonb,
-    startup_priority = $9,
-    sandbox_healthcheck_command = $10,
-    sandbox_healthcheck_url = $11,
-    active = $12,
+    tracked_branch = $8,
+    routing_hints = $9::jsonb,
+    startup_priority = $10,
+    sandbox_healthcheck_command = $11,
+    sandbox_healthcheck_url = $12,
+    active = $13,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -1086,6 +1088,7 @@ class ControlPlaneRepository:
         repo_profile_id: str | None,
         owner: str | None,
         deploy_target: str | None,
+        tracked_branch: str | None,
         routing_hints: ProjectServiceRoutingHints,
         startup_priority: int,
         sandbox_healthcheck_command: str | None,
@@ -1102,6 +1105,7 @@ class ControlPlaneRepository:
             repo_profile_id,
             owner,
             deploy_target,
+            tracked_branch,
             json.dumps(routing_hints.model_dump(mode="json")),
             startup_priority,
             sandbox_healthcheck_command,
@@ -1120,6 +1124,7 @@ class ControlPlaneRepository:
         repo_profile_id: str | None,
         owner: str | None,
         deploy_target: str | None,
+        tracked_branch: str | None,
         routing_hints: ProjectServiceRoutingHints,
         startup_priority: int,
         sandbox_healthcheck_command: str | None,
@@ -1135,6 +1140,7 @@ class ControlPlaneRepository:
             repo_profile_id,
             owner,
             deploy_target,
+            tracked_branch,
             json.dumps(routing_hints.model_dump(mode="json")),
             startup_priority,
             sandbox_healthcheck_command,

@@ -897,6 +897,7 @@ class CreateProjectServiceRequest(BaseModel):
     repo_profile_id: str | None = None
     owner: str | None = Field(default=None, max_length=200)
     deploy_target: str | None = Field(default=None, max_length=200)
+    tracked_branch: str | None = Field(default=None, max_length=255)
     routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
     startup_priority: int = Field(default=100, ge=0, le=10_000)
     sandbox_healthcheck_command: str | None = Field(default=None, max_length=2_000)
@@ -904,9 +905,11 @@ class CreateProjectServiceRequest(BaseModel):
     active: bool = True
     dependencies: list[ProjectServiceDependencyRequest] = Field(default_factory=list, max_length=50)
 
-    @field_validator("project_id", "name", "slug", mode="before")
+    @field_validator("project_id", "name", "slug", "tracked_branch", mode="before")
     @classmethod
-    def validate_required_text(cls, value: str) -> str:
+    def validate_required_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not isinstance(value, str):
             raise ValueError("value must be a string")
         normalized = value.strip()
@@ -924,6 +927,7 @@ class UpdateProjectServiceRequest(BaseModel):
     repo_profile_id: str | None = None
     owner: str | None = Field(default=None, max_length=200)
     deploy_target: str | None = Field(default=None, max_length=200)
+    tracked_branch: str | None = Field(default=None, max_length=255)
     routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
     startup_priority: int = Field(default=100, ge=0, le=10_000)
     sandbox_healthcheck_command: str | None = Field(default=None, max_length=2_000)
@@ -960,6 +964,7 @@ class ProjectServiceResponse(BaseModel):
     repo_profile_id: str | None = None
     owner: str | None = None
     deploy_target: str | None = None
+    tracked_branch: str | None = None
     routing_hints: ProjectServiceRoutingHintsPayload = Field(default_factory=ProjectServiceRoutingHintsPayload)
     startup_priority: int
     sandbox_healthcheck_command: str | None = None
@@ -986,6 +991,35 @@ class ProjectServiceResponse(BaseModel):
                 for item in (dependencies or [])
             ],
         )
+
+
+class ProviderBranchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    commit_sha: str | None = None
+    last_commit_at: datetime | None = None
+
+
+class ProjectServiceRepairTargetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_id: str
+    project_id: str
+    service_name: str
+    service_slug: str
+    provider_repository_id: str | None = None
+    provider_repository_owner: str | None = None
+    provider_repository_name: str | None = None
+    default_branch: str | None = None
+    tracked_branch: str | None = None
+    selected_branch: str | None = None
+    selected_source: str
+    deployed_environment: str | None = None
+    deployed_commit_sha: str | None = None
+    deployed_last_seen_at: datetime | None = None
+    current_target_commit_sha: str | None = None
+    recent_branches: list[ProviderBranchResponse] = Field(default_factory=list)
 
 
 class SandboxPlanServiceResponse(BaseModel):

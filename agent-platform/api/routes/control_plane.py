@@ -59,6 +59,8 @@ from api.schemas.control_plane import (
     ProjectTelemetryVerificationResponse,
     ProjectSandboxPlanPreviewResponse,
     ProjectServiceResponse,
+    ProjectServiceRepairTargetResponse,
+    ProviderBranchResponse,
     SandboxPlanServiceResponse,
     ProviderIntegrationOnboardingResponse,
     ProviderInstallationResponse,
@@ -507,6 +509,101 @@ def _build_project_telemetry_verification_response(
         commit_sha=heartbeat.commit_sha,
         stale_after_seconds=TELEMETRY_HEARTBEAT_STALE_AFTER_SECONDS,
         heartbeat=ProjectTelemetryHeartbeatResponse.from_record(heartbeat),
+    )
+
+
+def _service_identity_candidates(service_record) -> set[str]:
+    candidates = {
+        service_record.name.strip().lower(),
+        service_record.slug.strip().lower(),
+    }
+    for item in service_record.routing_hints.service_names:
+        normalized = item.strip().lower()
+        if normalized:
+            candidates.add(normalized)
+    return {candidate for candidate in candidates if candidate}
+
+
+def _select_service_heartbeat(service_record, heartbeats):
+    candidates = _service_identity_candidates(service_record)
+    matches = [item for item in heartbeats if getattr(item, "service", "").strip().lower() in candidates]
+    if not matches:
+        return None
+    production_matches = [item for item in matches if getattr(item, "environment", "").strip().lower() == "production"]
+    pool = production_matches or matches
+    return max(pool, key=lambda item: item.last_seen_at)
+
+
+async def _build_project_service_repair_target(
+    *,
+    project_id: str,
+    service_record,
+    repository: ControlPlaneRepository,
+    provider_service: ProviderIntegrationService,
+    branch_limit: int = 0,
+) -> ProjectServiceRepairTargetResponse:
+    repo_profile = (
+        await repository.get_repo_profile(service_record.repo_profile_id)
+        if service_record.repo_profile_id is not None
+        else None
+    )
+    provider_repository = (
+        await repository.get_provider_repository(repo_profile.provider_repository_id)
+        if repo_profile is not None
+        else None
+    )
+    heartbeats = await repository.list_project_telemetry_heartbeats(project_id)
+    deployed_heartbeat = _select_service_heartbeat(service_record, heartbeats)
+    selected_branch = service_record.tracked_branch or (
+        provider_repository.default_branch if provider_repository is not None else None
+    )
+    selected_source = (
+        "deployed_commit"
+        if deployed_heartbeat is not None and deployed_heartbeat.commit_sha is not None
+        else "tracked_branch"
+        if service_record.tracked_branch
+        else "default_branch"
+    )
+    current_target_commit_sha = deployed_heartbeat.commit_sha if deployed_heartbeat is not None else None
+    recent_branches: list[ProviderBranchResponse] = []
+    if branch_limit > 0 and provider_repository is not None:
+        branches = await provider_service.list_repository_branches(
+            project_id=project_id,
+            provider_repository_id=provider_repository.id,
+            limit=branch_limit,
+        )
+        recent_branches = [
+            ProviderBranchResponse(
+                name=item.name,
+                commit_sha=item.commit_sha,
+                last_commit_at=item.last_commit_at,
+            )
+            for item in branches
+        ]
+        if current_target_commit_sha is None and selected_branch is not None:
+            selected_branch_payload = next(
+                (item for item in recent_branches if item.name == selected_branch),
+                None,
+            )
+            if selected_branch_payload is not None:
+                current_target_commit_sha = selected_branch_payload.commit_sha
+    return ProjectServiceRepairTargetResponse(
+        service_id=service_record.id,
+        project_id=project_id,
+        service_name=service_record.name,
+        service_slug=service_record.slug,
+        provider_repository_id=provider_repository.id if provider_repository is not None else None,
+        provider_repository_owner=provider_repository.owner if provider_repository is not None else None,
+        provider_repository_name=provider_repository.name if provider_repository is not None else None,
+        default_branch=provider_repository.default_branch if provider_repository is not None else None,
+        tracked_branch=service_record.tracked_branch,
+        selected_branch=selected_branch,
+        selected_source=selected_source,
+        deployed_environment=deployed_heartbeat.environment if deployed_heartbeat is not None else None,
+        deployed_commit_sha=deployed_heartbeat.commit_sha if deployed_heartbeat is not None else None,
+        deployed_last_seen_at=deployed_heartbeat.last_seen_at if deployed_heartbeat is not None else None,
+        current_target_commit_sha=current_target_commit_sha,
+        recent_branches=recent_branches,
     )
 
 
@@ -1982,6 +2079,7 @@ async def create_project_service(
         repo_profile_id=payload.repo_profile_id,
         owner=payload.owner,
         deploy_target=payload.deploy_target,
+        tracked_branch=payload.tracked_branch,
         routing_hints=payload.routing_hints.to_record(),
         startup_priority=payload.startup_priority,
         sandbox_healthcheck_command=payload.sandbox_healthcheck_command,
@@ -2010,6 +2108,28 @@ async def list_project_services(
         dependency_map.setdefault(item.service_id, []).append(item)
     return [
         ProjectServiceResponse.from_record(record, dependencies=dependency_map.get(record.id, []))
+        for record in records
+    ]
+
+
+@project_router.get(
+    "/repair-targets",
+    response_model=list[ProjectServiceRepairTargetResponse],
+    status_code=status.HTTP_200_OK,
+)
+async def list_project_repair_targets(
+    project_id: str,
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    provider_service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> list[ProjectServiceRepairTargetResponse]:
+    records = await repository.list_project_services(project_id)
+    return [
+        await _build_project_service_repair_target(
+            project_id=project_id,
+            service_record=record,
+            repository=repository,
+            provider_service=provider_service,
+        )
         for record in records
     ]
 
@@ -2044,6 +2164,7 @@ async def update_project_service(
         repo_profile_id=payload.repo_profile_id,
         owner=payload.owner,
         deploy_target=payload.deploy_target,
+        tracked_branch=payload.tracked_branch,
         routing_hints=payload.routing_hints.to_record(),
         startup_priority=payload.startup_priority,
         sandbox_healthcheck_command=payload.sandbox_healthcheck_command,
@@ -2058,6 +2179,34 @@ async def update_project_service(
         ],
     )
     return ProjectServiceResponse.from_record(record, dependencies=dependencies)
+
+
+@project_router.get(
+    "/services/{service_id}/repair-target",
+    response_model=ProjectServiceRepairTargetResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_project_service_repair_target(
+    project_id: str,
+    service_id: str,
+    branch_limit: int = Query(default=20, ge=1, le=50),
+    repository: ControlPlaneRepository = Depends(get_control_plane_repository),
+    provider_service: ProviderIntegrationService = Depends(get_provider_integration_service),
+) -> ProjectServiceRepairTargetResponse:
+    service_record = await repository.get_project_service(service_id)
+    if service_record is None or service_record.project_id != project_id:
+        raise APIError(
+            f"Project service {service_id} was not found for project {project_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="project_service_not_found",
+        )
+    return await _build_project_service_repair_target(
+        project_id=project_id,
+        service_record=service_record,
+        repository=repository,
+        provider_service=provider_service,
+        branch_limit=branch_limit,
+    )
 
 
 @project_router.get(

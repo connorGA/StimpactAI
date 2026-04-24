@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, status
 from openai import AsyncOpenAI
 
-from api.core.config import get_openai_api_key, get_openai_chat_model
+from api.core.config import get_openai_api_key, get_openai_chat_model, get_openai_failure_classify_model
 from api.core.errors import APIError
 from api.core.security import require_project_list_access, require_project_read_access
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
@@ -30,7 +30,13 @@ def get_control_plane_repository(
 
 
 def get_failure_classifier() -> FailureClassifier:
-    return FailureClassifier()
+    api_key = get_openai_api_key()
+    if api_key is None:
+        return FailureClassifier()
+    return FailureClassifier(
+        openai_client=AsyncOpenAI(api_key=api_key),
+        model=get_openai_failure_classify_model(),
+    )
 
 
 def get_code_context_service() -> CodeContextService:

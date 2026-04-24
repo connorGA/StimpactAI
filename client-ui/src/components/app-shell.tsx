@@ -653,7 +653,8 @@ function AccountMenu({
 
           <div className="mt-2 space-y-1">
             <AccountMenuLink href="/live" label="Open live workspace" onNavigate={() => setOpen(false)} />
-            <AccountMenuLink href="/control-center" label="Workspace settings" onNavigate={() => setOpen(false)} />
+            <AccountMenuLink href="/workspace/settings" label="Workspace settings" onNavigate={() => setOpen(false)} />
+            <AccountMenuLink href="/control-center" label="Control center" onNavigate={() => setOpen(false)} />
             <AccountMenuLink href="/onboarding" label="Project onboarding" onNavigate={() => setOpen(false)} />
           </div>
 

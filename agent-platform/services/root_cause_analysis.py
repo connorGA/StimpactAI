@@ -57,7 +57,7 @@ class RootCauseAnalysisService:
 
         events = await self._repository.list_incident_events(incident_id, limit=event_limit)
         latest_telemetry = await self._repository.get_telemetry(incident.latest_telemetry_id)
-        classification = self._classifier.classify(incident, events)
+        classification = await self._classifier.classify_async(incident, events)
         evidence = self._analyzer.analyze(
             incident=incident,
             events=events,

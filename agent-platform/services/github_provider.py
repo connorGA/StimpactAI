@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import time
 from urllib.parse import quote
 
@@ -14,6 +15,7 @@ from api.core.errors import APIError
 from models.control_plane import ProviderKind, ProviderRepositoryRecord
 from models.control_plane import ProviderIntegrationRecord, SecretRefRecord
 from services.provider_clients import (
+    ProviderBranchMetadata,
     ProviderChangeRequest,
     ProviderInstallation,
     ProviderRepositoryMetadata,
@@ -139,6 +141,60 @@ class GitHubProviderClient:
             secret_format="text",
         )
 
+    async def list_branches(
+        self,
+        integration: ProviderIntegrationRecord,
+        repository: ProviderRepositoryRecord,
+        *,
+        credentials_secret_ref: SecretRefRecord | None = None,
+        limit: int = 20,
+    ) -> list[ProviderBranchMetadata]:
+        _ = credentials_secret_ref
+        installation_token = await self._create_installation_token(self._get_installation_id(integration))
+        payload = await self._request_json_with_bearer(
+            "GET",
+            f"/repos/{repository.owner}/{repository.name}/branches?per_page={max(1, min(limit, 100))}",
+            token=installation_token,
+        )
+        if not isinstance(payload, list):
+            raise APIError(
+                "GitHub branch list response was invalid.",
+                status_code=502,
+                code="github_api_request_failed",
+            )
+        branches: list[ProviderBranchMetadata] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            branch_name = str(item.get("name", "")).strip()
+            if not branch_name:
+                continue
+            commit_payload = item.get("commit")
+            commit_sha = None
+            if isinstance(commit_payload, dict) and commit_payload.get("sha") is not None:
+                commit_sha = str(commit_payload.get("sha"))
+            last_commit_at = await self._fetch_branch_commit_timestamp(
+                repository=repository,
+                token=installation_token,
+                commit_sha=commit_sha,
+            )
+            branches.append(
+                ProviderBranchMetadata(
+                    name=branch_name,
+                    commit_sha=commit_sha,
+                    last_commit_at=last_commit_at,
+                )
+            )
+        return sorted(
+            branches,
+            key=lambda item: (
+                item.name != repository.default_branch,
+                item.last_commit_at is None,
+                -(item.last_commit_at.timestamp()) if item.last_commit_at is not None else 0.0,
+                item.name,
+            ),
+        )[:limit]
+
     async def propose_patch(
         self,
         integration: ProviderIntegrationRecord,
@@ -149,6 +205,7 @@ class GitHubProviderClient:
         title: str,
         description: str,
         commit_message: str,
+        base_commit_sha: str | None = None,
         credentials_secret_ref: SecretRefRecord | None = None,
     ) -> ProviderChangeRequest:
         _ = credentials_secret_ref
@@ -160,6 +217,7 @@ class GitHubProviderClient:
             branch_name=branch_name,
             patch_diff=patch_diff,
             commit_message=commit_message,
+            base_commit_sha=base_commit_sha,
         )
         payload = await self._request_with_bearer(
             "POST",
@@ -252,7 +310,32 @@ class GitHubProviderClient:
         token: str,
         json_body: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        return await self._request(
+        payload = await self._request_json(
+            method,
+            path,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            json_body=json_body,
+        )
+        if not isinstance(payload, dict):
+            raise APIError(
+                "GitHub API returned an unexpected payload.",
+                status_code=502,
+                code="github_api_request_failed",
+            )
+        return payload
+
+    async def _request_json_with_bearer(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str,
+        json_body: dict[str, object] | None = None,
+    ) -> object:
+        return await self._request_json(
             method,
             path,
             headers={
@@ -262,14 +345,14 @@ class GitHubProviderClient:
             json_body=json_body,
         )
 
-    async def _request(
+    async def _request_json(
         self,
         method: str,
         path: str,
         *,
         headers: dict[str, str],
         json_body: dict[str, object] | None = None,
-    ) -> dict[str, object]:
+    ) -> object:
         try:
             import httpx  # type: ignore
         except ImportError as exc:
@@ -288,14 +371,35 @@ class GitHubProviderClient:
                 status_code=502,
                 code="github_api_request_failed",
             )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise APIError(
-                "GitHub API returned an unexpected payload.",
-                status_code=502,
-                code="github_api_request_failed",
-            )
-        return payload
+        return response.json()
+
+    async def _fetch_branch_commit_timestamp(
+        self,
+        *,
+        repository: ProviderRepositoryRecord,
+        token: str,
+        commit_sha: str | None,
+    ) -> datetime | None:
+        if commit_sha is None or not commit_sha.strip():
+            return None
+        payload = await self._request_with_bearer(
+            "GET",
+            f"/repos/{repository.owner}/{repository.name}/commits/{commit_sha}",
+            token=token,
+        )
+        commit = payload.get("commit")
+        if not isinstance(commit, dict):
+            return None
+        committer = commit.get("committer")
+        if not isinstance(committer, dict):
+            return None
+        raw_value = committer.get("date")
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     def _build_compare_url(self, repository: ProviderRepositoryRecord, branch_name: str) -> str:
         return (

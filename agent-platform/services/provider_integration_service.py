@@ -416,6 +416,7 @@ class ProviderIntegrationService:
         title: str,
         description: str,
         commit_message: str,
+        base_commit_sha: str | None = None,
     ) -> ProviderWritebackResult:
         repository = await self._repository.get_provider_repository(provider_repository_id)
         if repository is None:
@@ -435,6 +436,7 @@ class ProviderIntegrationService:
             title=title,
             description=description,
             commit_message=commit_message,
+            base_commit_sha=base_commit_sha,
             credentials_secret_ref=credentials_secret_ref,
         )
         return ProviderWritebackResult(
@@ -518,6 +520,36 @@ class ProviderIntegrationService:
                 status_code=exc.status_code,
                 code=exc.code,
             ) from exc
+
+    async def list_repository_branches(
+        self,
+        *,
+        project_id: str,
+        provider_repository_id: str,
+        limit: int = 20,
+    ):
+        repository = await self._repository.get_provider_repository(provider_repository_id)
+        if repository is None:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        integration = await self._require_integration(repository.provider_integration_id)
+        if self._require_project_id(integration) != project_id:
+            raise APIError(
+                f"Provider repository {provider_repository_id} was not found for project {project_id}.",
+                status_code=404,
+                code="provider_repository_not_found",
+            )
+        credentials_secret_ref = await self._load_credentials_secret_ref(integration)
+        client = get_provider_client(integration.provider)
+        return await client.list_branches(
+            integration,
+            repository,
+            credentials_secret_ref=credentials_secret_ref,
+            limit=limit,
+        )
 
     def verify_github_webhook(self, *, body: bytes, signature_header: str | None) -> None:
         secret = get_github_webhook_secret()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,11 +17,13 @@ from openai import AsyncOpenAI
 from api.core.config import (
     get_openai_api_key,
     get_openai_autonomous_model,
+    get_openai_failure_classify_model,
     get_openai_rca_model,
     get_openai_solution_review_model,
     get_repository_root,
 )
 from api.core.errors import APIError
+from api.observability import get_metrics_registry
 from api.repositories.async_job_repository import AsyncJobRepository
 from api.repositories.autonomous_repository import AutonomousRunRepository
 from api.repositories.control_plane_repository import ControlPlaneRepository
@@ -44,6 +47,7 @@ from harness.schemas.autonomous import (
     AutonomousExecutionMode,
     AutonomousPromotionStatus,
     AutonomousRepairRunRecord,
+    AutonomousRunContract,
     AutonomousRunEvent,
     AutonomousEventType,
     AutonomousRunPhase,
@@ -90,11 +94,57 @@ logger = logging.getLogger(__name__)
 _active_workspaces: dict[str, Path] = {}
 
 
+def _assess_repairability(
+    *,
+    latest_telemetry,
+    repo_profile,
+    provider_repository,
+    browser_verification_supported: bool,
+) -> tuple[float, list[str]]:
+    score = 0.2
+    reasons: list[str] = []
+
+    if repo_profile is not None:
+        score += 0.2
+        reasons.append("A repo profile is mapped for this service.")
+    else:
+        reasons.append("No repo profile is mapped, so autonomous repair should stay investigative.")
+
+    if provider_repository is not None:
+        score += 0.15
+        reasons.append("A provider repository is connected for sandbox and PR workflows.")
+
+    if latest_telemetry.commit_sha:
+        score += 0.15
+        reasons.append("Telemetry includes a commit SHA, giving the agent a trustworthy base revision.")
+    else:
+        reasons.append("Telemetry does not include a commit SHA; branch target fallback may be needed.")
+
+    if latest_telemetry.stacktrace.strip():
+        score += 0.15
+        reasons.append("Telemetry includes stack evidence for root-cause investigation.")
+
+    if repo_profile is not None and repo_profile.verify_command:
+        score += 0.1
+        reasons.append("A verification command is configured for post-fix evidence.")
+
+    if repo_profile is not None and repo_profile.reproduce_command:
+        score += 0.05
+        reasons.append("A reproduce command is configured for failure confirmation.")
+
+    if browser_verification_supported:
+        score += 0.05
+        reasons.append("Browser verification is available for user-visible flows.")
+
+    return min(score, 1.0), reasons
+
+
 def _prepare_repository_workspace(
     *,
     run_id: str,
     clone_url: str,
     default_branch: str,
+    target_commit_sha: str | None = None,
 ) -> Path:
     """Clone the connected repo into a temporary workspace for the agent.
 
@@ -121,8 +171,53 @@ def _prepare_repository_workspace(
         check=True,
         timeout=120,
     )
+    if target_commit_sha:
+        _checkout_target_commit(repo_dir=repo_dir, target_commit_sha=target_commit_sha)
     _active_workspaces[run_id] = repo_dir
     return repo_dir
+
+
+def _checkout_target_commit(*, repo_dir: Path, target_commit_sha: str) -> None:
+    normalized_sha = target_commit_sha.strip()
+    if not normalized_sha:
+        return
+
+    verify = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{normalized_sha}^{{commit}}"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if verify.returncode != 0:
+        fetch = subprocess.run(
+            ["git", "fetch", "--quiet", "--depth", "1", "origin", normalized_sha],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if fetch.returncode != 0:
+            message = (fetch.stderr or fetch.stdout or "").strip() or "git fetch failed"
+            raise APIError(
+                f"Autonomous repair could not fetch deployed commit {normalized_sha[:12]} for this incident. {message}",
+                status_code=409,
+                code="autonomous_target_commit_unavailable",
+            )
+    checkout = subprocess.run(
+        ["git", "checkout", "--quiet", normalized_sha],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if checkout.returncode != 0:
+        message = (checkout.stderr or checkout.stdout or "").strip() or "git checkout failed"
+        raise APIError(
+            f"Autonomous repair could not checkout deployed commit {normalized_sha[:12]} for this incident. {message}",
+            status_code=409,
+            code="autonomous_target_commit_unavailable",
+        )
 
 
 def _cleanup_workspace(run_id: str) -> None:
@@ -235,6 +330,7 @@ class AutonomousRunService:
             repository_root = str(await self._clone_connected_repo(
                 incident_id=incident_id,
                 provider_repository=provider_repository,
+                target_commit_sha=latest_telemetry.commit_sha,
             ))
         repository_profile_override = self._profile_adapter.build_profile(
             repository_root=repository_root,
@@ -254,6 +350,57 @@ class AutonomousRunService:
             project_policy=service_context.project_policy,
             request=request,
             browser_verification_supported=browser_verification_supported,
+        )
+        repairability_score, repairability_reasons = _assess_repairability(
+            latest_telemetry=latest_telemetry,
+            repo_profile=repo_profile,
+            provider_repository=provider_repository,
+            browser_verification_supported=browser_verification_supported,
+        )
+        repairability_policy_reasons = [
+            *policy.reasons,
+            f"Repairability score: {repairability_score:.2f}.",
+            *repairability_reasons,
+        ]
+        policy_updates: dict[str, object] = {
+            "repairability_score": repairability_score,
+            "repairability_reasons": repairability_reasons,
+            "reasons": repairability_policy_reasons,
+        }
+        if repairability_score < 0.55:
+            policy_updates["requires_human_approval"] = True
+            repairability_policy_reasons.append(
+                "Repairability confidence is low enough to require operator approval before execution."
+            )
+        if (
+            repairability_score < 0.35
+            and request.execution_mode is AutonomousExecutionMode.REPAIR_AND_PROPOSE
+        ):
+            policy_updates["allow_writeback"] = False
+            repairability_policy_reasons.append(
+                "Repairability confidence is very low; write-back is disabled until evidence improves."
+            )
+        policy = policy.model_copy(update=policy_updates)
+        get_metrics_registry().observe(
+            "stimpact_autonomous_repairability_score",
+            repairability_score,
+            labels={
+                "execution_mode": request.execution_mode.value,
+                "service": incident.service,
+            },
+        )
+        get_metrics_registry().increment(
+            "stimpact_autonomous_runs_started_total",
+            labels={
+                "execution_mode": request.execution_mode.value,
+                "approval_required": str(policy.requires_human_approval).lower(),
+                "auto_run_allowed": str(policy.auto_run_allowed).lower(),
+            },
+        )
+        approval_status = (
+            AutonomousApprovalStatus.PENDING
+            if policy.requires_human_approval
+            else approval_status
         )
         initial_step_budget = self._initial_step_budget(
             incident=incident,
@@ -306,6 +453,27 @@ class AutonomousRunService:
                 "benchmark_scenario_id": request.benchmark_scenario_id,
                 "benchmark_bug_class": request.benchmark_bug_class,
                 "policy": policy,
+                "run_contract": AutonomousRunContract(
+                    objective=request.objective
+                    or f"Investigate, repair, and verify incident '{incident.title}' for service {incident.service}.",
+                    service_name=incident.service,
+                    base_commit_sha=latest_telemetry.commit_sha,
+                    allowed_tool_categories=policy.allowed_tool_categories,
+                    protected_patterns=[
+                        "Stimpact SDK/bootstrap/instrumentation initialization",
+                        "telemetry capture and handled-error reporting",
+                    ],
+                    reproduce_command=repo_profile.reproduce_command if repo_profile is not None else None,
+                    verify_command=repo_profile.verify_command if repo_profile is not None else None,
+                    success_criteria=repo_profile.success_criteria if repo_profile is not None else None,
+                    promotion_allowed=policy.allow_writeback,
+                    repairability_score=policy.repairability_score,
+                    trust_notes=[
+                        "The agent may investigate broadly, but completion still requires fresh verification evidence.",
+                        "Protected observability code must not be disabled unless the incident is explicitly about that integration.",
+                        *policy.repairability_reasons,
+                    ],
+                ),
                 "policy_block_reason": policy_block_reason,
                 "loop_state": snapshot.run.loop_state.model_copy(update={"max_steps": initial_step_budget}),
             }
@@ -400,6 +568,35 @@ class AutonomousRunService:
             AutonomousRunStatus.FAILED,
             AutonomousRunStatus.CANCELLED,
         }
+
+    def _should_short_circuit_async_job(
+        self,
+        run: AutonomousRepairRunRecord,
+        job,
+    ) -> bool:
+        """Return True when an async job should not re-execute the runner.
+
+        After a run has already reached a terminal status or has moved on to
+        asynchronous verification / promotion phases, re-invoking the coding
+        loop (as can happen when a duplicate async job is dequeued or a lease
+        expires after success) will only produce spurious failures because a
+        fresh session carries a fresh, unverified feature catalog and the LLM
+        tends to read old ``fully_verified`` events from the persisted stream.
+        Short-circuiting here preserves the already-persisted state instead of
+        clobbering it with a confused "failed" attempt.
+        """
+        if run.status is AutonomousRunStatus.SUCCEEDED:
+            return True
+        if run.status is AutonomousRunStatus.CANCELLED:
+            return True
+        if run.async_job_id is not None and run.async_job_id != job.id and run.status in {
+            AutonomousRunStatus.RUNNING,
+        } and run.phase in {
+            AutonomousRunPhase.VERIFICATION,
+            AutonomousRunPhase.COMPLETED,
+        }:
+            return True
+        return False
 
     async def mark_run_failed(self, *, incident_id: str, run_id: str, error: str) -> None:
         """Mark a run as failed so the UI no longer shows it as stuck in 'Repairing'."""
@@ -527,6 +724,18 @@ class AutonomousRunService:
                 )
                 self._event_stream.upsert_run(persisted_run)
         self._hydrate_event_stream(detail)
+        if self._should_short_circuit_async_job(detail.run, job):
+            logger.info(
+                "autonomous_run_async_job_short_circuited",
+                extra={
+                    "incident_id": incident_id,
+                    "run_id": run_id,
+                    "job_id": job.id,
+                    "run_status": detail.run.status.value,
+                    "run_phase": detail.run.phase.value,
+                },
+            )
+            return detail
         repo_profile = (
             await self._require_repo_profile(detail.run.repo_profile_id)
             if detail.run.repo_profile_id is not None
@@ -668,6 +877,14 @@ class AutonomousRunService:
     async def record_sandbox_result(self, sandbox_run: SandboxRunRecord) -> None:
         if self._autonomous_repository is None:
             return
+        get_metrics_registry().increment(
+            "stimpact_autonomous_sandbox_results_total",
+            labels={
+                "status": sandbox_run.status.value,
+                "verification_succeeded": str(bool(sandbox_run.verification_succeeded)).lower(),
+                "patch_applied": str(bool(sandbox_run.patch_applied)).lower(),
+            },
+        )
         records = await self._autonomous_repository.find_runs_by_patch_run(sandbox_run.patch_run_id)
         for record in records:
             detail = self.get_run_detail_sync(record.incident_id, record.id)
@@ -702,34 +919,22 @@ class AutonomousRunService:
                     detail=detail.model_copy(update={"run": updated_run}),
                     sandbox_run=sandbox_run,
                 )
+                review_approved = review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
                 updated_run = updated_run.model_copy(
                     update={
                         "latest_review": review,
-                        "status": (
-                            AutonomousRunStatus.SUCCEEDED
-                            if review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
-                            else AutonomousRunStatus.FAILED
-                        ),
-                        "phase": (
-                            AutonomousRunPhase.COMPLETED
-                            if review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
-                            else AutonomousRunPhase.FAILED
-                        ),
-                        "last_error": (
-                            None
-                            if review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
-                            else review.summary
-                        ),
+                        "status": AutonomousRunStatus.SUCCEEDED,
+                        "phase": AutonomousRunPhase.COMPLETED,
+                        "last_error": None,
                         "promotion_status": (
                             AutonomousPromotionStatus.READY
-                            if (
-                                review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
-                            )
+                            if review_approved
                             and detail.run.execution_mode is AutonomousExecutionMode.REPAIR_AND_PROPOSE
                             and detail.run.approval_status is not AutonomousApprovalStatus.REJECTED
                             else (
                                 detail.run.promotion_status
-                                if review is None or review.verdict is AutonomousSolutionReviewVerdict.APPROVE
+                                if review_approved
+                                or detail.run.execution_mode is not AutonomousExecutionMode.REPAIR_AND_PROPOSE
                                 else AutonomousPromotionStatus.BLOCKED
                             )
                         ),
@@ -765,14 +970,15 @@ class AutonomousRunService:
                     summary=review.summary,
                     payload=review.model_dump(mode="json"),
                 )
-            maybe_retried = await self._retry_after_terminal_feedback(
-                run=updated_run,
-                persisted_record=record,
-                review=review,
-                sandbox_run=sandbox_run,
-            )
-            if maybe_retried is not None:
-                updated_run = maybe_retried
+            if updated_run.status is AutonomousRunStatus.FAILED:
+                maybe_retried = await self._retry_after_terminal_feedback(
+                    run=updated_run,
+                    persisted_record=record,
+                    review=review,
+                    sandbox_run=sandbox_run,
+                )
+                if maybe_retried is not None:
+                    updated_run = maybe_retried
             snapshot = self._event_stream.get_snapshot(updated_run.id)
             if updated_run.status in {
                 AutonomousRunStatus.SUCCEEDED,
@@ -879,6 +1085,7 @@ class AutonomousRunService:
             )
         adapter = get_provider_adapter(provider_repository.provider)
         branch_name = f"{adapter.build_branch_name(incident_id=incident_id)}-{run_id[:8]}"
+        based_on_commit_sha = getattr(patch_run, "based_on_commit_sha", None)
         writeback = await self._provider_integration_service.propose_patch_writeback(
             provider_repository_id=provider_repository.id,
             branch_name=branch_name,
@@ -888,9 +1095,18 @@ class AutonomousRunService:
                 f"Automated repair proposal for incident `{incident_id}`.\n\n"
                 f"- Autonomous run: `{run.id}`\n"
                 f"- Patch run: `{run.patch_run_id}`\n"
-                f"- Sandbox run: `{run.sandbox_run_id}`"
+                f"- Sandbox run: `{run.sandbox_run_id}`\n"
+                f"- Verified base: `{based_on_commit_sha or 'default branch tip'}`"
             ),
             commit_message=f"Fix incident {incident_id}",
+            base_commit_sha=based_on_commit_sha,
+        )
+        get_metrics_registry().increment(
+            "stimpact_autonomous_promotions_total",
+            labels={
+                "provider": provider_repository.provider.value,
+                "status": "proposed",
+            },
         )
         updated_run = run.model_copy(
             update={
@@ -953,6 +1169,7 @@ class AutonomousRunService:
         *,
         incident_id: str,
         provider_repository,
+        target_commit_sha: str | None = None,
     ) -> Path:
         from services.provider_clients import get_provider_client
 
@@ -975,6 +1192,7 @@ class AutonomousRunService:
             run_id=incident_id,
             clone_url=clone_url,
             default_branch=provider_repository.default_branch,
+            target_commit_sha=target_commit_sha,
         )
 
     async def _resolve_incident_service_context(self, incident_id: str) -> ResolvedAutonomousServiceContext:
@@ -1089,6 +1307,21 @@ class AutonomousRunService:
         "Gemfile.lock": frozenset({"Gemfile", "gems.rb"}),
         "composer.lock": frozenset({"composer.json"}),
     }
+    _SDK_INCIDENT_KEYWORDS = (
+        "stimpact",
+        "@stimpact/sdk",
+        "telemetry",
+        "instrumentation",
+        "browser token",
+        "sdk bootstrap",
+        "sdk setup",
+    )
+    _PROTECTED_SDK_DIFF_PATTERNS = (
+        re.compile(r"^\+\s*// No-op fallback when Stimpact client instrumentation is unavailable\.$", re.MULTILINE),
+        re.compile(r"^\+\s*async function captureHandledError\(_input:", re.MULTILINE),
+        re.compile(r"^-\s*import\s+\{\s*captureHandledError\s*\}\s+from\s+[\"']\.\.?/stimpact[\"'];", re.MULTILINE),
+        re.compile(r"^-\s*import\s+\{\s*installStimpact\s*\}\s+from\s+[\"']@stimpact/sdk/vite[\"'];", re.MULTILINE),
+    )
 
     async def _postprocess_completed_run(self, snapshot: AutonomousRunSnapshot) -> AutonomousRunSnapshot:
         run = snapshot.run
@@ -1133,6 +1366,38 @@ class AutonomousRunService:
         patch_diff = selected_diff.patch if selected_diff is not None else ""
         if not patch_diff.strip():
             return snapshot
+        protected_change_reason = self._protected_sdk_change_reason(run=run, patch_diff=patch_diff)
+        if protected_change_reason is not None:
+            blocked_run = run.model_copy(
+                update={
+                    "status": AutonomousRunStatus.FAILED,
+                    "phase": AutonomousRunPhase.FAILED,
+                    "last_error": protected_change_reason,
+                    "promotion_status": AutonomousPromotionStatus.BLOCKED,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self._event_stream.upsert_run(blocked_run)
+            self._append_run_event(
+                run=blocked_run,
+                event_type=AutonomousEventType.RUN_FAILED,
+                phase=blocked_run.phase,
+                summary=protected_change_reason,
+                payload={"guardrail": "protected_stimpact_instrumentation"},
+            )
+            if self._autonomous_repository is not None:
+                persisted_record = await self._autonomous_repository.get_run(run.id)
+                outcome = self._artifact_store.build_outcome(self._event_stream.get_snapshot(run.id))
+                self._artifact_store.persist_outcome(self._event_stream.get_snapshot(run.id))
+                await self._autonomous_repository.update_run(
+                    run.id,
+                    async_job_id=blocked_run.async_job_id,
+                    project_service_id=getattr(persisted_record, "project_service_id", None),
+                    repo_profile_id=blocked_run.repo_profile_id,
+                    run=blocked_run,
+                    outcome=outcome,
+                )
+            return self._event_stream.get_snapshot(run.id)
 
         patch_proposal = PatchProposal(
             patch_summary="Autonomous repair candidate generated from the harness working tree.",
@@ -1202,6 +1467,34 @@ class AutonomousRunService:
                 continue
             selected_changes.append(changed_file)
         return selected_changes
+
+    def _protected_sdk_change_reason(
+        self,
+        *,
+        run: AutonomousRepairRunRecord,
+        patch_diff: str,
+    ) -> str | None:
+        if self._run_targets_sdk_instrumentation(run):
+            return None
+        normalized_diff = patch_diff.replace("\r\n", "\n")
+        if not any(pattern.search(normalized_diff) for pattern in self._PROTECTED_SDK_DIFF_PATTERNS):
+            return None
+        return (
+            "Autonomous repair changed protected Stimpact instrumentation while fixing a non-SDK incident. "
+            "Restore the real Stimpact bootstrap/error-capture path instead of removing it or replacing it with no-op fallbacks."
+        )
+
+    def _run_targets_sdk_instrumentation(self, run: AutonomousRepairRunRecord) -> bool:
+        haystack = " ".join(
+            value
+            for value in (
+                run.objective,
+                run.incident_title,
+                run.latest_telemetry_error_message,
+            )
+            if value
+        ).lower()
+        return any(keyword in haystack for keyword in self._SDK_INCIDENT_KEYWORDS)
 
     def _initial_step_budget(
         self,
@@ -1360,11 +1653,6 @@ class AutonomousRunService:
             AutonomousToolFailureClass.EXCEPTION,
             AutonomousToolFailureClass.STAGNATION,
         }:
-            return True
-        if (
-            run.latest_review is not None
-            and run.latest_review.verdict is AutonomousSolutionReviewVerdict.NEEDS_CHANGES
-        ):
             return True
         if self._is_retryable_patch_apply_failure(run):
             return True
@@ -1612,7 +1900,10 @@ class AutonomousRunService:
             patch_repository=self._patch_repository,
             root_cause_service=RootCauseAnalysisService(
                 self._incident_repository,
-                classifier=FailureClassifier(),
+                classifier=FailureClassifier(
+                    openai_client=root_cause_client,
+                    model=get_openai_failure_classify_model(),
+                ),
                 analyzer=RootCauseAnalyzer(),
                 reasoner=RootCauseReasoner(
                     client=root_cause_client,

@@ -1,18 +1,182 @@
 from __future__ import annotations
 
+import json
+import logging
+import re
 from collections.abc import Sequence
 from typing import Any
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field, field_validator
 
 from models.failure_classification import FailureCategory, FailureClassification
 from models.incident import IncidentEventRecord, IncidentRecord
 
+logger = logging.getLogger(__name__)
+
+_MAX_PROMPT_TOTAL_CHARS = 24_000
+
+_FAILURE_CATEGORY_LLM = tuple(
+    c for c in FailureCategory if c is not FailureCategory.UNKNOWN
+)
+
+
+class LlmFailureClassificationPayload(BaseModel):
+    """Expected JSON from the LLM; unknown is rejected and remapped in code."""
+
+    model_config = {"extra": "forbid"}
+
+    category: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str
+    matched_signals: list[str] = Field(default_factory=list)
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("summary must be non-empty")
+        return v.strip()
+
+
+def _category_from_llm_value(raw: str) -> FailureCategory | None:
+    if not raw:
+        return None
+    key = raw.strip().lower()
+    for member in _FAILURE_CATEGORY_LLM:
+        if key == member.value or key == member.name.lower():
+            return member
+    return None
+
+
+def _extract_json_object(content: str) -> str:
+    normalized = content.strip()
+    if normalized.startswith("{") and normalized.endswith("}"):
+        return normalized
+    start = normalized.find("{")
+    end = normalized.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in response.")
+    return normalized[start : end + 1]
+
+
+def _llm_system_prompt() -> str:
+    allowed = ", ".join(c.value for c in _FAILURE_CATEGORY_LLM)
+    return (
+        "You label incidents for a self-healing platform. You MUST respond with raw JSON only "
+        f"(no markdown) using keys: category, confidence, summary, matched_signals. "
+        f"category must be one of: {allowed}. Do NOT use 'unknown'. "
+        "Pick the best-matching single category from the evidence. "
+        "confidence is 0.0-1.0. summary is 1-3 clear sentences. "
+        "matched_signals is a short list of short phrases from the evidence you relied on. "
+        "If evidence is weak, still pick the most plausible non-unknown category and lower confidence."
+    )
+
+
+def _build_evidence_payload(incident: IncidentRecord, events: Sequence[IncidentEventRecord]) -> dict[str, object]:
+    event_payloads: list[dict[str, object]] = []
+    for event in events:
+        event_payloads.append(
+            {
+                "error_message": _truncate(_strip_for_prompt(event.error_message), 4_000),
+                "stacktrace": _truncate(_strip_for_prompt(event.stacktrace), 4_000),
+                "request_payload": _truncate(_strip_for_prompt(event.request_payload), 2_000),
+                "response_payload": _truncate(_strip_for_prompt(event.response_payload), 2_000),
+            }
+        )
+    return {
+        "incident": {
+            "title": _truncate(incident.title, 1_000),
+            "service": incident.service,
+            "environment": incident.environment.value
+            if hasattr(incident.environment, "value")
+            else str(incident.environment),
+        },
+        "event_count": len(events),
+        "events": event_payloads,
+    }
+
+
+def _strip_for_prompt(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _truncate(s: str, max_chars: int) -> str:
+    if len(s) <= max_chars:
+        return s
+    return f"{s[: max_chars - 20]}\n... [truncated]"
+
+
+def _shrink_user_json_if_needed(payload: dict[str, object]) -> dict[str, object]:
+    text = json.dumps(payload, ensure_ascii=True)
+    if len(text) <= _MAX_PROMPT_TOTAL_CHARS:
+        return payload
+    # Drop stack traces first, then trim error messages
+    ev = list(payload.get("events") or [])
+    if not isinstance(ev, list):
+        return {"note": "payload too large; omitted", "incident": payload.get("incident")}
+    slim_events: list[dict[str, object]] = []
+    for e in ev:
+        if not isinstance(e, dict):
+            continue
+        slim_events.append(
+            {
+                "error_message": _truncate(str(e.get("error_message", "")), 1_200),
+                "stacktrace": "[omitted: prompt size limit]",
+                "request_payload": str(e.get("request_payload", ""))[:500],
+                "response_payload": str(e.get("response_payload", ""))[:500],
+            }
+        )
+    return {
+        "incident": payload.get("incident"),
+        "event_count": payload.get("event_count"),
+        "events": slim_events,
+        "note": "event bodies truncated to satisfy prompt size cap",
+    }
+
 
 class FailureClassifier:
+    def __init__(
+        self,
+        *,
+        openai_client: AsyncOpenAI | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._openai = openai_client
+        self._model = model
+
     def classify(
         self,
         incident: IncidentRecord,
         events: Sequence[IncidentEventRecord],
     ) -> FailureClassification:
+        """Deterministic rules only; if nothing matches, returns application_bug (never unknown)."""
+        result = self._classify_from_rules(incident, events)
+        if result is not None:
+            return result
+        return self._fallback_non_unknown(incident, events, source="heuristic")
+
+    async def classify_async(
+        self,
+        incident: IncidentRecord,
+        events: Sequence[IncidentEventRecord],
+    ) -> FailureClassification:
+        result = self._classify_from_rules(incident, events)
+        if result is not None:
+            return result
+        if self._openai is None or not self._model:
+            return self._fallback_non_unknown(incident, events, source="heuristic")
+        return await self._classify_with_llm(incident, events)
+
+    def _classify_from_rules(
+        self,
+        incident: IncidentRecord,
+        events: Sequence[IncidentEventRecord],
+    ) -> FailureClassification | None:
         search_text = " \n".join(
             filter(
                 None,
@@ -48,17 +212,91 @@ class FailureClassifier:
                     matched_signals=signals,
                     inspected_event_count=len(events),
                 )
+        return None
 
+    def _fallback_non_unknown(
+        self,
+        incident: IncidentRecord,
+        events: Sequence[IncidentEventRecord],
+        *,
+        source: str,
+    ) -> FailureClassification:
         return FailureClassification(
-            category=FailureCategory.UNKNOWN,
-            confidence=0.35,
+            category=FailureCategory.APPLICATION_BUG,
+            confidence=0.5,
             summary=(
-                f"The classifier could not confidently map the {incident.service} incident "
-                "to a known failure category from the current evidence."
+                f"The {incident.service} incident did not match built-in heuristics; "
+                f"it is treated as a likely application or integration defect ({source})."
             ),
             matched_signals=[],
             inspected_event_count=len(events),
         )
+
+    async def _classify_with_llm(
+        self,
+        incident: IncidentRecord,
+        events: Sequence[IncidentEventRecord],
+    ) -> FailureClassification:
+        assert self._openai is not None and self._model
+        payload = _shrink_user_json_if_needed(_build_evidence_payload(incident, events))
+        user_content = json.dumps(payload, indent=2, sort_keys=True)
+        try:
+            completion = await self._openai.chat.completions.create(
+                model=self._model,
+                temperature=0.0,
+                messages=[
+                    {"role": "system", "content": _llm_system_prompt()},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format={"type": "json_object"},
+            )
+        except Exception:
+            logger.exception(
+                "failure_classifier_llm_failed",
+                extra={"incident_id": incident.id, "service": incident.service},
+            )
+            return self._fallback_non_unknown(incident, events, source="llm_unavailable")
+
+        content = completion.choices[0].message.content if completion.choices else None
+        if not content:
+            return self._fallback_non_unknown(incident, events, source="llm_empty")
+
+        try:
+            obj = json.loads(_extract_json_object(content))
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("failure_classifier_llm_json_parse", extra={"error": str(exc)})
+            return self._fallback_non_unknown(incident, events, source="llm_invalid_json")
+
+        try:
+            parsed = LlmFailureClassificationPayload.model_validate(obj)
+        except Exception as exc:
+            logger.warning("failure_classifier_llm_schema", extra={"error": str(exc)})
+            return self._fallback_non_unknown(incident, events, source="llm_invalid_shape")
+
+        category = _category_from_llm_value(parsed.category)
+        if category is None or category is FailureCategory.UNKNOWN:
+            return self._fallback_non_unknown(incident, events, source="llm_rejected_category")
+
+        signals = [s for s in parsed.matched_signals if isinstance(s, str) and s.strip()][:8]
+        return FailureClassification(
+            category=category,
+            confidence=parsed.confidence,
+            summary=self._coerce_summary(parsed.summary, category, incident.service, signals),
+            matched_signals=signals,
+            inspected_event_count=len(events),
+        )
+
+    def _coerce_summary(
+        self,
+        summary: str,
+        category: FailureCategory,
+        service: str,
+        signals: Sequence[str],
+    ) -> str:
+        s = re.sub(r"\s+", " ", summary.strip())
+        if len(s) < 20:
+            return self._build_summary(category, service, signals or [s])
+        return s
 
     def _match_configuration(
         self,
@@ -236,6 +474,12 @@ class FailureClassifier:
                 "assertionerror",
                 "unhandled exception",
                 "traceback",
+                "not valid json",
+                "is not valid json",
+                "json.parse",
+                "unexpected token",
+                "json parse error",
+                "syntaxerror",
             ],
         )
         return _classification_match(FailureCategory.APPLICATION_BUG, 0.76, signals)
@@ -267,8 +511,7 @@ class FailureClassifier:
         signal_text = ", ".join(signals[:3]) if signals else "the incident evidence"
         readable_category = category.value.replace("_", " ")
         return (
-            f"The {service} incident is most likely a {readable_category} based on "
-            f"{signal_text}."
+            f"The {service} incident is most likely a {readable_category} based on {signal_text}."
         )
 
 

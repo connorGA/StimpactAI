@@ -39,7 +39,12 @@ from models.control_plane import (
 from models.incident import IncidentRecord, IncidentSeverity, IncidentStatus, TelemetryRecord
 from models.patch import PatchProposal, PatchRunRecord, PatchRunStatus
 from models.sandbox import SandboxRunRecord, SandboxRunStatus
-from services.autonomous_runs import AutonomousRunService
+from services.autonomous_runs import (
+    AutonomousRunService,
+    _assess_repairability,
+    _cleanup_workspace,
+    _prepare_repository_workspace,
+)
 from shared.types.telemetry import Environment
 
 
@@ -97,6 +102,33 @@ class StubIncidentRepository:
         self.status_updates.append(new_status)
         self.incident = self.incident.model_copy(update={"status": new_status})
         return self.incident
+
+
+def test_repairability_assessment_rewards_broad_trust_evidence() -> None:
+    incident, repo_profile, provider_repository = _build_incident_and_profile(datetime.now(UTC))
+    repository = StubIncidentRepository(incident)
+
+    score, reasons = _assess_repairability(
+        latest_telemetry=repository.telemetry,
+        repo_profile=repo_profile,
+        provider_repository=provider_repository,
+        browser_verification_supported=True,
+    )
+
+    assert score > 0.8
+    assert any("commit SHA" in reason for reason in reasons)
+    assert any("verification command" in reason for reason in reasons)
+
+
+def _git(tmp_path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 class StubAsyncJobRepository:
@@ -381,6 +413,20 @@ class StubPersistedRetryStateRunner:
         )
         self._event_stream.upsert_run(failed)
         return self._event_stream.get_snapshot(run_id)
+
+
+class StubShouldNotRunRunner:
+    def __init__(self, event_stream) -> None:
+        self._event_stream = event_stream
+
+    def bootstrap_run(self, **kwargs):
+        raise AssertionError("bootstrap_run should not be called in this test")
+
+    def ensure_sessions(self, **kwargs):
+        raise AssertionError("ensure_sessions should not run for a terminal autonomous job")
+
+    async def continue_run(self, *, run_id: str, decision_engine, max_steps: int = 20):
+        raise AssertionError("continue_run should not run for a terminal autonomous job")
 
 
 class StubControlPlaneRepository:
@@ -1826,6 +1872,101 @@ async def test_process_async_job_prefers_persisted_retry_state_over_stale_artifa
 
 
 @pytest.mark.asyncio
+async def test_process_async_job_short_circuits_duplicate_terminal_run_reentry(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.1.0'\n", encoding="utf-8")
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident = IncidentRecord(
+        id="incident-1",
+        project_id="project-1",
+        fingerprint="fp-1",
+        service="billing-api",
+        environment=Environment.STAGING,
+        title="billing-api: Database timeout",
+        status=IncidentStatus.OPEN,
+        severity=IncidentSeverity.HIGH,
+        first_seen_at=now,
+        last_seen_at=now,
+        event_count=1,
+        latest_telemetry_id="telemetry-1",
+        created_at=now,
+        updated_at=now,
+    )
+    artifact_store = AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts")
+    repository = StubAutonomousRunRepository()
+    initial_event_stream = PersistentAutonomousRunEventStream(artifact_store=artifact_store)
+    initial_service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=repository,
+        control_plane_repository=StubMissingRepoProfileControlPlaneRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=initial_event_stream,
+    )
+
+    detail = await initial_service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_AND_PROPOSE,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    succeeded_run = detail.run.model_copy(
+        update={
+            "status": AutonomousRunStatus.SUCCEEDED,
+            "phase": AutonomousRunPhase.COMPLETED,
+            "latest_verification": AutonomousVerificationEvidence(
+                source="tool",
+                kind="integration",
+                summary="Verification passed.",
+                passed=True,
+                command="npm run build",
+                recorded_at=detail.run.updated_at + timedelta(minutes=1),
+                metadata={"attempt": 1},
+            ),
+            "updated_at": detail.run.updated_at + timedelta(minutes=1),
+        }
+    )
+    initial_event_stream.upsert_run(succeeded_run)
+    await repository.update_run(
+        detail.run.id,
+        async_job_id=detail.run.async_job_id,
+        repo_profile_id=detail.run.repo_profile_id,
+        run=succeeded_run,
+        outcome=None,
+    )
+
+    reentry_service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        async_job_repository=StubAsyncJobRepository(),
+        autonomous_repository=repository,
+        control_plane_repository=StubMissingRepoProfileControlPlaneRepository(),
+        repository_root=tmp_path,
+        artifact_store=artifact_store,
+        event_stream=PersistentAutonomousRunEventStream(artifact_store=artifact_store),
+        runner=StubShouldNotRunRunner(PersistentAutonomousRunEventStream(artifact_store=artifact_store)),
+        decision_engine_factory=lambda: object(),  # type: ignore[arg-type]
+    )
+
+    duplicate_job = SimpleNamespace(
+        id="job-duplicate",
+        job_type=AsyncJobType.AUTONOMOUS_REPAIR,
+        payload={"incident_id": "incident-1", "autonomous_run_id": detail.run.id},
+        status=AsyncJobStatus.QUEUED,
+    )
+
+    final_detail = await reentry_service.process_async_job(duplicate_job)
+
+    assert final_detail.run.status is AutonomousRunStatus.SUCCEEDED
+    assert final_detail.run.phase is AutonomousRunPhase.COMPLETED
+    assert final_detail.run.latest_verification is not None
+    assert final_detail.run.latest_verification.passed is True
+
+
+@pytest.mark.asyncio
 async def test_autonomous_run_service_applies_adaptive_policy_and_step_budgets(
     tmp_path: Path,
 ) -> None:
@@ -1940,7 +2081,7 @@ async def test_autonomous_run_service_retry_context_includes_diff_and_review_mem
 
 
 @pytest.mark.asyncio
-async def test_autonomous_run_service_retries_after_reviewer_requests_changes(
+async def test_autonomous_run_service_keeps_verified_run_terminal_when_reviewer_requests_changes(
     tmp_path: Path,
 ) -> None:
     now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
@@ -2005,9 +2146,6 @@ async def test_autonomous_run_service_retries_after_reviewer_requests_changes(
         run=run_with_patch,
         outcome=None,
     )
-    retry_runner = StubPostVerificationRetryRunner(service._event_stream)  # noqa: SLF001
-    service._runner = retry_runner  # type: ignore[assignment]  # noqa: SLF001
-
     await service.record_sandbox_result(
         SandboxRunRecord(
             id="sandbox-1",
@@ -2032,20 +2170,143 @@ async def test_autonomous_run_service_retries_after_reviewer_requests_changes(
     )
 
     refreshed = await service.get_run_detail("incident-1", detail.run.id)
-    assert refreshed.run.status is AutonomousRunStatus.QUEUED
-    assert refreshed.run.phase is AutonomousRunPhase.CODING
-    assert refreshed.run.async_job_id == "job-2"
-    assert refreshed.run.loop_state.last_retry_context["previous_review_summary"] == (
-        "The fix should be narrowed to the incident path before promotion."
-    )
-    assert refreshed.run.loop_state.last_retry_context["review_feedback_for_repair"] == [
-        "Scope the retry logic to the checkout timeout code path only."
-    ]
-    assert refreshed.run.loop_state.last_retry_context["previous_diff_fingerprint"] == {
-        "patch_run_id": "patch-1",
-        "file_count": 1,
-        "diff_line_count": 2,
-        "target_files": ["app.py"],
-    }
-    assert retry_runner.retry_contexts
+    assert refreshed.run.status is AutonomousRunStatus.SUCCEEDED
+    assert refreshed.run.phase is AutonomousRunPhase.COMPLETED
+    assert refreshed.run.async_job_id == detail.run.async_job_id
+    assert refreshed.run.latest_review is not None
+    assert refreshed.run.latest_review.verdict is AutonomousSolutionReviewVerdict.NEEDS_CHANGES
+    assert refreshed.run.promotion_status is AutonomousPromotionStatus.NOT_REQUESTED
+    assert refreshed.run.loop_state.last_retry_context == {}
     assert reviewer.calls
+
+
+def test_prepare_repository_workspace_prefers_target_commit_sha(tmp_path: Path) -> None:
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    _git(source_repo, "init", "--initial-branch", "main")
+    (source_repo / "app.txt").write_text("first\n", encoding="utf-8")
+    _git(source_repo, "add", "app.txt")
+    _git(
+        source_repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "first",
+    )
+    first_commit = _git(source_repo, "rev-parse", "HEAD")
+    (source_repo / "app.txt").write_text("second\n", encoding="utf-8")
+    _git(source_repo, "add", "app.txt")
+    _git(
+        source_repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "second",
+    )
+
+    run_id = "run-target-commit"
+    try:
+        workspace = _prepare_repository_workspace(
+            run_id=run_id,
+            clone_url=str(source_repo),
+            default_branch="main",
+            target_commit_sha=first_commit,
+        )
+        checked_out = _git(workspace, "rev-parse", "HEAD")
+        assert checked_out == first_commit
+    finally:
+        _cleanup_workspace(run_id)
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_blocks_protected_stimpact_noop_fallbacks_for_non_sdk_incidents(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts"),
+        event_stream=PersistentAutonomousRunEventStream(
+            artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-2")
+        ),
+    )
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+
+    reason = service._protected_sdk_change_reason(  # noqa: SLF001
+        run=detail.run,
+        patch_diff=(
+            'diff --git a/client/src/lib/queryClient.ts b/client/src/lib/queryClient.ts\n'
+            '--- a/client/src/lib/queryClient.ts\n'
+            '+++ b/client/src/lib/queryClient.ts\n'
+            '@@\n'
+            '-import { captureHandledError } from "../stimpact";\n'
+            '+async function captureHandledError(_input: { error: unknown }) {\n'
+            '+  // No-op fallback when Stimpact client instrumentation is unavailable.\n'
+            '+}\n'
+        ),
+    )
+
+    assert reason is not None
+
+
+@pytest.mark.asyncio
+async def test_autonomous_run_service_allows_protected_stimpact_changes_for_sdk_incidents(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 18, 12, 0, tzinfo=UTC)
+    incident, repo_profile, provider_repository = _build_incident_and_profile(now)
+    service = AutonomousRunService(
+        StubIncidentRepository(incident),
+        autonomous_repository=StubAutonomousRunRepository(),
+        control_plane_repository=StubControlPlaneRepository(repo_profile, provider_repository),
+        repository_root=tmp_path,
+        artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-3"),
+        event_stream=PersistentAutonomousRunEventStream(
+            artifact_store=AutonomousRunArtifactStore(base_directory=tmp_path / "autonomous-artifacts-4")
+        ),
+    )
+    detail = await service.start_run(
+        "incident-1",
+        AutonomousRunCreateRequest(
+            execution_mode=AutonomousExecutionMode.REPAIR_ONLY,
+            repository_root=str(tmp_path),
+        ),
+    )
+    sdk_run = detail.run.model_copy(
+        update={
+            "incident_title": "Stimpact SDK bootstrap fails in installStimpact initialization",
+            "latest_telemetry_error_message": "Stimpact telemetry bootstrap import failed",
+        }
+    )
+
+    reason = service._protected_sdk_change_reason(  # noqa: SLF001
+        run=sdk_run,
+        patch_diff=(
+            'diff --git a/client/src/lib/queryClient.ts b/client/src/lib/queryClient.ts\n'
+            '--- a/client/src/lib/queryClient.ts\n'
+            '+++ b/client/src/lib/queryClient.ts\n'
+            '@@\n'
+            '-import { captureHandledError } from "../stimpact";\n'
+            '+async function captureHandledError(_input: { error: unknown }) {\n'
+            '+  // No-op fallback when Stimpact client instrumentation is unavailable.\n'
+            '+}\n'
+        ),
+    )
+
+    assert reason is None

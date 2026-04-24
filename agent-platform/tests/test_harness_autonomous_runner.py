@@ -482,13 +482,22 @@ async def test_autonomous_repair_runner_fails_when_engine_completes_before_verif
             )
         ],
         decision_engine=PrematureCompleteDecisionEngine(),
-        max_steps=2,
+        max_steps=3,
     )
 
     assert snapshot.run.status is AutonomousRunStatus.FAILED
     assert snapshot.run.phase is AutonomousRunPhase.FAILED
     assert snapshot.run.last_error is not None
-    assert "before verification" in snapshot.run.last_error.lower()
+    assert "repeatedly attempted to complete" in snapshot.run.last_error.lower()
+    rejection_events = [
+        event
+        for event in snapshot.events
+        if event.event_type is AutonomousEventType.VERIFICATION_STATE_UPDATED
+        and "Rejected a premature completion decision" in event.summary
+    ]
+    assert len(rejection_events) == 2
+    decision_events = [event for event in snapshot.events if event.event_type is AutonomousEventType.DECISION_MADE]
+    assert len(decision_events) == 3
     assert snapshot.events[-1].event_type is AutonomousEventType.RUN_FAILED
 
 

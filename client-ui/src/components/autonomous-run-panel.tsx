@@ -13,6 +13,7 @@ import {
 import type {
   AutonomousApprovalStatus,
   AutonomousExecutionMode,
+  AutonomousRun,
   AutonomousRunEvent,
   AutonomousRunStatus,
   IncidentAutonomousRunDetail,
@@ -37,6 +38,9 @@ export function AutonomousRunPanel({
   const [stickyEvents, setStickyEvents] = useState<AutonomousRunEvent[]>(
     () => initialDetail?.events ?? [],
   );
+  const [runHistory, setRunHistory] = useState<AutonomousRun[]>(() =>
+    initialDetail ? [initialDetail.run] : [],
+  );
   const [sandboxDetail, setSandboxDetail] = useState<IncidentSandboxRunDetail | null>(initialSandboxDetail);
   const [connectionState, setConnectionState] = useState<"live" | "reconnecting">("live");
   const [sandboxConnectionState, setSandboxConnectionState] = useState<"live" | "reconnecting" | "idle">("idle");
@@ -60,6 +64,17 @@ export function AutonomousRunPanel({
     const latest = (await response.json()) as IncidentAutonomousRunDetail;
     setDetail(latest);
     return latest;
+  }, [incidentId]);
+
+  const refreshRunHistory = useCallback(async () => {
+    const response = await fetch(`/api/incidents/${incidentId}/autonomous-runs`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return;
+    }
+    const runs = (await response.json()) as AutonomousRun[];
+    setRunHistory(runs);
   }, [incidentId]);
 
   async function runJsonAction<T>(path: string, options?: RequestInit): Promise<T> {
@@ -97,6 +112,7 @@ export function AutonomousRunPanel({
         }),
       });
       await refreshLatestDetail();
+      await refreshRunHistory();
       router.refresh();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to start autonomous run.");
@@ -120,6 +136,7 @@ export function AutonomousRunPanel({
         },
       );
       setDetail(next);
+      void refreshRunHistory();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to update approval state.");
     } finally {
@@ -139,6 +156,7 @@ export function AutonomousRunPanel({
         { method: "POST" },
       );
       setDetail(next);
+      void refreshRunHistory();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Failed to promote autonomous run.");
     } finally {
@@ -157,6 +175,10 @@ export function AutonomousRunPanel({
     }, 15000);
     return () => window.clearInterval(interval);
   }, [isActiveRun, refreshLatestDetail]);
+
+  useEffect(() => {
+    void refreshRunHistory();
+  }, [refreshRunHistory]);
 
   useEffect(() => {
     if (!activeRunId || !isActiveRun) {
@@ -236,6 +258,13 @@ export function AutonomousRunPanel({
     setStickyEvents((prev) => mergeRunEventsById(prev, incoming));
   }, [detail?.events]);
 
+  useEffect(() => {
+    if (!detail?.run) {
+      return;
+    }
+    setRunHistory((prev) => mergeRunsById(prev, [detail.run]));
+  }, [detail?.run]);
+
   const orderedStickyEvents = useMemo(
     () =>
       [...stickyEvents].sort(
@@ -244,6 +273,14 @@ export function AutonomousRunPanel({
     [stickyEvents],
   );
   const recentEvents = useMemo(() => orderedStickyEvents.slice(-16).reverse(), [orderedStickyEvents]);
+  const orderedRunHistory = useMemo(
+    () =>
+      [...runHistory].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      ),
+    [runHistory],
+  );
+  const runHistoryCount = orderedRunHistory.length;
   const latestActionEvent = orderedStickyEvents.at(-1) ?? null;
   const recentSandboxSteps = useMemo(
     () => (sandboxDetail?.steps ?? []).slice(-8).reverse(),
@@ -358,6 +395,9 @@ export function AutonomousRunPanel({
         {approvalBanner}
         {policyBanner}
         {currentActionBanner}
+        {runHistoryCount > 1 ? (
+          <RunHistoryCard runs={orderedRunHistory} compact />
+        ) : null}
         {detail ? (
           <>
             <details className="mt-3 rounded-lg border border-white/[0.08] bg-black/20 open:border-white/[0.12]">
@@ -577,6 +617,9 @@ export function AutonomousRunPanel({
           </div>
 
           {currentActionBanner}
+          {runHistoryCount > 0 ? (
+            <RunHistoryCard runs={orderedRunHistory} />
+          ) : null}
 
           <details className="group mt-4 rounded-xl border border-white/[0.06] bg-black/15">
             <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
@@ -622,13 +665,35 @@ export function AutonomousRunPanel({
               <div className="grid gap-2 text-sm text-white/60">
                 <AutonomousMetaRow label="Auto-run allowed" value={detail.run.policy.auto_run_allowed ? "Yes" : "No"} />
                 <AutonomousMetaRow label="Write-back allowed" value={detail.run.policy.allow_writeback ? "Yes" : "No"} />
+                <AutonomousMetaRow
+                  label="Repairability"
+                  value={
+                    detail.run.policy.repairability_score === null
+                      ? "Not assessed"
+                      : `${Math.round(detail.run.policy.repairability_score * 100)}% confidence`
+                  }
+                />
                 <AutonomousMetaRow label="Browser verification required" value={detail.run.policy.require_browser_verification ? "Yes" : "No"} />
                 <AutonomousMetaRow label="Allowed backends" value={detail.run.policy.allowed_execution_backends.join(", ") || "None"} />
                 <AutonomousMetaRow label="Allowed tools" value={detail.run.policy.allowed_tool_categories.join(", ") || "None"} />
                 <AutonomousMetaRow label="Repo profile" value={detail.run.repo_profile_id ?? "Not resolved"} />
+                <AutonomousMetaRow label="Contract base" value={detail.run.run_contract?.base_commit_sha ?? "Default branch"} />
+                <AutonomousMetaRow label="Contract verify" value={detail.run.run_contract?.verify_command ?? "Not configured"} />
                 <AutonomousMetaRow label="Patch run" value={detail.run.patch_run_id ?? "Pending"} />
                 <AutonomousMetaRow label="Sandbox run" value={detail.run.sandbox_run_id ?? "Pending"} />
               </div>
+              {detail.run.run_contract?.trust_notes.length ? (
+                <div className="mt-4 rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Run contract
+                  </p>
+                  <div className="mt-2 space-y-2 text-sm text-white/65">
+                    {detail.run.run_contract.trust_notes.map((note) => (
+                      <p key={note}>{note}</p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {detail.run.policy.reasons.length > 0 ? (
                 <div className="mt-4 rounded-lg border border-white/[0.06] bg-white/[0.03] p-3">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
@@ -636,6 +701,18 @@ export function AutonomousRunPanel({
                   </p>
                   <div className="mt-2 space-y-2 text-sm text-white/65">
                     {detail.run.policy.reasons.map((reason) => (
+                      <p key={reason}>{reason}</p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {detail.run.policy.repairability_reasons.length > 0 ? (
+                <div className="mt-4 rounded-lg border border-[rgba(45,127,249,0.18)] bg-[rgba(45,127,249,0.06)] p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#93c5fd]">
+                    Repairability assessment
+                  </p>
+                  <div className="mt-2 space-y-2 text-sm text-white/65">
+                    {detail.run.policy.repairability_reasons.map((reason) => (
                       <p key={reason}>{reason}</p>
                     ))}
                   </div>
@@ -879,6 +956,76 @@ function mergeRunEventsById(
   return Array.from(byId.values());
 }
 
+function mergeRunsById(prev: AutonomousRun[], incoming: AutonomousRun[]): AutonomousRun[] {
+  const byId = new Map<string, AutonomousRun>();
+  for (const run of prev) {
+    byId.set(run.id, run);
+  }
+  for (const run of incoming) {
+    byId.set(run.id, run);
+  }
+  return Array.from(byId.values());
+}
+
+function RunHistoryCard({ runs, compact = false }: { runs: AutonomousRun[]; compact?: boolean }) {
+  const visibleRuns = compact ? runs.slice(0, 3) : runs.slice(0, 6);
+  const latestRunId = runs[0]?.id;
+
+  return (
+    <details className="group mt-3 rounded-xl border border-white/[0.06] bg-black/15">
+      <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.04] [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center justify-between gap-2">
+          Run history
+          <span className="text-xs text-white/40">
+            {runs.length} attempt{runs.length === 1 ? "" : "s"}
+          </span>
+        </span>
+      </summary>
+      <div className="space-y-2 border-t border-white/[0.06] px-4 py-4">
+        {visibleRuns.map((run) => (
+          <div
+            key={run.id}
+            className="rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2.5"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-white/90">
+                  {run.id === latestRunId ? "Latest run" : `Run ${run.id.slice(0, 8)}`}
+                </p>
+                <p className="mt-1 text-xs text-white/45">
+                  {formatAutonomousExecutionMode(run.execution_mode)} · {formatTimestamp(run.created_at)}
+                </p>
+              </div>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">
+                {run.status}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/45">
+              <span>{formatAutonomousPhase(run.phase)}</span>
+              <span>Approval: {formatAutonomousApprovalStatus(run.approval_status)}</span>
+              <span className="capitalize">Promotion: {run.promotion_status.replace(/_/g, " ")}</span>
+              {run.sandbox_run_id ? <span>Sandbox: {run.sandbox_run_id.slice(0, 8)}</span> : null}
+              {run.promotion_url ? (
+                <a
+                  href={run.promotion_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-[#86efac] hover:text-[#bbf7d0]"
+                >
+                  PR/MR
+                </a>
+              ) : null}
+            </div>
+            {run.last_error ? (
+              <p className="mt-2 line-clamp-2 text-xs text-[#fca5a5]">{run.last_error}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function EventCard({ event }: { event: AutonomousRunEvent }) {
   return (
     <div className="rounded-lg border border-white/[0.06] bg-black/25 px-3 py-2.5">
@@ -1011,7 +1158,10 @@ function deriveFailureInsight(detail: IncidentAutonomousRunDetail | null): Failu
     };
   }
 
-  if (latestReview?.verdict === "needs_changes") {
+  if (
+    latestReview?.verdict === "needs_changes" &&
+    (run.status === "failed" || run.status === "cancelled")
+  ) {
     return {
       label: "Reviewer requested changes",
       summary: latestReview.summary,

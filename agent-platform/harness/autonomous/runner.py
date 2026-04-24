@@ -347,7 +347,11 @@ class AutonomousRepairRunner:
                     coding_session=coding_snapshot,
                     available_tools=[tool.model_dump(mode="json") for tool in coding_snapshot.available_tools.tools],
                     last_tool_result=run.loop_state.last_tool_result or None,
-                    recent_events=current_snapshot.events[-self._RECENT_EVENT_LIMIT :],
+                    recent_events=self._scope_recent_events_to_current_session(
+                        current_snapshot.events,
+                        coding_session_id,
+                        self._RECENT_EVENT_LIMIT,
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 return self._fail_run(run_id, f"Decision engine failed: {exc}")
@@ -377,6 +381,16 @@ class AutonomousRepairRunner:
                                 ),
                             )
                             continue
+                        if self._reject_and_continue_on_premature_completion(
+                            run_id=run_id,
+                            run=run,
+                            reason=(
+                                "no_diff_since_checkpoint"
+                                if not has_changes
+                                else "no_fresh_verification_evidence"
+                            ),
+                        ):
+                            continue
                         if not has_changes:
                             return self._fail_run(
                                 run_id,
@@ -387,9 +401,15 @@ class AutonomousRepairRunner:
                             "Autonomous repair cannot complete without fresh verification evidence from an explicit post-fix verification step.",
                         )
                     return self._complete_run(run_id)
+                if self._reject_and_continue_on_premature_completion(
+                    run_id=run_id,
+                    run=run,
+                    reason="features_not_yet_verified",
+                ):
+                    continue
                 return self._fail_run(
                     run_id,
-                    "Decision engine attempted to complete the run before verification requirements were satisfied.",
+                    "Decision engine repeatedly attempted to complete the run before verification requirements were satisfied.",
                 )
 
             if decision.action is AutonomousDecisionAction.FAIL:
@@ -1237,6 +1257,126 @@ class AutonomousRepairRunner:
             len(run.loop_state.recent_tool_names) == 1
             and run.loop_state.recent_tool_names[0] == "discard_failed_work"
         )
+
+    _MAX_PREMATURE_COMPLETIONS = 2
+    _PREMATURE_COMPLETION_MARKER = "__premature_completion__"
+
+    def _scope_recent_events_to_current_session(
+        self,
+        events: list[AutonomousRunEvent],
+        coding_session_id: str | None,
+        limit: int,
+    ) -> list[AutonomousRunEvent]:
+        """Return only events that belong to the current coding session.
+
+        When an autonomous run is resumed or retried after a previous attempt,
+        the persistent event stream still contains events emitted during prior
+        attempts (e.g. ``verification_state_updated -> fully_verified``).
+        Feeding those stale signals to the decision engine makes it conclude the
+        objective is already done even though the current session has a fresh,
+        unverified feature catalog. Scoping the window to events emitted after
+        the current session's ``coding_session_ready`` boundary keeps the model
+        honest about what it has actually done in this attempt.
+        """
+        if coding_session_id is None or not events:
+            return events[-limit:]
+        boundary_index: int | None = None
+        for idx in range(len(events) - 1, -1, -1):
+            event = events[idx]
+            if event.event_type is not AutonomousEventType.CODING_SESSION_READY:
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if payload.get("session_id") == coding_session_id:
+                boundary_index = idx
+                break
+        scoped = events if boundary_index is None else events[boundary_index:]
+        return scoped[-limit:]
+
+    def _count_premature_completions(self, run: AutonomousRepairRunRecord) -> int:
+        return sum(
+            1
+            for signature in run.loop_state.recent_failure_signatures
+            if signature.startswith(self._PREMATURE_COMPLETION_MARKER)
+        )
+
+    def _reject_and_continue_on_premature_completion(
+        self,
+        *,
+        run_id: str,
+        run: AutonomousRepairRunRecord,
+        reason: str,
+    ) -> bool:
+        """Steer the decision engine back to work instead of failing.
+
+        The decision engine sometimes emits ``complete`` before the current
+        session has actually verified the repair (e.g. because the event
+        history or feature catalog inherited stale evidence from a prior
+        attempt). Instead of turning that into a terminal failure, inject a
+        tool-result style feedback payload and let the loop iterate again. The
+        loop keeps a short-circuit breaker so a truly stuck agent still fails
+        rather than spinning forever.
+        """
+        premature_count = self._count_premature_completions(run) + 1
+        if premature_count > self._MAX_PREMATURE_COMPLETIONS:
+            return False
+
+        signature = f"{self._PREMATURE_COMPLETION_MARKER}:{reason}:{premature_count}"
+        feedback_message = (
+            "The previous `complete` action was rejected because the current "
+            "session has not produced verifiable evidence of the repair yet "
+            f"(reason={reason}). Investigate the reported incident, apply a "
+            "code change that addresses it, then run the configured "
+            "verification command before attempting to complete again."
+        )
+        updated_loop_state = run.loop_state.model_copy(
+            update={
+                "last_tool_name": None,
+                "last_tool_ok": False,
+                "last_tool_result": {
+                    "premature_completion": {
+                        "reason": reason,
+                        "attempt": premature_count,
+                        "feedback": feedback_message,
+                    }
+                },
+                "consecutive_failures": run.loop_state.consecutive_failures + 1,
+                "recent_failure_signatures": self._append_recent_failure_signature(
+                    run.loop_state.recent_failure_signatures,
+                    signature,
+                ),
+                "last_failure": AutonomousToolFailure(
+                    tool_name="complete",
+                    failure_class=AutonomousToolFailureClass.STAGNATION,
+                    message=feedback_message,
+                    hint=(
+                        "Run the configured verification command (or apply a "
+                        "code change first if no repair has been made in this "
+                        "attempt) before deciding to complete."
+                    ),
+                    signature=signature,
+                    repeated_count=premature_count,
+                ),
+            }
+        )
+        self._persist_run(
+            run.model_copy(
+                update={
+                    "loop_state": updated_loop_state,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+        )
+        self._emit_event(
+            run_id=run_id,
+            event_type=AutonomousEventType.VERIFICATION_STATE_UPDATED,
+            phase=AutonomousRunPhase.CODING,
+            summary=(
+                "Rejected a premature completion decision; the current "
+                "session has not yet verified the repair."
+            ),
+            payload={"reason": reason, "attempt": premature_count},
+        )
+        return True
 
     def _invalidate_feature_catalog(
         self,
