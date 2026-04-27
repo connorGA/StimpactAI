@@ -257,12 +257,12 @@ export function IncidentHubIdleHero() {
             </div>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1.5 sm:pt-0">
-            <Link
-              href="/incidents"
+            <a
+              href="#incident-history"
               className="text-xs font-medium text-[#ff8c5a] transition hover:text-[#ffb99a]"
             >
               Incident history →
-            </Link>
+            </a>
             <div className="flex flex-col items-end gap-1.5">
               <div className="relative h-[5.75rem] w-[5.75rem] shrink-0" aria-hidden>
                 <svg

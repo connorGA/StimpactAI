@@ -16,6 +16,7 @@ from models.control_plane import ProviderIntegrationRecord, SecretRefRecord
 from services.aws_secrets_manager import AwsSecretsManagerReader, AwsSecretsManagerWriter
 from services.provider_clients import (
     GitLabAuthorization,
+    ProviderBranchMetadata,
     ProviderChangeRequest,
     ProviderInstallation,
     ProviderRepositoryMetadata,
@@ -224,6 +225,67 @@ class GitLabProviderClient:
             secret_format="text",
         )
 
+    async def list_branches(
+        self,
+        integration: ProviderIntegrationRecord,
+        repository: ProviderRepositoryRecord,
+        *,
+        credentials_secret_ref: SecretRefRecord | None = None,
+        limit: int = 20,
+    ) -> list[ProviderBranchMetadata]:
+        secret_ref = self._require_credentials_secret_ref(
+            credentials_secret_ref,
+            integration=integration,
+        )
+        tokens = await self._ensure_valid_tokens(secret_ref, integration=integration)
+        payload = await self._request_json(
+            "GET",
+            f"{self._get_base_url_for_integration(integration)}/api/v4/projects/{quote_plus(repository.external_repository_id)}/repository/branches",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            params={"per_page": str(max(1, min(limit, 100)))},
+        )
+        if not isinstance(payload, list):
+            raise APIError(
+                "GitLab branch list response was invalid.",
+                status_code=502,
+                code="gitlab_api_request_failed",
+            )
+        branches: list[ProviderBranchMetadata] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            branch_name = str(item.get("name", "")).strip()
+            if not branch_name:
+                continue
+            commit_payload = item.get("commit")
+            commit_sha = None
+            last_commit_at = None
+            if isinstance(commit_payload, dict):
+                if commit_payload.get("id") is not None:
+                    commit_sha = str(commit_payload.get("id"))
+                committed_date = commit_payload.get("committed_date")
+                if isinstance(committed_date, str) and committed_date.strip():
+                    try:
+                        last_commit_at = datetime.fromisoformat(committed_date.replace("Z", "+00:00"))
+                    except ValueError:
+                        last_commit_at = None
+            branches.append(
+                ProviderBranchMetadata(
+                    name=branch_name,
+                    commit_sha=commit_sha,
+                    last_commit_at=last_commit_at,
+                )
+            )
+        return sorted(
+            branches,
+            key=lambda item: (
+                item.name != repository.default_branch,
+                item.last_commit_at is None,
+                -(item.last_commit_at.timestamp()) if item.last_commit_at is not None else 0.0,
+                item.name,
+            ),
+        )[:limit]
+
     async def propose_patch(
         self,
         integration: ProviderIntegrationRecord,
@@ -234,6 +296,7 @@ class GitLabProviderClient:
         title: str,
         description: str,
         commit_message: str,
+        base_commit_sha: str | None = None,
         credentials_secret_ref: SecretRefRecord | None = None,
     ) -> ProviderChangeRequest:
         secret_ref = self._require_credentials_secret_ref(
@@ -254,6 +317,7 @@ class GitLabProviderClient:
             branch_name=branch_name,
             patch_diff=patch_diff,
             commit_message=commit_message,
+            base_commit_sha=base_commit_sha,
         )
         payload = await self._request_json(
             "POST",

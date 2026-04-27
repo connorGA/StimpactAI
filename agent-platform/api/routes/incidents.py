@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 
-from api.core.config import get_openai_api_key, get_openai_patch_model, get_openai_rca_model
+from api.core.config import (
+    get_openai_api_key,
+    get_openai_failure_classify_model,
+    get_openai_patch_model,
+    get_openai_rca_model,
+)
 from api.core.errors import APIError
 from api.core.security import require_project_list_access, require_project_read_access
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
@@ -133,7 +138,13 @@ def get_fingerprint_classification_repository(
 
 
 def get_failure_classifier() -> FailureClassifier:
-    return FailureClassifier()
+    api_key = get_openai_api_key()
+    if api_key is None:
+        return FailureClassifier()
+    return FailureClassifier(
+        openai_client=AsyncOpenAI(api_key=api_key),
+        model=get_openai_failure_classify_model(),
+    )
 
 
 def get_code_context_service() -> CodeContextService:
@@ -683,7 +694,7 @@ async def classify_incident(
         security_repository=security_repository,
     )
     events = await repository.list_incident_events(incident_id, limit=event_limit)
-    classification = classifier.classify(incident, events)
+    classification = await classifier.classify_async(incident, events)
     return IncidentClassificationResponse.from_classification(
         incident_id=incident.id,
         classification=classification,

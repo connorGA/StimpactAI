@@ -16,6 +16,7 @@ from api.core.security import (
     issue_browser_ingest_token_for_request,
     require_telemetry_ingest_access,
 )
+from api.observability import get_metrics_registry
 from api.db.postgres import PostgresConnectionManager, get_postgres_manager
 from api.events.publisher import IncidentEventPublisher, get_incident_event_publisher
 from api.events.outbox_signaler import OutboxSignaler
@@ -212,6 +213,14 @@ async def ingest_error(
     incident_event = publisher.build_telemetry_received(telemetry)
 
     outbox_event_id = await repository.insert_event_with_outbox(telemetry, incident_event)
+    get_metrics_registry().increment(
+        "stimpact_telemetry_ingested_total",
+        labels={
+            "project_id": telemetry.project_id,
+            "service": telemetry.service,
+            "environment": telemetry.environment.value,
+        },
+    )
     await outbox_signaler.signal(
         event_id=outbox_event_id,
         event_type=incident_event.event_type.value,

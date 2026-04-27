@@ -15,6 +15,7 @@ from openai import AsyncOpenAI
 from api.core.config import (
     get_kubernetes_monitor_interval_seconds,
     get_openai_api_key,
+    get_openai_failure_classify_model,
     get_openai_patch_model,
     get_telemetry_classifier_enabled,
     get_telemetry_classifier_frequency_threshold,
@@ -108,12 +109,16 @@ def _build_patch_generation_service(
     api_key = get_openai_api_key()
     if api_key is None:
         return _UnavailablePatchGenerationService()
+    oa = AsyncOpenAI(api_key=api_key)
     return PatchGenerationService(
         incident_repository,
         patch_repository,
-        classifier=FailureClassifier(),
+        classifier=FailureClassifier(
+            openai_client=oa,
+            model=get_openai_failure_classify_model(),
+        ),
         code_context=CodeContextService(),
-        client=AsyncOpenAI(api_key=api_key),
+        client=oa,
         model=get_openai_patch_model(),
     )
 

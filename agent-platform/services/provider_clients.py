@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import tempfile
@@ -25,6 +26,13 @@ class ProviderRepositoryMetadata:
     name: str
     default_branch: str
     clone_url: str
+
+
+@dataclass(slots=True)
+class ProviderBranchMetadata:
+    name: str
+    commit_sha: str | None = None
+    last_commit_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -83,8 +91,18 @@ class ProviderClient(Protocol):
         title: str,
         description: str,
         commit_message: str,
+        base_commit_sha: str | None = None,
         credentials_secret_ref: SecretRefRecord | None = None,
     ) -> ProviderChangeRequest: ...
+
+    async def list_branches(
+        self,
+        integration: ProviderIntegrationRecord,
+        repository: ProviderRepositoryRecord,
+        *,
+        credentials_secret_ref: SecretRefRecord | None = None,
+        limit: int = 20,
+    ) -> list[ProviderBranchMetadata]: ...
 
 
 def get_provider_client(provider: ProviderKind) -> ProviderClient:
@@ -110,13 +128,19 @@ def apply_patch_and_push_branch(
     branch_name: str,
     patch_diff: str,
     commit_message: str,
+    base_commit_sha: str | None = None,
     author_name: str = "Stimpact AI",
     author_email: str = "bot@stimpact.ai",
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="stimpact-provider-writeback-") as temp_dir:
         repo_dir = Path(temp_dir) / "repo"
         _git(["clone", "--quiet", "--depth", "1", "--branch", default_branch, clone_url, str(repo_dir)])
-        _git(["checkout", "-b", branch_name], cwd=repo_dir)
+        normalized_base_commit = base_commit_sha.strip() if base_commit_sha else None
+        if normalized_base_commit:
+            _checkout_writeback_base(repo_dir=repo_dir, base_commit_sha=normalized_base_commit)
+            _git(["checkout", "-B", branch_name, normalized_base_commit], cwd=repo_dir)
+        else:
+            _git(["checkout", "-b", branch_name], cwd=repo_dir)
 
         patch_path = repo_dir / "stimpact.patch"
         normalized_patch = patch_diff if patch_diff.endswith("\n") else f"{patch_diff}\n"
@@ -149,6 +173,40 @@ def apply_patch_and_push_branch(
         commit_sha = _git(["rev-parse", "HEAD"], cwd=repo_dir).strip()
         _git(["push", "origin", f"HEAD:refs/heads/{branch_name}"], cwd=repo_dir)
         return commit_sha
+
+
+def _checkout_writeback_base(*, repo_dir: Path, base_commit_sha: str) -> None:
+    normalized_sha = base_commit_sha.strip()
+    if not normalized_sha:
+        return
+
+    verify = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{normalized_sha}^{{commit}}"],
+        cwd=repo_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if verify.returncode == 0:
+        return
+
+    fetch = subprocess.run(
+        ["git", "fetch", "--quiet", "--depth", "1", "origin", normalized_sha],
+        cwd=repo_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if fetch.returncode != 0:
+        raise APIError(
+            (
+                fetch.stderr
+                or fetch.stdout
+                or f"Provider write-back could not fetch base commit {normalized_sha}."
+            ).strip(),
+            status_code=409,
+            code="provider_writeback_base_unavailable",
+        )
 
 
 def _git(args: list[str], *, cwd: Path | None = None) -> str:

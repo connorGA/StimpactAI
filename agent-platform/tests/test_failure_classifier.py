@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -76,11 +78,39 @@ def test_failure_classifier_returns_expected_category(
     assert result.inspected_event_count == 1
 
 
-def test_failure_classifier_falls_back_to_unknown() -> None:
+def test_failure_classifier_sync_fallback_is_never_unknown() -> None:
     classifier = FailureClassifier()
     event = build_event(error_message="Something odd happened", stacktrace="mysterious stack", response_status=500)
 
     result = classifier.classify(build_incident(), [event])
 
-    assert result.category is FailureCategory.UNKNOWN
-    assert result.confidence < 0.5
+    assert result.category is FailureCategory.APPLICATION_BUG
+    assert result.confidence < 0.6
+    assert "heuristic" in result.summary.lower() or "application" in result.summary.lower()
+
+
+async def test_classify_async_invokes_llm_when_rules_miss() -> None:
+    content = (
+        '{"category":"network_failure","confidence":0.81,'
+        '"summary":"The billing-api failure aligns with a connection-level issue in the call path.",'
+        '"matched_signals":["mysterious stack"]}'
+    )
+    create = AsyncMock(
+        return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+    )
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock(create=create)
+
+    classifier = FailureClassifier(openai_client=client, model="gpt-4.1-mini")
+    event = build_event(
+        error_message="Something odd happened",
+        stacktrace="mysterious stack",
+        response_status=500,
+    )
+    result = await classifier.classify_async(build_incident(), [event])
+
+    assert result.category is FailureCategory.NETWORK_FAILURE
+    assert result.confidence == 0.81
+    assert "connection" in result.summary.lower() or "billing" in result.summary.lower()
+    create.assert_awaited_once()

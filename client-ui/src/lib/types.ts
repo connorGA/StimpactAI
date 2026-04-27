@@ -388,7 +388,23 @@ export type AutonomousPolicyDecision = {
   require_browser_verification: boolean;
   max_repair_attempts: number;
   max_retry_budget: number;
+  repairability_score: number | null;
+  repairability_reasons: string[];
   reasons: string[];
+};
+
+export type AutonomousRunContract = {
+  objective: string;
+  service_name: string | null;
+  base_commit_sha: string | null;
+  allowed_tool_categories: string[];
+  protected_patterns: string[];
+  reproduce_command: string | null;
+  verify_command: string | null;
+  success_criteria: string | null;
+  promotion_allowed: boolean;
+  repairability_score: number | null;
+  trust_notes: string[];
 };
 
 export type AutonomousRun = {
@@ -432,6 +448,7 @@ export type AutonomousRun = {
   latest_review: AutonomousSolutionReview | null;
   policy_block_reason: string | null;
   policy: AutonomousPolicyDecision;
+  run_contract: AutonomousRunContract | null;
   loop_state: AutonomousLoopState;
   created_at: string;
   updated_at: string;
@@ -905,6 +922,7 @@ export type ProjectService = {
   repo_profile_id: string | null;
   owner: string | null;
   deploy_target: string | null;
+  tracked_branch: string | null;
   routing_hints: ProjectServiceRoutingHints;
   startup_priority: number;
   sandbox_healthcheck_command: string | null;
@@ -913,6 +931,31 @@ export type ProjectService = {
   dependencies: ProjectServiceDependency[];
   created_at: string;
   updated_at: string;
+};
+
+export type ProviderBranch = {
+  name: string;
+  commit_sha: string | null;
+  last_commit_at: string | null;
+};
+
+export type ProjectServiceRepairTarget = {
+  service_id: string;
+  project_id: string;
+  service_name: string;
+  service_slug: string;
+  provider_repository_id: string | null;
+  provider_repository_owner: string | null;
+  provider_repository_name: string | null;
+  default_branch: string | null;
+  tracked_branch: string | null;
+  selected_branch: string | null;
+  selected_source: "deployed_commit" | "tracked_branch" | "default_branch";
+  deployed_environment: string | null;
+  deployed_commit_sha: string | null;
+  deployed_last_seen_at: string | null;
+  current_target_commit_sha: string | null;
+  recent_branches: ProviderBranch[];
 };
 
 export type SandboxPlanService = {

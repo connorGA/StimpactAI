@@ -2102,7 +2102,7 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(AccountMenuLink, {
-                                href: "/control-center",
+                                href: "/workspace/settings",
                                 label: "Workspace settings",
                                 onNavigate: ()=>setOpen(false)
                             }, void 0, false, {
@@ -2111,12 +2111,21 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(AccountMenuLink, {
+                                href: "/control-center",
+                                label: "Control center",
+                                onNavigate: ()=>setOpen(false)
+                            }, void 0, false, {
+                                fileName: "[project]/src/components/app-shell.tsx",
+                                lineNumber: 657,
+                                columnNumber: 13
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(AccountMenuLink, {
                                 href: "/onboarding",
                                 label: "Project onboarding",
                                 onNavigate: ()=>setOpen(false)
                             }, void 0, false, {
                                 fileName: "[project]/src/components/app-shell.tsx",
-                                lineNumber: 657,
+                                lineNumber: 658,
                                 columnNumber: 13
                             }, this)
                         ]
@@ -2134,7 +2143,7 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                                 children: isLoggingOut ? "Signing out..." : "Log out"
                             }, void 0, false, {
                                 fileName: "[project]/src/components/app-shell.tsx",
-                                lineNumber: 665,
+                                lineNumber: 666,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("svg", {
@@ -2151,33 +2160,33 @@ function AccountMenu({ session, sessionLoading, subtitle, onLogout, desktop = fa
                                         d: "M7 4.5h-1A2.5 2.5 0 0 0 3.5 7v6A2.5 2.5 0 0 0 6 15.5h1"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/app-shell.tsx",
-                                        lineNumber: 676,
+                                        lineNumber: 677,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                                         d: "M11 6.5 15 10l-4 3.5"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/app-shell.tsx",
-                                        lineNumber: 677,
+                                        lineNumber: 678,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("path", {
                                         d: "M15 10H7.5"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/app-shell.tsx",
-                                        lineNumber: 678,
+                                        lineNumber: 679,
                                         columnNumber: 15
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/app-shell.tsx",
-                                lineNumber: 666,
+                                lineNumber: 667,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/app-shell.tsx",
-                        lineNumber: 660,
+                        lineNumber: 661,
                         columnNumber: 11
                     }, this)
                 ]
@@ -2205,7 +2214,7 @@ function AccountMenuLink({ href, label, onNavigate }) {
                 children: label
             }, void 0, false, {
                 fileName: "[project]/src/components/app-shell.tsx",
-                lineNumber: 702,
+                lineNumber: 703,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("svg", {
@@ -2221,18 +2230,18 @@ function AccountMenuLink({ href, label, onNavigate }) {
                     d: "M7.5 4.75 12.75 10 7.5 15.25"
                 }, void 0, false, {
                     fileName: "[project]/src/components/app-shell.tsx",
-                    lineNumber: 713,
+                    lineNumber: 714,
                     columnNumber: 9
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/src/components/app-shell.tsx",
-                lineNumber: 703,
+                lineNumber: 704,
                 columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/src/components/app-shell.tsx",
-        lineNumber: 697,
+        lineNumber: 698,
         columnNumber: 5
     }, this);
 }

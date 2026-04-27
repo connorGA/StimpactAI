@@ -5,6 +5,7 @@ import {
   getIncidentReportingOverview,
   getLatestIncidentAutonomousRunDetail,
   getProjectOnboarding,
+  listProjectRepairTargets,
   getSuppressionSummary,
 } from "@/lib/agent-platform";
 import { isProjectOnboardingComplete } from "@/lib/onboarding";
@@ -12,6 +13,7 @@ import { resolvePrimaryProjectId } from "@/lib/project-context";
 import type {
   IncidentAutonomousRunDetail,
   IncidentSummary,
+  ProjectServiceRepairTarget,
   SuppressionSummary,
 } from "@/lib/types";
 
@@ -55,7 +57,10 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
   }
 
   const incidents = incidentList.items;
-  const autonomousRuns = await loadLatestAutonomousRuns(incidents);
+  const [autonomousRuns, repairTargets] = await Promise.all([
+    loadLatestAutonomousRuns(incidents),
+    listProjectRepairTargets(projectId).catch<ProjectServiceRepairTarget[]>(() => []),
+  ]);
 
   return (
     <IncidentCommandCenter
@@ -64,6 +69,7 @@ export default async function IncidentsPage({ searchParams }: IncidentsPageProps
       reporting={reporting}
       autonomousRuns={autonomousRuns}
       suppression={suppression}
+      repairTargets={repairTargets}
     />
   );
 }

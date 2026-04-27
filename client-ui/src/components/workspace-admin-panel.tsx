@@ -109,87 +109,81 @@ export function WorkspaceAdminPanel({
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <section className="space-y-4 rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-white px-5 py-5">
+    <div className="grid gap-4 xl:grid-cols-2">
+      <section className="space-y-4 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
-            Workspace billing
-          </p>
-          <h3 className="mt-2 text-xl font-semibold text-[#171717]">
-            Project-based access with unlimited seats
-          </h3>
-          <p className="mt-2 text-sm leading-6 text-[#746d66]">
-            {projectCount} active project{projectCount === 1 ? "" : "s"} against {includedProjects} included. Additional projects bill at $
-            {(additionalProjectPriceCents / 100).toFixed(0)} each per month.
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">Billing</p>
+          <h3 className="mt-2 text-lg font-semibold text-white">Project entitlement</h3>
+          <p className="mt-2 text-sm text-white/55">
+            {projectCount} active project{projectCount === 1 ? "" : "s"} · {includedProjects} included · +$
+            {(additionalProjectPriceCents / 100).toFixed(0)}/mo per extra project.
           </p>
         </div>
 
         <form className="space-y-3" onSubmit={handleInviteSubmit}>
           <label className="block">
-            <span className="mb-2 block text-sm font-medium text-[#171717]">Invite teammate</span>
+            <span className="mb-2 block text-sm font-medium text-white/75">Invite teammate</span>
             <input
               type="email"
               value={inviteEmail}
               onChange={(event) => setInviteEmail(event.target.value)}
               placeholder="teammate@company.com"
-              className="w-full rounded-[16px] border border-[rgba(17,24,39,0.12)] bg-white px-4 py-3 text-sm text-[#171717] outline-none transition focus:border-[rgba(52,81,209,0.42)]"
+              className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#ff6a3d]/40"
               required
             />
           </label>
           <button
             type="submit"
-            className="inline-flex rounded-[16px] bg-[#17385d] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#1f4a78]"
+            className="inline-flex rounded-lg bg-[#ff6a3d] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#e85a30]"
           >
             Create invite
           </button>
         </form>
 
         {inviteToken ? (
-          <div className="rounded-[18px] bg-[#f8fbff] px-4 py-4 text-sm text-[#35547d]">
-            Invite token: <code>{inviteToken}</code>
+          <div className="rounded-lg border border-[#2d7ff9]/25 bg-[#2d7ff9]/10 px-3 py-3 text-sm text-[#bfdbfe]">
+            Invite token: <code className="text-white">{inviteToken}</code>
           </div>
         ) : null}
 
         {statusMessage ? (
-          <div className="rounded-[18px] bg-[rgba(67,160,71,0.12)] px-4 py-3 text-sm text-[#2f6f35]">
+          <div className="rounded-lg border border-[rgba(32,201,51,0.3)] bg-[rgba(32,201,51,0.1)] px-3 py-3 text-sm text-[#86efac]">
             {statusMessage}
           </div>
         ) : null}
         {errorMessage ? (
-          <div className="rounded-[18px] bg-[rgba(198,40,40,0.10)] px-4 py-3 text-sm text-[#8c2d2d]">
+          <div className="rounded-lg border border-[rgba(248,113,113,0.35)] bg-[rgba(248,113,113,0.1)] px-3 py-3 text-sm text-[#fca5a5]">
             {errorMessage}
           </div>
         ) : null}
       </section>
 
-      <section className="space-y-4 rounded-[24px] border border-[rgba(17,24,39,0.08)] bg-white px-5 py-5">
+      <section className="space-y-4 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8a8178]">
-            Access review
-          </p>
-          <h3 className="mt-2 text-xl font-semibold text-[#171717]">Requests and pending invites</h3>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-white/40">Access</p>
+          <h3 className="mt-2 text-lg font-semibold text-white">Requests & invites</h3>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           {accessRequests.length === 0 ? (
-            <p className="text-sm text-[#746d66]">No pending access requests.</p>
+            <p className="text-sm text-white/45">No pending access requests.</p>
           ) : (
             accessRequests.map((request) => (
               <div
                 key={request.id}
-                className="rounded-[18px] border border-[rgba(17,24,39,0.08)] px-4 py-4"
+                className="rounded-lg border border-white/10 bg-black/20 px-3 py-3"
               >
-                <p className="font-medium text-[#171717]">{request.full_name}</p>
-                <p className="mt-1 text-sm text-[#746d66]">{request.email}</p>
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8a8178]">
+                <p className="font-medium text-white">{request.full_name}</p>
+                <p className="mt-0.5 text-sm text-white/50">{request.email}</p>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
                     {request.status}
                   </span>
                   {request.status === "pending" ? (
                     <button
                       type="button"
                       onClick={() => approveRequest(request.id)}
-                      className="inline-flex rounded-full bg-[rgba(23,56,93,0.08)] px-3 py-2 text-xs font-semibold text-[#17385d] transition hover:bg-[rgba(23,56,93,0.14)]"
+                      className="inline-flex rounded-lg border border-white/15 bg-white/[0.06] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.1]"
                     >
                       Approve
                     </button>
@@ -200,15 +194,15 @@ export function WorkspaceAdminPanel({
           )}
         </div>
 
-        <div className="space-y-3 border-t border-[rgba(17,24,39,0.08)] pt-4">
-          <p className="text-sm font-semibold text-[#171717]">Recent invites</p>
+        <div className="space-y-2 border-t border-white/10 pt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-white/40">Recent invites</p>
           {invites.length === 0 ? (
-            <p className="text-sm text-[#746d66]">No invites created yet.</p>
+            <p className="text-sm text-white/45">None yet.</p>
           ) : (
             invites.slice(0, 5).map((invite) => (
               <div key={invite.id} className="flex items-center justify-between gap-4 text-sm">
-                <span className="text-[#35547d]">{invite.email}</span>
-                <span className="text-[#8a8178]">{invite.status}</span>
+                <span className="text-[#93c5fd]">{invite.email}</span>
+                <span className="text-white/45">{invite.status}</span>
               </div>
             ))
           )}

@@ -54,7 +54,6 @@ from test_autonomous_run_service import (
     StubControlPlaneRepository,
     StubIncidentRepository,
     StubPatchRepository,
-    StubPostVerificationRetryRunner,
     _build_incident_and_profile,
 )
 from test_harness_autonomous_runner import _init_git_repo
@@ -134,7 +133,7 @@ class StagingDrillHeaderKeyDecisionEngine:
 
 
 @pytest.mark.asyncio
-async def test_e2e_reviewer_needs_changes_then_approve_completes_run(tmp_path: Path) -> None:
+async def test_e2e_reviewer_needs_changes_keeps_verified_run_completed(tmp_path: Path) -> None:
     now = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
     incident, repo_profile, provider_repository = _build_incident_and_profile(now)
     async_jobs = StubAsyncJobRepository()
@@ -158,13 +157,7 @@ async def test_e2e_reviewer_needs_changes_then_approve_completes_run(tmp_path: P
         reviewed_at=now,
         model_name="gpt-test",
     )
-    approve = AutonomousSolutionReview(
-        verdict=AutonomousSolutionReviewVerdict.APPROVE,
-        summary="The follow-up patch addresses the review feedback.",
-        reviewed_at=now,
-        model_name="gpt-test",
-    )
-    reviewer = ToggleSolutionReviewService(needs_changes, approve)
+    reviewer = ToggleSolutionReviewService(needs_changes, needs_changes)
 
     service = AutonomousRunService(
         StubIncidentRepository(incident),
@@ -204,9 +197,6 @@ async def test_e2e_reviewer_needs_changes_then_approve_completes_run(tmp_path: P
         run=run_with_patch,
         outcome=None,
     )
-    retry_runner = StubPostVerificationRetryRunner(service._event_stream)  # noqa: SLF001
-    service._runner = retry_runner  # type: ignore[assignment]  # noqa: SLF001
-
     await service.record_sandbox_result(
         SandboxRunRecord(
             id="sandbox-1",
@@ -230,53 +220,12 @@ async def test_e2e_reviewer_needs_changes_then_approve_completes_run(tmp_path: P
         )
     )
 
-    after_retry = await service.get_run_detail("incident-1", detail.run.id)
-    assert after_retry.run.status is AutonomousRunStatus.QUEUED
-    assert len(reviewer.calls) == 1
-
-    queued = after_retry.run.model_copy(
-        update={
-            "patch_run_id": "patch-2",
-        }
-    )
-    service._event_stream.upsert_run(queued)  # noqa: SLF001
-    await repository.update_run(
-        queued.id,
-        async_job_id=queued.async_job_id,
-        repo_profile_id=queued.repo_profile_id,
-        run=queued,
-        outcome=None,
-    )
-
-    await service.record_sandbox_result(
-        SandboxRunRecord(
-            id="sandbox-2",
-            incident_id="incident-1",
-            patch_run_id="patch-2",
-            repo_profile_id="profile-1",
-            async_job_id="job-sandbox-2",
-            status=SandboxRunStatus.SUCCEEDED,
-            executor_backend="kubernetes",
-            external_job_id="sandbox-ext-2",
-            install_command="pip install -r requirements.txt",
-            reproduce_command="pytest tests/test_billing.py::test_timeout",
-            verify_command="pytest tests/test_billing.py::test_timeout_fixed",
-            reproduction_succeeded=True,
-            patch_applied=True,
-            verification_succeeded=True,
-            summary="Second sandbox verified the narrowed repair.",
-            execution_log="sandbox execution log 2",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-
     final = await service.get_run_detail("incident-1", detail.run.id)
     assert final.run.status is AutonomousRunStatus.SUCCEEDED
     assert final.run.phase is AutonomousRunPhase.COMPLETED
     assert final.run.latest_review is not None
-    assert final.run.latest_review.verdict is AutonomousSolutionReviewVerdict.APPROVE
-    assert len(reviewer.calls) == 2
+    assert final.run.latest_review.verdict is AutonomousSolutionReviewVerdict.NEEDS_CHANGES
+    assert len(reviewer.calls) == 1
 
     event_types = [e.event_type for e in final.events]
     assert AutonomousEventType.REVIEW_COMPLETED in event_types

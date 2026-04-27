@@ -78,11 +78,35 @@ class StubTelemetryRepo:
 
 
 @pytest.mark.asyncio
-async def test_handled_flag_is_treated_as_user_error() -> None:
+async def test_handled_auth_failure_stays_user_error() -> None:
     classifier = TelemetryClassifier()
-    telemetry = build_normalized(handled=True)
+    telemetry = build_normalized(
+        handled=True,
+        request=HttpRequestContext(
+            method="POST", url="https://api.example.com/api/auth/login"
+        ),
+        response=HttpResponseContext(status_code=401),
+        error_message="Invalid email or password.",
+    )
     result = await classifier.classify(telemetry)
     assert result.classification == Classification.USER_ERROR
+    assert result.source == "rules"
+
+
+@pytest.mark.asyncio
+async def test_handled_type_error_is_still_code_bug() -> None:
+    classifier = TelemetryClassifier()
+    telemetry = build_normalized(
+        handled=True,
+        error_message="TypeError: Cannot read properties of undefined (reading 'requestMetadata')",
+        stacktrace=(
+            "TypeError: Cannot read properties of undefined (reading 'requestMetadata')\n"
+            "    at Object.G5 [as create] (https://example.com/assets/index.js:342:39892)"
+        ),
+        request=HttpRequestContext(method="MUTATION", url="create-track"),
+    )
+    result = await classifier.classify(telemetry)
+    assert result.classification == Classification.CODE_BUG
     assert result.source == "rules"
 
 

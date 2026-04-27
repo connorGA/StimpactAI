@@ -79,6 +79,14 @@ def get_openai_patch_model() -> str:
     )
 
 
+def get_openai_failure_classify_model() -> str:
+    return _get_model_from_env(
+        "OPENAI_FAILURE_CLASSIFY_MODEL",
+        "OPENAI_MODEL",
+        default="gpt-4.1-mini",
+    )
+
+
 def get_openai_autonomous_model() -> str:
     return _get_model_from_env(
         "OPENAI_AUTONOMOUS_MODEL",

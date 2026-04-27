@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const AGENT_PLATFORM_API_URL =
-  process.env.AGENT_PLATFORM_API_URL ?? "http://127.0.0.1:8000";
+import {
+  AGENT_PLATFORM_API_URL,
+  buildAgentPlatformForwardHeaders,
+} from "../../../../_agent-platform-proxy";
 
 type RouteContext = {
   params: Promise<{
@@ -10,7 +12,7 @@ type RouteContext = {
   }>;
 };
 
-export async function GET(_: Request, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   const { incidentId, sandboxRunId } = await context.params;
 
   try {
@@ -19,9 +21,9 @@ export async function GET(_: Request, context: RouteContext) {
       {
         method: "GET",
         cache: "no-store",
-        headers: {
-          Accept: "text/event-stream",
-        },
+        headers: buildAgentPlatformForwardHeaders(request, {
+          accept: "text/event-stream",
+        }),
       },
     );
 

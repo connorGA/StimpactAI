@@ -249,6 +249,20 @@ class StubFailureClassifier:
         incident: IncidentRecord,
         events: list[IncidentEventRecord],
     ) -> FailureClassification:
+        return self._result(incident, events)
+
+    async def classify_async(
+        self,
+        incident: IncidentRecord,
+        events: list[IncidentEventRecord],
+    ) -> FailureClassification:
+        return self._result(incident, events)
+
+    def _result(
+        self,
+        incident: IncidentRecord,
+        events: list[IncidentEventRecord],
+    ) -> FailureClassification:
         assert incident.id == "incident-1"
         assert len(events) == 1
         return FailureClassification(

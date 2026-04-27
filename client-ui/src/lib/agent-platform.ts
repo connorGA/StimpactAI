@@ -29,6 +29,7 @@ import type {
   ProjectPolicy,
   ProjectSandboxPlanPreview,
   ProjectService,
+  ProjectServiceRepairTarget,
   ProviderIntegration,
   ProviderRepository,
   ProjectSummary,
@@ -695,6 +696,7 @@ export async function createProjectService(
     repo_profile_id?: string | null;
     owner?: string | null;
     deploy_target?: string | null;
+    tracked_branch?: string | null;
     routing_hints?: {
       service_names?: string[];
       path_prefixes?: string[];
@@ -740,6 +742,7 @@ export async function updateProjectService(
     repo_profile_id?: string | null;
     owner?: string | null;
     deploy_target?: string | null;
+    tracked_branch?: string | null;
     routing_hints?: {
       service_names?: string[];
       path_prefixes?: string[];
@@ -761,6 +764,28 @@ export async function updateProjectService(
     {
       method: "PUT",
       body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function listProjectRepairTargets(projectId: string): Promise<ProjectServiceRepairTarget[]> {
+  return fetchFromControlPlane<ProjectServiceRepairTarget[]>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/repair-targets`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+export async function getProjectServiceRepairTarget(
+  projectId: string,
+  serviceId: string,
+  branchLimit = 20,
+): Promise<ProjectServiceRepairTarget> {
+  return fetchFromControlPlane<ProjectServiceRepairTarget>(
+    `/control-plane/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/repair-target?branch_limit=${encodeURIComponent(String(branchLimit))}`,
+    {
+      method: "GET",
     },
   );
 }

@@ -185,7 +185,25 @@ class AutonomousPolicyDecision(BaseModel):
     require_browser_verification: bool = False
     max_repair_attempts: int = Field(ge=1, default=1)
     max_retry_budget: int = Field(ge=0, default=0)
+    repairability_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    repairability_reasons: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
+
+
+class AutonomousRunContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    objective: str = Field(min_length=1, max_length=1_000)
+    service_name: str | None = Field(default=None, max_length=200)
+    base_commit_sha: str | None = Field(default=None, max_length=256)
+    allowed_tool_categories: list[str] = Field(default_factory=list)
+    protected_patterns: list[str] = Field(default_factory=list)
+    reproduce_command: str | None = Field(default=None, max_length=8_000)
+    verify_command: str | None = Field(default=None, max_length=8_000)
+    success_criteria: str | None = Field(default=None, max_length=2_000)
+    promotion_allowed: bool = False
+    repairability_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    trust_notes: list[str] = Field(default_factory=list)
 
 
 class AutonomousRepairRunRecord(BaseModel):
@@ -233,6 +251,7 @@ class AutonomousRepairRunRecord(BaseModel):
     latest_review: AutonomousSolutionReview | None = None
     policy_block_reason: str | None = Field(default=None, max_length=2_000)
     policy: AutonomousPolicyDecision = Field(default_factory=AutonomousPolicyDecision)
+    run_contract: AutonomousRunContract | None = None
     loop_state: AutonomousLoopState = Field(default_factory=AutonomousLoopState)
     created_at: datetime
     updated_at: datetime

@@ -82,7 +82,7 @@ class IncidentChatService:
 
         events = await self._repository.list_incident_events(incident_id, limit=request.event_limit)
         latest_telemetry = await self._repository.get_telemetry(incident.latest_telemetry_id)
-        classification = self._classifier.classify(incident, events)
+        classification = await self._classifier.classify_async(incident, events)
         evidence = self._code_context.build_evidence(
             incident=incident,
             events=events,

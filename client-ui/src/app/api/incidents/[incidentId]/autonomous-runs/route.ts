@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const AGENT_PLATFORM_API_URL =
-  process.env.AGENT_PLATFORM_API_URL ?? "http://127.0.0.1:8000";
+import {
+  AGENT_PLATFORM_API_URL,
+  buildAgentPlatformForwardHeaders,
+} from "../../_agent-platform-proxy";
 
 type RouteContext = {
   params: Promise<{
@@ -9,7 +11,38 @@ type RouteContext = {
   }>;
 };
 
-export async function POST(request: Request, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const { incidentId } = await context.params;
+
+  try {
+    const response = await fetch(
+      `${AGENT_PLATFORM_API_URL}/incidents/${incidentId}/autonomous-runs`,
+      {
+        method: "GET",
+        headers: buildAgentPlatformForwardHeaders(request),
+        cache: "no-store",
+      },
+    );
+    const payload = await response.text();
+    return new Response(payload, {
+      status: response.status,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Unexpected autonomous run list proxy error.",
+        },
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function POST(request: NextRequest, context: RouteContext) {
   const { incidentId } = await context.params;
 
   try {
@@ -18,9 +51,7 @@ export async function POST(request: Request, context: RouteContext) {
       `${AGENT_PLATFORM_API_URL}/incidents/${incidentId}/autonomous-runs`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: buildAgentPlatformForwardHeaders(request),
         body,
         cache: "no-store",
       },
